@@ -218,6 +218,37 @@ fn like_candidates(conn: &Connection, query: &str, limit: usize) -> Result<Vec<C
     Ok(rows)
 }
 
+// ── File lines ────────────────────────────────────────────────────────────────
+
+/// Returns every indexed line for a file, ordered by line number.
+/// Used by the GET /api/v1/file endpoint.
+pub fn get_file_lines(
+    conn: &Connection,
+    path: &str,
+    archive_path: Option<&str>,
+) -> Result<Vec<ContextLine>> {
+    let mut stmt = conn.prepare(
+        "SELECT l.line_number, l.content
+         FROM lines l
+         JOIN files f ON f.id = l.file_id
+         WHERE f.path = ?1
+           AND ((?2 IS NULL AND l.archive_path IS NULL)
+                OR l.archive_path = ?2)
+         ORDER BY l.line_number",
+    )?;
+
+    let rows = stmt
+        .query_map(params![path, archive_path], |row| {
+            Ok(ContextLine {
+                line_number: row.get::<_, i64>(0)? as usize,
+                content: row.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(rows)
+}
+
 // ── Context ───────────────────────────────────────────────────────────────────
 
 pub fn get_context(

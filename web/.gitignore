@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+build/
+.svelte-kit/
+
+# Environment files (copy .env.example and fill in values)
+.env
+.env.local
+.env.*.local
+
+# Editor
+.DS_Store
+*.log

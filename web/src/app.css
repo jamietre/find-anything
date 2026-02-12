@@ -1,0 +1,155 @@
+/* ── CSS custom properties ─────────────────────────────────────────────────── */
+:root {
+	--bg: #0d1117;
+	--bg-secondary: #161b22;
+	--bg-hover: #1c2128;
+	--border: #30363d;
+	--text: #e6edf3;
+	--text-muted: #8b949e;
+	--text-dim: #656d76;
+	--accent: #58a6ff;
+	--accent-muted: #1f6feb;
+	--match-bg: rgba(31, 111, 235, 0.08);
+	--match-line-bg: rgba(31, 111, 235, 0.15);
+	--match-border: #1f6feb;
+	--chip-bg: #21262d;
+	--chip-active: #1f6feb;
+	--badge-bg: #21262d;
+	--badge-text: #8b949e;
+	--font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+	--font-mono: 'SF Mono', 'Fira Code', 'Fira Mono', 'Roboto Mono', monospace;
+	--radius: 6px;
+}
+
+/* ── Reset ─────────────────────────────────────────────────────────────────── */
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+	margin: 0;
+	padding: 0;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────────── */
+html,
+body {
+	height: 100%;
+}
+
+body {
+	background: var(--bg);
+	color: var(--text);
+	font-family: var(--font-sans);
+	font-size: 14px;
+	line-height: 1.5;
+}
+
+a {
+	color: var(--accent);
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+button {
+	cursor: pointer;
+	font-family: inherit;
+	font-size: inherit;
+}
+
+input,
+select {
+	font-family: inherit;
+	font-size: inherit;
+}
+
+code,
+pre {
+	font-family: var(--font-mono);
+	font-size: 13px;
+}
+
+/* ── hljs theme (GitHub Dark) ─────────────────────────────────────────────── */
+.hljs {
+	color: #c9d1d9;
+	background: transparent;
+}
+.hljs-comment,
+.hljs-punctuation {
+	color: #8b949e;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-meta,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: #79c0ff;
+}
+.hljs-variable,
+.hljs-literal,
+.hljs-number,
+.hljs-doctag {
+	color: #79c0ff;
+}
+.hljs-params {
+	color: #c9d1d9;
+}
+.hljs-function {
+	color: #d2a8ff;
+}
+.hljs-class .hljs-title,
+.hljs-title,
+.hljs-title.class_ {
+	color: #f0883e;
+}
+.hljs-strong {
+	font-weight: 600;
+	color: #c9d1d9;
+}
+.hljs-code,
+.hljs-formula,
+.hljs-section,
+.hljs-name,
+.hljs-selector-tag {
+	color: #7ee787;
+}
+.hljs-bullet,
+.hljs-regexp,
+.hljs-symbol,
+.hljs-template-variable,
+.hljs-link,
+.hljs-selector-pseudo,
+.hljs-type {
+	color: #56d364;
+}
+.hljs-built_in,
+.hljs-keyword,
+.hljs-tag {
+	color: #ff7b72;
+}
+.hljs-deletion,
+.hljs-number,
+.hljs-quote,
+.hljs-selector-id,
+.hljs-string,
+.hljs-template-tag,
+.hljs-type {
+	color: #a5d6ff;
+}
+.hljs-string {
+	color: #a5d6ff;
+}
+.hljs-keyword {
+	color: #ff7b72;
+}
+.hljs-addition {
+	color: #aff5b4;
+	background: #033a16;
+}
+.hljs-deletion {
+	color: #ffdcd7;
+	background: #67060c;
+}

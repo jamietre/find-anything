@@ -51,6 +51,9 @@ pub struct SearchResult {
     pub line_number: usize,
     pub snippet: String,
     pub score: u32,
+    /// Populated when ?context=N is passed to the search endpoint.
+    #[serde(default)]
+    pub context_lines: Vec<ContextLine>,
 }
 
 /// GET /api/v1/search response.
@@ -72,6 +75,14 @@ pub struct ContextLine {
 pub struct ContextResponse {
     pub lines: Vec<ContextLine>,
     pub file_kind: String,
+}
+
+/// GET /api/v1/file response.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct FileResponse {
+    pub lines: Vec<ContextLine>,
+    pub file_kind: String,
+    pub total_lines: usize,
 }
 
 /// GET /api/v1/files response entry (for deletion detection).

@@ -11,8 +11,8 @@ use tokio::task::spawn_blocking;
 
 use find_common::{
     api::{
-        ContextResponse, DeleteRequest, ScanCompleteRequest, SearchResponse, SearchResult,
-        UpsertRequest,
+        ContextResponse, DeleteRequest, FileResponse, ScanCompleteRequest, SearchResponse,
+        SearchResult, UpsertRequest,
     },
     fuzzy::FuzzyScorer,
 };
@@ -37,6 +37,78 @@ fn source_db_path(state: &AppState, source: &str) -> Result<std::path::PathBuf, 
         return Err(StatusCode::BAD_REQUEST);
     }
     Ok(state.data_dir.join("sources").join(format!("{}.db", source)))
+}
+
+// ── GET /api/v1/sources ───────────────────────────────────────────────────────
+
+pub async fn list_sources(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+    let sources_dir = state.data_dir.join("sources");
+    let mut sources: Vec<String> = match std::fs::read_dir(&sources_dir) {
+        Err(_) => vec![],
+        Ok(rd) => rd
+            .filter_map(|e| {
+                let e = e.ok()?;
+                let name = e.file_name().into_string().ok()?;
+                name.strip_suffix(".db").map(|s| s.to_string())
+            })
+            .collect(),
+    };
+    sources.sort();
+    Json(sources).into_response()
+}
+
+// ── GET /api/v1/file?source=X&path=Y&archive_path=Z ──────────────────────────
+
+#[derive(Deserialize)]
+pub struct FileParams {
+    pub source: String,
+    pub path: String,
+    pub archive_path: Option<String>,
+}
+
+pub async fn get_file(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<FileParams>,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let db_path = match source_db_path(&state, &params.source) {
+        Ok(p) => p,
+        Err(s) => return (s, Json(serde_json::Value::Null)).into_response(),
+    };
+
+    match spawn_blocking(move || {
+        let conn = db::open(&db_path)?;
+        let kind: String = conn
+            .query_row(
+                "SELECT kind FROM files WHERE path = ?1",
+                rusqlite::params![params.path],
+                |row| row.get(0),
+            )
+            .unwrap_or_else(|_| "text".into());
+        let lines =
+            db::get_file_lines(&conn, &params.path, params.archive_path.as_deref())?;
+        let total_lines = lines.len();
+        Ok::<_, anyhow::Error>(FileResponse { lines, file_kind: kind, total_lines })
+    })
+    .await
+    .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
+    {
+        Ok(resp) => Json(resp).into_response(),
+        Err(e) => {
+            tracing::error!("get_file: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 // ── GET /api/v1/files?source=<name> ──────────────────────────────────────────
@@ -179,6 +251,9 @@ pub struct SearchParams {
     pub limit: usize,
     #[serde(default)]
     pub offset: usize,
+    /// Lines of context to include before/after each match (0 = none).
+    #[serde(default)]
+    pub context: usize,
 }
 
 fn default_mode() -> String { "fuzzy".into() }
@@ -196,6 +271,7 @@ pub async fn search(
     let query = params.q.clone();
     let mode = params.mode.clone();
     let limit = params.limit.min(state.config.search.max_limit);
+    let context_size = params.context;
 
     // Build the list of (source_name, db_path) to query.
     let source_dbs: Vec<(String, std::path::PathBuf)> = if params.source.is_empty() {
@@ -231,7 +307,7 @@ pub async fn search(
                 let phrase = mode != "fuzzy";
                 let candidates = db::fts_candidates(&conn, &query, fts_limit, phrase)?;
 
-                let results = match mode.as_str() {
+                let results: Vec<SearchResult> = match mode.as_str() {
                     "exact" => {
                         // FTS5 trigram is already a substring match — candidates are the answer.
                         candidates.into_iter().map(|c| SearchResult {
@@ -241,6 +317,7 @@ pub async fn search(
                             line_number: c.line_number,
                             snippet: c.content,
                             score: 0,
+                            context_lines: vec![],
                         }).collect()
                     }
                     "regex" => {
@@ -254,6 +331,7 @@ pub async fn search(
                                 line_number: c.line_number,
                                 snippet: c.content,
                                 score: 0,
+                                context_lines: vec![],
                             })
                             .collect()
                     }
@@ -268,11 +346,34 @@ pub async fn search(
                                     line_number: c.line_number,
                                     snippet: c.content,
                                     score,
+                                    context_lines: vec![],
                                 })
                             })
                             .collect()
                     }
                 };
+
+                // Optionally enrich each result with context lines.
+                let results = if context_size > 0 {
+                    results
+                        .into_iter()
+                        .map(|mut r| {
+                            if let Ok(ctx) = db::get_context(
+                                &conn,
+                                &r.path,
+                                r.archive_path.as_deref(),
+                                r.line_number,
+                                context_size,
+                            ) {
+                                r.context_lines = ctx;
+                            }
+                            r
+                        })
+                        .collect()
+                } else {
+                    results
+                };
+
                 Ok(results)
             })
         })

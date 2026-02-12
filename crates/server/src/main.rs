@@ -44,6 +44,8 @@ async fn main() -> Result<()> {
     let state = Arc::new(AppState { config, data_dir });
 
     let app = Router::new()
+        .route("/api/v1/sources",       get(routes::list_sources))
+        .route("/api/v1/file",          get(routes::get_file))
         .route("/api/v1/files",         get(routes::list_files))
         .route("/api/v1/files",         put(routes::upsert_files))
         .route("/api/v1/files",         delete(routes::delete_files))
