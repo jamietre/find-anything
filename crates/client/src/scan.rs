@@ -15,7 +15,8 @@ use find_common::{
 
 use crate::api::ApiClient;
 
-const BATCH_SIZE: usize = 500;
+const BATCH_SIZE: usize = 200;
+const BATCH_BYTES: usize = 8 * 1024 * 1024; // 8 MB
 
 pub async fn run_scan(
     api: &ApiClient,
@@ -49,21 +50,17 @@ pub async fn run_scan(
         .map(|s| s.to_string())
         .collect();
 
-    let last_scan = if full { None } else { get_last_scan_from_server(&server_files) };
-
     let to_index: Vec<&PathBuf> = local_files
         .iter()
         .filter(|(rel_path, abs_path)| {
             if full {
                 return true;
             }
-            // Index if: new file, or mtime changed since last scan
             let server_mtime = server_files.get(*rel_path).copied();
-            let local_mtime = mtime_of(abs_path).unwrap_or(0);
-            match (server_mtime, last_scan) {
-                (None, _) => true,                      // new file
-                (Some(sm), _) if local_mtime > sm => true, // mtime changed
-                _ => false,
+            let local_mtime  = mtime_of(abs_path).unwrap_or(0);
+            match server_mtime {
+                None     => true,              // new file not yet in index
+                Some(sm) => local_mtime > sm,  // file modified since last index
             }
         })
         .map(|(_, abs)| abs)
@@ -77,6 +74,7 @@ pub async fn run_scan(
 
     // Index in batches.
     let mut batch: Vec<IndexFile> = Vec::with_capacity(BATCH_SIZE);
+    let mut batch_bytes: usize = 0;
 
     for abs_path in &to_index {
         let rel_path = relative_path(abs_path, paths);
@@ -97,6 +95,8 @@ pub async fn run_scan(
             continue;
         }
 
+        let file_bytes: usize = lines.iter().map(|l| l.content.len()).sum();
+        batch_bytes += file_bytes;
         batch.push(IndexFile {
             path: rel_path,
             mtime,
@@ -105,8 +105,9 @@ pub async fn run_scan(
             lines,
         });
 
-        if batch.len() >= BATCH_SIZE {
+        if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
             submit_batch(api, source_name, &mut batch).await?;
+            batch_bytes = 0;
         }
     }
     if !batch.is_empty() {
@@ -140,6 +141,11 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pat in patterns {
         builder.add(Glob::new(pat)?);
+        // For patterns like **/node_modules/**, also add **/node_modules so that
+        // the directory entry itself is excluded and walkdir won't descend into it.
+        if let Some(dir_pat) = pat.strip_suffix("/**") {
+            builder.add(Glob::new(dir_pat)?);
+        }
     }
     Ok(builder.build()?)
 }
@@ -220,13 +226,6 @@ fn size_of(path: &Path) -> Option<i64> {
     path.metadata().ok().map(|m| m.len() as i64)
 }
 
-/// Crude heuristic: the minimum mtime in the server file list approximates when
-/// the last scan ran (files unchanged since then won't have moved).
-/// The real last_scan timestamp comes from POST /api/v1/scan-complete but we
-/// don't have a dedicated endpoint for reading it; this is a fallback.
-fn get_last_scan_from_server(server_files: &HashMap<String, i64>) -> Option<i64> {
-    server_files.values().copied().min()
-}
 
 async fn submit_batch(
     api: &ApiClient,

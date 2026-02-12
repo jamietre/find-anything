@@ -127,14 +127,39 @@ pub struct CandidateRow {
 /// FTS5 trigram pre-filter.  Returns up to `limit` candidate rows.
 /// For fuzzy mode the caller re-scores with nucleo.  For exact/regex the FTS5
 /// result is already a substring match; the caller can apply regex post-filtering.
+///
+/// `phrase=true`  → wraps the whole query in double-quotes (literal substring /
+///                  phrase match).  Used by exact and regex modes.
+/// `phrase=false` → splits on whitespace and ANDs each word (≥3 chars) as a
+///                  separate trigram term.  Used by fuzzy mode so that e.g.
+///                  "pass strength" finds "password strength".
+///
+/// FTS5 trigram needs at least 3 characters per term; short tokens are dropped
+/// from the FTS5 query (nucleo re-scores the candidates afterwards).  If no
+/// usable tokens remain we fall back to a LIKE scan.
 pub fn fts_candidates(
     conn: &Connection,
     query: &str,
     limit: usize,
+    phrase: bool,
 ) -> Result<Vec<CandidateRow>> {
-    // Escape the query for FTS5: wrap in double-quotes so it's treated as a
-    // phrase / trigram sequence rather than an FTS operator expression.
-    let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
+    let fts_query = if phrase {
+        if query.len() < 3 {
+            return like_candidates(conn, query, limit);
+        }
+        format!("\"{}\"", query.replace('"', "\"\""))
+    } else {
+        // Build "word1" AND "word2" … keeping only tokens ≥ 3 chars.
+        let terms: Vec<String> = query
+            .split_whitespace()
+            .filter(|w| w.len() >= 3)
+            .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
+            .collect();
+        if terms.is_empty() {
+            return like_candidates(conn, query, limit);
+        }
+        terms.join(" AND ")
+    };
 
     let mut stmt = conn.prepare(
         "SELECT f.path, f.kind, l.archive_path, l.line_number, l.content
@@ -147,6 +172,39 @@ pub fn fts_candidates(
 
     let rows = stmt
         .query_map(params![fts_query, limit as i64], |row| {
+            Ok(CandidateRow {
+                file_path:    row.get(0)?,
+                file_kind:    row.get(1)?,
+                archive_path: row.get(2)?,
+                line_number:  row.get::<_, i64>(3)? as usize,
+                content:      row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(rows)
+}
+
+/// LIKE-based fallback for queries shorter than 3 characters.
+/// No index support — full table scan — but correct.
+fn like_candidates(conn: &Connection, query: &str, limit: usize) -> Result<Vec<CandidateRow>> {
+    // Escape LIKE special characters in the query itself.
+    let escaped = query
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    let pattern = format!("%{escaped}%");
+
+    let mut stmt = conn.prepare(
+        "SELECT f.path, f.kind, l.archive_path, l.line_number, l.content
+         FROM lines l
+         JOIN files f ON f.id = l.file_id
+         WHERE l.content LIKE ?1 ESCAPE '\\'
+         LIMIT ?2",
+    )?;
+
+    let rows = stmt
+        .query_map(params![pattern, limit as i64], |row| {
             Ok(CandidateRow {
                 file_path:    row.get(0)?,
                 file_kind:    row.get(1)?,

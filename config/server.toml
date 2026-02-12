@@ -1,0 +1,9 @@
+[server]
+bind = "127.0.0.1:8765"
+data_dir = "/home/jamiet/.local/share/find-anything"
+token = "local-dev-token-abc123"
+
+[search]
+default_limit = 50
+max_limit = 500
+fts_candidate_limit = 2000

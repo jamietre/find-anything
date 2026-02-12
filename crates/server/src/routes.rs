@@ -226,7 +226,10 @@ pub async fn search(
             spawn_blocking(move || -> anyhow::Result<Vec<SearchResult>> {
                 if !db_path.exists() { return Ok(vec![]); }
                 let conn = db::open(&db_path)?;
-                let candidates = db::fts_candidates(&conn, &query, fts_limit)?;
+                // fuzzy: AND individual words so "pass strength" finds "password strength"
+                // exact/regex: phrase query — literal substring
+                let phrase = mode != "fuzzy";
+                let candidates = db::fts_candidates(&conn, &query, fts_limit, phrase)?;
 
                 let results = match mode.as_str() {
                     "exact" => {

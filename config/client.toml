@@ -1,0 +1,29 @@
+[server]
+url = "http://127.0.0.1:8765"
+token = "local-dev-token-abc123"
+
+[source]
+name = "code"
+paths = ["/mnt/c/code"]
+
+[scan]
+exclude = [
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/target/**",
+    "**/__pycache__/**",
+    "**/.next/**",
+    "**/dist/**",
+    "**/.cache/**",
+    "**/.tox/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/*.pyc",
+    "**/*.class",
+    "**/tmp/**",
+    "**/temp/**",
+]
+max_file_size_kb = 1024
+follow_symlinks = false
+include_hidden = false
+

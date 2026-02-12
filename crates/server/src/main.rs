@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
     Router,
 };
@@ -49,6 +50,7 @@ async fn main() -> Result<()> {
         .route("/api/v1/scan-complete", post(routes::scan_complete))
         .route("/api/v1/search",        get(routes::search))
         .route("/api/v1/context",       get(routes::get_context))
+        .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(&bind)
