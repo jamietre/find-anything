@@ -28,6 +28,10 @@ struct Args {
     #[arg(long, default_value = "0")]
     offset: usize,
 
+    /// Lines of context to show before and after each match (like grep -C)
+    #[arg(short = 'C', long, default_value = "0")]
+    context: usize,
+
     /// Suppress color output
     #[arg(long)]
     no_color: bool,
@@ -66,15 +70,46 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let separator = "──".repeat(30).dimmed().to_string();
+
     for hit in &resp.results {
         let source_tag = format!("[{}]", hit.source).cyan().to_string();
-        let path = match &hit.archive_path {
+        let path_str = match &hit.archive_path {
             Some(inner) => format!("{}::{}", hit.path, inner),
             None => hit.path.clone(),
         };
-        let loc = format!("{}:{}", path, hit.line_number).green().to_string();
-        let snippet = hit.snippet.trim();
-        println!("{} {}  {}", source_tag, loc, snippet);
+        let loc = format!("{}:{}", path_str, hit.line_number).green().to_string();
+
+        if args.context == 0 {
+            let snippet = hit.snippet.trim();
+            println!("{} {}  {}", source_tag, loc, snippet);
+        } else {
+            println!("{}", separator);
+            println!("{} {}", source_tag, loc);
+
+            let ctx = client
+                .context(
+                    &hit.source,
+                    &hit.path,
+                    hit.archive_path.as_deref(),
+                    hit.line_number,
+                    args.context,
+                )
+                .await?;
+
+            for line in &ctx.lines {
+                if line.line_number == hit.line_number {
+                    // Matching line: highlighted
+                    let marker = ">".yellow().bold().to_string();
+                    let num = format!("{:>5}", line.line_number).green().to_string();
+                    println!("{} {}  {}", marker, num, line.content);
+                } else {
+                    // Context line: dimmed
+                    let num = format!("{:>5}", line.line_number).dimmed().to_string();
+                    println!("  {}  {}", num, line.content.dimmed());
+                }
+            }
+        }
     }
 
     eprintln!("({} total)", resp.total);

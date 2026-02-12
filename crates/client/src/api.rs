@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use reqwest::Client;
 
 use find_common::api::{
-    DeleteRequest, FileRecord, ScanCompleteRequest, SearchResponse, UpsertRequest,
+    ContextResponse, DeleteRequest, FileRecord, ScanCompleteRequest, SearchResponse, UpsertRequest,
 };
 
 pub struct ApiClient {
@@ -90,6 +90,38 @@ impl ApiClient {
             .error_for_status()
             .context("POST /api/v1/scan-complete status")?;
         Ok(())
+    }
+
+    /// GET /api/v1/context
+    pub async fn context(
+        &self,
+        source: &str,
+        path: &str,
+        archive_path: Option<&str>,
+        line: usize,
+        window: usize,
+    ) -> Result<ContextResponse> {
+        let mut req = self
+            .client
+            .get(self.url("/api/v1/context"))
+            .bearer_auth(&self.token)
+            .query(&[
+                ("source", source),
+                ("path", path),
+                ("line", &line.to_string()),
+                ("window", &window.to_string()),
+            ]);
+        if let Some(ap) = archive_path {
+            req = req.query(&[("archive_path", ap)]);
+        }
+        req.send()
+            .await
+            .context("GET /api/v1/context")?
+            .error_for_status()
+            .context("context status")?
+            .json::<ContextResponse>()
+            .await
+            .context("parsing context response")
     }
 
     /// GET /api/v1/search
