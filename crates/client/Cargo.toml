@@ -1,0 +1,33 @@
+[package]
+name = "find-client"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "find-scan"
+path = "src/scan_main.rs"
+
+[[bin]]
+name = "find-watch"
+path = "src/watch_main.rs"
+
+[[bin]]
+name = "find"
+path = "src/query_main.rs"
+
+[dependencies]
+find-common = { path = "../common" }
+anyhow      = { workspace = true }
+clap        = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+tokio       = { workspace = true }
+tracing     = { workspace = true }
+walkdir     = { workspace = true }
+globset     = { workspace = true }
+
+reqwest     = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+notify      = "6"
+toml        = "0.8"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+colored     = "2"
