@@ -1,7 +1,7 @@
-// Post-MVP: EXIF metadata extraction via kamadak-exif crate.
-// Stub returns no lines until implemented.
-
+use std::fs::File;
+use std::io::BufReader;
 use std::path::Path;
+
 use crate::api::IndexLine;
 use crate::extract::Extractor;
 
@@ -15,8 +15,37 @@ impl Extractor for ImageExtractor {
             .unwrap_or(false)
     }
 
-    fn extract(&self, _path: &Path) -> anyhow::Result<Vec<IndexLine>> {
-        Ok(vec![])
+    fn extract(&self, path: &Path) -> anyhow::Result<Vec<IndexLine>> {
+        let file = File::open(path)?;
+        let mut bufreader = BufReader::new(file);
+
+        match exif::Reader::new().read_from_container(&mut bufreader) {
+            Ok(exif) => {
+                let mut lines = Vec::new();
+
+                // Extract all EXIF fields
+                for field in exif.fields() {
+                    let tag = field.tag.to_string();
+                    let value = field.display_value().to_string();
+
+                    // Skip empty or binary values
+                    if !value.is_empty() && !value.starts_with("[") {
+                        lines.push(IndexLine {
+                            archive_path: None,
+                            line_number: 0,  // Metadata has no line concept
+                            content: format!("[EXIF:{}] {}", tag, value),
+                        });
+                    }
+                }
+
+                Ok(lines)
+            }
+            Err(_) => {
+                // Many images don't have EXIF data, or we can't read it
+                // This is normal, just return empty results
+                Ok(vec![])
+            }
+        }
     }
 }
 

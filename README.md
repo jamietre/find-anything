@@ -50,9 +50,9 @@ queries to the server and returns ranked results.
 | `find-watch` | Stub | compiles, not yet implemented |
 | Archive indexing | Working | zip, tar, tar.gz, tar.bz2, tar.xz, .gz, .bz2, .xz, 7z |
 | Multi-source search | Working | server queries all source DBs in parallel |
-| PDF extraction | Stub | returns no lines |
-| Image metadata | Stub | returns no lines |
-| Audio metadata | Stub | returns no lines |
+| PDF extraction | Working | extracts text content from PDF files |
+| Image metadata | Working | EXIF tags from JPEG, TIFF, PNG, HEIF, RAW formats |
+| Audio metadata | Working | ID3, Vorbis, MP4 tags from MP3, FLAC, M4A files |
 
 ### Search modes
 

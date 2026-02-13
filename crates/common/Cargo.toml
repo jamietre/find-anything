@@ -20,9 +20,9 @@ bzip2      = "0.4"
 xz2        = { version = "0.1", features = ["static"] }
 sevenz-rust = "0.6"
 
-# Rich content extractors — post-MVP, not yet implemented
-# pdf-extract  = "0.7"
-# kamadak-exif = "0.5"   (use kamadak-exif crate, not the exif re-export)
-# id3          = "1"
-# metaflac     = "0.2"
-# mp4ameta     = "0.4"
+# Rich content extractors
+pdf-extract  = "0.7"
+kamadak-exif = "0.5"
+id3          = "1"
+metaflac     = "0.2"
+mp4ameta     = "0.11"
