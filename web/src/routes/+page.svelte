@@ -5,11 +5,12 @@
 	import ResultList from '$lib/ResultList.svelte';
 	import FileViewer from '$lib/FileViewer.svelte';
 	import DirectoryTree from '$lib/DirectoryTree.svelte';
-	import Breadcrumb from '$lib/Breadcrumb.svelte';
+	import PathBar from '$lib/PathBar.svelte';
 	import DirListing from '$lib/DirListing.svelte';
 	import CommandPalette from '$lib/CommandPalette.svelte';
+	import Settings from '$lib/Settings.svelte';
 	import { search, listSources } from '$lib/api';
-	import type { SearchResult } from '$lib/api';
+	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { profile } from '$lib/profile';
 
 	// ── State ──────────────────────────────────────────────────────────────────
@@ -21,7 +22,7 @@
 	let query = '';
 	let mode = 'fuzzy';
 
-	let sources: string[] = [];
+	let sources: SourceInfo[] = [];
 	let selectedSources: string[] = [];
 
 	let results: SearchResult[] = [];
@@ -40,6 +41,7 @@
 
 	let showTree = false;
 	let showPalette = false;
+	let showSettings = false;
 
 	// Sidebar resize
 	let sidebarWidth = $profile.sidebarWidth ?? 240;
@@ -245,12 +247,6 @@
 		pushState();
 	}
 
-	function handleBreadcrumbNavigate(e: CustomEvent<{ prefix: string }>) {
-		currentDirPrefix = e.detail.prefix;
-		panelMode = 'dir';
-		pushState();
-	}
-
 	function handleDirOpenFile(e: CustomEvent<{ source: string; path: string; kind: string }>) {
 		filePath = e.detail.path;
 		fileArchivePath = null;
@@ -294,15 +290,27 @@
 
 	// ── Derived ────────────────────────────────────────────────────────────────
 
-	$: breadcrumbPath = panelMode === 'dir' ? currentDirPrefix.replace(/\/$/, '') : filePath;
-	$: breadcrumbIsDir = panelMode === 'dir';
+	/** Source names for SourceChips / CommandPalette (string[]). */
+	$: sourceNames = sources.map((s) => s.name);
+
+	/** Server-configured base URLs keyed by source name. */
+	$: serverBaseUrls = Object.fromEntries(
+		sources.filter((s) => s.base_url != null).map((s) => [s.name, s.base_url as string])
+	);
+
+	/** Effective base URL for a source: user override > server value > null. */
+	function effectiveBaseUrl(src: string): string | null {
+		return $profile.sourceBaseUrls?.[src] ?? serverBaseUrls[src] ?? null;
+	}
 
 	// Sources available for Ctrl+P: prefer selected, fall back to all, then current source.
 	$: paletteSources = selectedSources.length
 		? selectedSources
 		: fileSource
 			? [fileSource]
-			: sources;
+			: sourceNames;
+
+	$: pathBarPath = panelMode === 'dir' ? currentDirPrefix : filePath;
 </script>
 
 <svelte:window on:keydown={handleGlobalKeydown} />
@@ -321,10 +329,11 @@
 			<div class="search-wrap">
 				<SearchBox {query} {mode} on:change={handleSearchChange} />
 			</div>
+			<button class="gear-btn" title="Settings" on:click={() => (showSettings = !showSettings)}>⚙</button>
 		</div>
-		{#if sources.length > 0}
+		{#if sourceNames.length > 0}
 			<div class="source-bar">
-				<SourceChips {sources} selected={selectedSources} on:change={handleSourceChange} />
+				<SourceChips sources={sourceNames} selected={selectedSources} on:change={handleSourceChange} />
 			</div>
 		{/if}
 		<div class="content content--full content--with-tree">
@@ -340,10 +349,12 @@
 				<div class="resize-handle" on:mousedown={onResizeStart} role="separator" />
 			{/if}
 			<div class="viewer-wrap">
-				<Breadcrumb
-					path={breadcrumbPath}
-					isDir={breadcrumbIsDir}
-					on:navigate={handleBreadcrumbNavigate}
+				<PathBar
+					source={fileSource}
+					path={pathBarPath}
+					archivePath={panelMode === 'file' ? fileArchivePath : null}
+					baseUrl={effectiveBaseUrl(fileSource)}
+					on:back={backToResults}
 				/>
 				{#if panelMode === 'dir'}
 					<DirListing
@@ -359,7 +370,6 @@
 							path={filePath}
 							archivePath={fileArchivePath}
 							targetLine={fileTargetLine}
-							on:back={backToResults}
 						/>
 					{/key}
 				{/if}
@@ -372,10 +382,11 @@
 			<div class="search-wrap">
 				<SearchBox {query} {mode} on:change={handleSearchChange} />
 			</div>
+			<button class="gear-btn" title="Settings" on:click={() => (showSettings = !showSettings)}>⚙</button>
 		</div>
-		{#if sources.length > 0}
+		{#if sourceNames.length > 0}
 			<div class="source-bar">
-				<SourceChips {sources} selected={selectedSources} on:change={handleSourceChange} />
+				<SourceChips sources={sourceNames} selected={selectedSources} on:change={handleSourceChange} />
 			</div>
 		{/if}
 		<div class="content">
@@ -396,6 +407,12 @@
 	sources={paletteSources}
 	on:select={handlePaletteSelect}
 	on:close={() => (showPalette = false)}
+/>
+
+<Settings
+	open={showSettings}
+	{sources}
+	on:close={() => (showSettings = false)}
 />
 
 <style>
@@ -506,6 +523,23 @@
 
 	.tree-toggle.active {
 		color: var(--accent, #58a6ff);
+	}
+
+	.gear-btn {
+		background: none;
+		border: none;
+		cursor: pointer;
+		color: var(--text-muted);
+		font-size: 16px;
+		padding: 2px 6px;
+		border-radius: 4px;
+		line-height: 1;
+		flex-shrink: 0;
+	}
+
+	.gear-btn:hover {
+		background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+		color: var(--text);
 	}
 
 	/* ── Status / meta ──────────────────────────────────────────────────────── */

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createEventDispatcher, onMount, tick } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import { getFile } from '$lib/api';
 	import { highlightFile } from '$lib/highlight';
 
@@ -7,8 +7,6 @@
 	export let path: string;
 	export let archivePath: string | null = null;
 	export let targetLine: number | null = null;
-
-	const dispatch = createEventDispatcher<{ back: void }>();
 
 	let loading = true;
 	let error: string | null = null;
@@ -41,25 +39,12 @@
 		if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 	}
 
-	function displayPath(): string {
-		return archivePath ? `${path}::${archivePath}` : path;
-	}
-
 	// Split the full highlighted block into per-line segments.
 	// We do this after rendering so we can assign IDs.
 	$: codeLines = highlightedCode ? highlightedCode.split('\n') : [];
 </script>
 
 <div class="file-viewer">
-	<div class="viewer-header">
-		<button class="back-btn" on:click={() => dispatch('back')}>← results</button>
-		<span class="badge">{source}</span>
-		<span class="file-path">{displayPath()}</span>
-		{#if totalLines > 0}
-			<span class="line-count">{totalLines} lines</span>
-		{/if}
-	</div>
-
 	{#if loading}
 		<div class="status">Loading…</div>
 	{:else if error}
@@ -92,55 +77,6 @@
 		flex-direction: column;
 		height: 100%;
 		overflow: hidden;
-	}
-
-	.viewer-header {
-		display: flex;
-		align-items: center;
-		gap: 10px;
-		padding: 8px 16px;
-		background: var(--bg-secondary);
-		border-bottom: 1px solid var(--border);
-		flex-shrink: 0;
-	}
-
-	.back-btn {
-		background: none;
-		border: 1px solid var(--border);
-		color: var(--text-muted);
-		padding: 3px 10px;
-		border-radius: var(--radius);
-		font-size: 12px;
-	}
-
-	.back-btn:hover {
-		border-color: var(--accent);
-		color: var(--accent);
-	}
-
-	.badge {
-		padding: 1px 8px;
-		border-radius: 20px;
-		background: var(--badge-bg);
-		color: var(--badge-text);
-		font-size: 11px;
-		flex-shrink: 0;
-	}
-
-	.file-path {
-		color: var(--accent);
-		font-family: var(--font-mono);
-		font-size: 12px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		flex: 1;
-	}
-
-	.line-count {
-		color: var(--text-dim);
-		font-size: 12px;
-		flex-shrink: 0;
 	}
 
 	.status {

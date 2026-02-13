@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// GET /api/v1/sources response entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceInfo {
+    pub name: String,
+    pub base_url: Option<String>,
+}
+
 /// A single extracted line sent from client → server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexLine {

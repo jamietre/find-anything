@@ -13,7 +13,7 @@ use tokio::task::spawn_blocking;
 use find_common::{
     api::{
         ContextBatchRequest, ContextBatchResponse, ContextBatchResult,
-        ContextResponse, FileResponse, SearchResponse, SearchResult, TreeResponse,
+        ContextResponse, FileResponse, SearchResponse, SearchResult, SourceInfo, TreeResponse,
     },
     fuzzy::FuzzyScorer,
 };
@@ -50,7 +50,7 @@ pub async fn list_sources(
         return (s, Json(serde_json::Value::Null)).into_response();
     }
     let sources_dir = state.data_dir.join("sources");
-    let mut sources: Vec<String> = match std::fs::read_dir(&sources_dir) {
+    let names: Vec<String> = match std::fs::read_dir(&sources_dir) {
         Err(_) => vec![],
         Ok(rd) => rd
             .filter_map(|e| {
@@ -60,8 +60,18 @@ pub async fn list_sources(
             })
             .collect(),
     };
-    sources.sort();
-    Json(sources).into_response()
+    let mut infos: Vec<SourceInfo> = names
+        .into_iter()
+        .map(|name| {
+            let db_path = sources_dir.join(format!("{}.db", name));
+            let base_url = db::open(&db_path).ok().and_then(|conn| {
+                db::get_base_url(&conn).ok().flatten()
+            });
+            SourceInfo { name, base_url }
+        })
+        .collect();
+    infos.sort_by(|a, b| a.name.cmp(&b.name));
+    Json(infos).into_response()
 }
 
 // ── GET /api/v1/file?source=X&path=Y&archive_path=Z ──────────────────────────

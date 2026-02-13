@@ -1,5 +1,10 @@
 // ── Types ────────────────────────────────────────────────────────────────────
 
+export interface SourceInfo {
+	name: string;
+	base_url: string | null;
+}
+
 export interface ContextLine {
 	line_number: number;
 	content: string;
@@ -46,7 +51,7 @@ export interface TreeResponse {
 
 // ── API calls (hit the SvelteKit proxy, which adds the bearer token) ─────────
 
-export async function listSources(): Promise<string[]> {
+export async function listSources(): Promise<SourceInfo[]> {
 	const resp = await fetch('/api/v1/sources');
 	if (!resp.ok) throw new Error(`listSources: ${resp.status} ${resp.statusText}`);
 	return resp.json();
