@@ -1,10 +1,10 @@
 [server]
-url = "http://127.0.0.1:8765"
+url = "http://0.0.0.0:8765"
 token = "local-dev-token-abc123"
 
 [source]
 name = "code"
-paths = ["/mnt/c/code"]
+paths = ["/home/jamie/code", "/mnt/data/cofig]
 
 [scan]
 exclude = [

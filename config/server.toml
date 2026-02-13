@@ -1,6 +1,6 @@
 [server]
 bind = "127.0.0.1:8765"
-data_dir = "/home/jamiet/.local/share/find-anything"
+data_dir = "/home/jamie/.local/share/find-anything"
 token = "local-dev-token-abc123"
 
 [search]

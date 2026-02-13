@@ -1,4 +1,4 @@
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use crate::api::IndexLine;
@@ -30,8 +30,20 @@ impl Extractor for TextExtractor {
     }
 
     fn extract(&self, path: &Path) -> anyhow::Result<Vec<IndexLine>> {
-        let content = std::fs::read_to_string(path)?;
-        Ok(lines_from_str(&content, None))
+        let file = std::fs::File::open(path)?;
+        let reader = BufReader::new(file);
+
+        Ok(reader
+            .lines()
+            .enumerate()
+            .filter_map(|(i, line)| {
+                line.ok().map(|content| IndexLine {
+                    archive_path: None,
+                    line_number: i + 1,
+                    content,
+                })
+            })
+            .collect())
     }
 }
 
