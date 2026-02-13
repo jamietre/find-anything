@@ -12,9 +12,9 @@
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
-	type View = 'empty' | 'results' | 'file';
+	type View = 'results' | 'file';
 
-	let view: View = 'empty';
+	let view: View = 'results';
 	let query = '';
 	let mode = 'fuzzy';
 
@@ -54,7 +54,6 @@
 
 	async function doSearch(q: string, m: string, srcs: string[]) {
 		if (!q.trim()) {
-			view = 'empty';
 			results = [];
 			totalResults = 0;
 			return;
@@ -125,7 +124,7 @@
 	}
 
 	function backToResults() {
-		view = results.length > 0 ? 'results' : 'empty';
+		view = 'results';
 	}
 
 	// Derived: breadcrumb path and isDir flag
@@ -182,19 +181,6 @@
 				{/if}
 			</div>
 		</div>
-	{:else if view === 'empty'}
-		<!-- ── Empty / landing ────────────────────────────────────────────────── -->
-		<div class="landing">
-			<h1 class="logo logo--large">find-anything</h1>
-			{#if sources.length > 0}
-				<div class="landing-chips">
-					<SourceChips {sources} selected={selectedSources} on:change={handleSourceChange} />
-				</div>
-			{/if}
-			<div class="landing-search">
-				<SearchBox {query} {mode} on:change={handleSearchChange} />
-			</div>
-		</div>
 	{:else}
 		<!-- ── Results ────────────────────────────────────────────────────────── -->
 		<div class="topbar">
@@ -249,11 +235,6 @@
 		color: var(--text);
 		white-space: nowrap;
 		flex-shrink: 0;
-	}
-
-	.logo--large {
-		font-size: 32px;
-		margin-bottom: 20px;
 	}
 
 	.search-wrap {
@@ -316,25 +297,6 @@
 
 	.tree-toggle.active {
 		color: var(--accent, #58a6ff);
-	}
-
-	/* ── Landing ────────────────────────────────────────────────────────────── */
-	.landing {
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		height: 100vh;
-		padding: 24px;
-	}
-
-	.landing-chips {
-		margin-bottom: 16px;
-	}
-
-	.landing-search {
-		width: 100%;
-		max-width: 560px;
 	}
 
 	/* ── Status / meta ──────────────────────────────────────────────────────── */

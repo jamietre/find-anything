@@ -29,6 +29,11 @@
 </script>
 
 <div class="search-box">
+	<select bind:value={mode} on:change={handleModeChange} class="mode-select">
+		<option value="fuzzy">Fuzzy</option>
+		<option value="exact">Exact</option>
+		<option value="regex">Regex</option>
+	</select>
 	<input
 		bind:this={inputEl}
 		bind:value={query}
@@ -39,11 +44,6 @@
 		spellcheck="false"
 		class="search-input"
 	/>
-	<select bind:value={mode} on:change={handleModeChange} class="mode-select">
-		<option value="fuzzy">Fuzzy</option>
-		<option value="exact">Exact</option>
-		<option value="regex">Regex</option>
-	</select>
 </div>
 
 <style>
@@ -73,7 +73,7 @@
 		padding: 8px 10px;
 		background: var(--bg-hover);
 		border: none;
-		border-left: 1px solid var(--border);
+		border-right: 1px solid var(--border);
 		color: var(--text-muted);
 		cursor: pointer;
 		outline: none;
