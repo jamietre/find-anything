@@ -50,4 +50,27 @@ Current plan files are stored in `docs/plans/`:
 
 ## Project Conventions
 
-(Additional rules will be added here as needed)
+### Versioning
+
+This project follows semantic versioning (MAJOR.MINOR.PATCH):
+
+**Patch version increment (0.0.X):**
+- Increment the patch version each time a feature is completed and merged
+- Examples: bug fixes, small enhancements, new extractors, UI improvements
+- Update version in all `Cargo.toml` files (workspace members)
+
+**Minor version increment (0.X.0):**
+- Suggest a minor version bump for substantial changes that add significant value
+- Examples:
+  - Major new capabilities (real-time watching, OCR)
+  - Multiple related features that together form a cohesive release
+  - Breaking API changes (though we try to avoid these)
+  - Significant architectural improvements
+
+**Major version increment (X.0.0):**
+- Reserved for v1.0 (production-ready) and major breaking changes after that
+
+**Process:**
+1. When completing a feature, update the patch version
+2. If changes are substantial, suggest a minor version bump in the commit message
+3. Update `ROADMAP.md` to mark features as completed in the appropriate version section
