@@ -44,6 +44,7 @@ async fn main() -> Result<()> {
             &source.name,
             &source.paths,
             &config.scan,
+            source.base_url.as_deref(),
             args.full,
         )
         .await?;

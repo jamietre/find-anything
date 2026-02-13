@@ -166,7 +166,12 @@ pub async fn upsert_files(
 
     match spawn_blocking(move || {
         let conn = db::open(&db_path)?;
-        db::upsert_files(&conn, &req.files)
+        db::upsert_files(&conn, &req.files)?;
+        // Update base_url if provided
+        if let Some(ref url) = req.base_url {
+            db::update_base_url(&conn, Some(url.as_str()))?;
+        }
+        Ok(())
     })
     .await
     .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
@@ -259,6 +264,15 @@ pub struct SearchParams {
 fn default_mode() -> String { "fuzzy".into() }
 fn default_limit() -> usize { 50 }
 
+// Construct resource URL by joining base_url with path
+fn make_resource_url(base_url: &Option<String>, path: &str) -> Option<String> {
+    base_url.as_ref().map(|base| {
+        let base = base.trim_end_matches('/');
+        let path = path.trim_start_matches('/');
+        format!("{}/{}", base, path)
+    })
+}
+
 pub async fn search(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -302,6 +316,7 @@ pub async fn search(
             spawn_blocking(move || -> anyhow::Result<Vec<SearchResult>> {
                 if !db_path.exists() { return Ok(vec![]); }
                 let conn = db::open(&db_path)?;
+                let base_url = db::get_base_url(&conn)?;
                 // fuzzy: AND individual words so "pass strength" finds "password strength"
                 // exact/regex: phrase query — literal substring
                 let phrase = mode != "fuzzy";
@@ -312,12 +327,13 @@ pub async fn search(
                         // FTS5 trigram is already a substring match — candidates are the answer.
                         candidates.into_iter().map(|c| SearchResult {
                             source: source_name.clone(),
-                            path: c.file_path,
+                            path: c.file_path.clone(),
                             archive_path: c.archive_path,
                             line_number: c.line_number,
                             snippet: c.content,
                             score: 0,
                             context_lines: vec![],
+                            resource_url: make_resource_url(&base_url, &c.file_path),
                         }).collect()
                     }
                     "regex" => {
@@ -326,12 +342,13 @@ pub async fn search(
                             .filter(|c| re.is_match(&c.content))
                             .map(|c| SearchResult {
                                 source: source_name.clone(),
-                                path: c.file_path,
+                                path: c.file_path.clone(),
                                 archive_path: c.archive_path,
                                 line_number: c.line_number,
                                 snippet: c.content,
                                 score: 0,
                                 context_lines: vec![],
+                                resource_url: make_resource_url(&base_url, &c.file_path),
                             })
                             .collect()
                     }
@@ -341,12 +358,13 @@ pub async fn search(
                             .filter_map(|c| {
                                 scorer.score(&c.content).map(|score| SearchResult {
                                     source: source_name.clone(),
-                                    path: c.file_path,
+                                    path: c.file_path.clone(),
                                     archive_path: c.archive_path,
                                     line_number: c.line_number,
                                     snippet: c.content,
                                     score,
                                     context_lines: vec![],
+                                    resource_url: make_resource_url(&base_url, &c.file_path),
                                 })
                             })
                             .collect()

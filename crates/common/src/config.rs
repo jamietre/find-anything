@@ -18,6 +18,8 @@ pub struct ServerConfig {
 pub struct SourceConfig {
     pub name: String,
     pub paths: Vec<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

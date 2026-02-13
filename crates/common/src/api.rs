@@ -26,6 +26,8 @@ pub struct IndexFile {
 pub struct UpsertRequest {
     pub source: String,
     pub files: Vec<IndexFile>,
+    #[serde(default)]
+    pub base_url: Option<String>,
 }
 
 /// DELETE /api/v1/files request body.
@@ -54,6 +56,9 @@ pub struct SearchResult {
     /// Populated when ?context=N is passed to the search endpoint.
     #[serde(default)]
     pub context_lines: Vec<ContextLine>,
+    /// Full URL to access the resource (if base_url configured for source).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_url: Option<String>,
 }
 
 /// GET /api/v1/search response.

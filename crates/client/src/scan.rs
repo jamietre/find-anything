@@ -23,6 +23,7 @@ pub async fn run_scan(
     source_name: &str,
     paths: &[String],
     scan: &ScanConfig,
+    base_url: Option<&str>,
     full: bool,
 ) -> Result<()> {
     // Build exclusion GlobSet once.
@@ -106,12 +107,12 @@ pub async fn run_scan(
         });
 
         if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
-            submit_batch(api, source_name, &mut batch).await?;
+            submit_batch(api, source_name, base_url, &mut batch).await?;
             batch_bytes = 0;
         }
     }
     if !batch.is_empty() {
-        submit_batch(api, source_name, &mut batch).await?;
+        submit_batch(api, source_name, base_url, &mut batch).await?;
     }
 
     // Delete removed files.
@@ -230,6 +231,7 @@ fn size_of(path: &Path) -> Option<i64> {
 async fn submit_batch(
     api: &ApiClient,
     source_name: &str,
+    base_url: Option<&str>,
     batch: &mut Vec<IndexFile>,
 ) -> Result<()> {
     let files = std::mem::take(batch);
@@ -237,6 +239,7 @@ async fn submit_batch(
     api.upsert_files(&UpsertRequest {
         source: source_name.to_string(),
         files,
+        base_url: base_url.map(|s| s.to_string()),
     })
     .await
 }
