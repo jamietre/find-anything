@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use walkdir::WalkDir;
 
 use find_common::{
-    api::{DeleteRequest, IndexFile, UpsertRequest},
+    api::{DeleteRequest, IndexFile, IndexLine, UpsertRequest},
     config::ScanConfig,
     extract,
 };
@@ -83,7 +83,7 @@ pub async fn run_scan(
         let size = size_of(abs_path).unwrap_or(0);
         let kind = extract::detect_kind(abs_path).to_string();
 
-        let lines = match extract::extract(abs_path, scan.max_file_size_kb) {
+        let mut lines = match extract::extract(abs_path, scan.max_file_size_kb) {
             Ok(l) => l,
             Err(e) => {
                 warn!("extract {}: {e}", abs_path.display());
@@ -91,10 +91,13 @@ pub async fn run_scan(
             }
         };
 
-        // Skip files that yielded no content (binary, too large, etc.)
-        if lines.is_empty() {
-            continue;
-        }
+        // Always index the relative path (line_number 0) so every file is
+        // findable by name/path even if it has no other extractable content.
+        lines.push(IndexLine {
+            archive_path: None,
+            line_number: 0,
+            content: rel_path.clone(),
+        });
 
         let file_bytes: usize = lines.iter().map(|l| l.content.len()).sum();
         batch_bytes += file_bytes;

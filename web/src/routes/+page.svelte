@@ -4,6 +4,9 @@
 	import SourceChips from '$lib/SourceChips.svelte';
 	import ResultList from '$lib/ResultList.svelte';
 	import FileViewer from '$lib/FileViewer.svelte';
+	import DirectoryTree from '$lib/DirectoryTree.svelte';
+	import Breadcrumb from '$lib/Breadcrumb.svelte';
+	import DirListing from '$lib/DirListing.svelte';
 	import { search, listSources } from '$lib/api';
 	import type { SearchResult } from '$lib/api';
 
@@ -23,11 +26,19 @@
 	let searching = false;
 	let searchError: string | null = null;
 
-	// File viewer state
+	// File / directory detail state
 	let fileSource = '';
 	let filePath = '';
 	let fileArchivePath: string | null = null;
 	let fileTargetLine: number | null = null;
+
+	// Right-panel mode: 'file' shows FileViewer, 'dir' shows DirListing
+	type PanelMode = 'file' | 'dir';
+	let panelMode: PanelMode = 'file';
+	let currentDirPrefix = ''; // used when panelMode === 'dir'
+
+	// Sidebar tree toggle
+	let showTree = false;
 
 	// ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -85,11 +96,41 @@
 		fileArchivePath = r.archive_path ?? null;
 		fileTargetLine = r.line_number;
 		view = 'file';
+		showTree = true;
+	}
+
+	function openFileFromTree(e: CustomEvent<{ source: string; path: string; kind: string }>) {
+		fileSource = e.detail.source;
+		filePath = e.detail.path;
+		fileArchivePath = null;
+		fileTargetLine = null;
+		panelMode = 'file';
+		view = 'file';
+	}
+
+	function handleBreadcrumbNavigate(e: CustomEvent<{ prefix: string }>) {
+		currentDirPrefix = e.detail.prefix;
+		panelMode = 'dir';
+	}
+
+	function handleDirOpenFile(e: CustomEvent<{ source: string; path: string; kind: string }>) {
+		filePath = e.detail.path;
+		fileArchivePath = null;
+		fileTargetLine = null;
+		panelMode = 'file';
+	}
+
+	function handleDirOpenDir(e: CustomEvent<{ prefix: string }>) {
+		currentDirPrefix = e.detail.prefix;
 	}
 
 	function backToResults() {
 		view = results.length > 0 ? 'results' : 'empty';
 	}
+
+	// Derived: breadcrumb path and isDir flag
+	$: breadcrumbPath = panelMode === 'dir' ? currentDirPrefix.replace(/\/$/, '') : filePath;
+	$: breadcrumbIsDir = panelMode === 'dir';
 </script>
 
 <div class="page">
@@ -97,18 +138,49 @@
 		<!-- ── File viewer ─────────────────────────────────────────────────────── -->
 		<div class="topbar topbar--compact">
 			<span class="logo">find-anything</span>
+			<button
+				class="tree-toggle"
+				class:active={showTree}
+				title="Toggle file tree"
+				on:click={() => (showTree = !showTree)}
+			>⊞</button>
 			<div class="search-wrap">
 				<SearchBox {query} {mode} on:change={handleSearchChange} />
 			</div>
 		</div>
-		<div class="content content--full">
-			<FileViewer
-				source={fileSource}
-				path={filePath}
-				archivePath={fileArchivePath}
-				targetLine={fileTargetLine}
-				on:back={backToResults}
-			/>
+		<div class="content content--full content--with-tree">
+			{#if showTree}
+				<div class="sidebar">
+					<DirectoryTree
+						source={fileSource}
+						activePath={filePath}
+						on:open={openFileFromTree}
+					/>
+				</div>
+			{/if}
+			<div class="viewer-wrap">
+				<Breadcrumb
+					path={breadcrumbPath}
+					isDir={breadcrumbIsDir}
+					on:navigate={handleBreadcrumbNavigate}
+				/>
+				{#if panelMode === 'dir'}
+					<DirListing
+						source={fileSource}
+						prefix={currentDirPrefix}
+						on:openFile={handleDirOpenFile}
+						on:openDir={handleDirOpenDir}
+					/>
+				{:else}
+					<FileViewer
+						source={fileSource}
+						path={filePath}
+						archivePath={fileArchivePath}
+						targetLine={fileTargetLine}
+						on:back={backToResults}
+					/>
+				{/if}
+			</div>
 		</div>
 	{:else if view === 'empty'}
 		<!-- ── Empty / landing ────────────────────────────────────────────────── -->
@@ -202,6 +274,48 @@
 	.content--full {
 		max-width: 100%;
 		padding: 0;
+	}
+
+	.content--with-tree {
+		display: flex;
+		flex-direction: row;
+		overflow: hidden;
+	}
+
+	.sidebar {
+		width: 240px;
+		flex-shrink: 0;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.viewer-wrap {
+		flex: 1;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.tree-toggle {
+		background: none;
+		border: none;
+		cursor: pointer;
+		color: var(--text-muted);
+		font-size: 16px;
+		padding: 2px 6px;
+		border-radius: 4px;
+		line-height: 1;
+		flex-shrink: 0;
+	}
+
+	.tree-toggle:hover {
+		background: var(--bg-hover, rgba(255, 255, 255, 0.08));
+		color: var(--text);
+	}
+
+	.tree-toggle.active {
+		color: var(--accent, #58a6ff);
 	}
 
 	/* ── Landing ────────────────────────────────────────────────────────────── */

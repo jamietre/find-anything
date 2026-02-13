@@ -96,3 +96,26 @@ pub struct FileRecord {
     pub path: String,
     pub mtime: i64,
 }
+
+/// One entry in a directory listing.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DirEntry {
+    /// Last path component (file or directory name).
+    pub name: String,
+    /// Full relative path within the source.
+    pub path: String,
+    /// `"dir"` or `"file"`.
+    pub entry_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mtime: Option<i64>,
+}
+
+/// GET /api/v1/tree response.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TreeResponse {
+    pub entries: Vec<DirEntry>,
+}

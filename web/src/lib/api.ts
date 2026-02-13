@@ -31,6 +31,19 @@ export interface ContextResponse {
 	file_kind: string;
 }
 
+export interface DirEntry {
+	name: string;
+	path: string;
+	entry_type: 'dir' | 'file';
+	kind?: string;
+	size?: number;
+	mtime?: number;
+}
+
+export interface TreeResponse {
+	entries: DirEntry[];
+}
+
 // ── API calls (hit the SvelteKit proxy, which adds the bearer token) ─────────
 
 export async function listSources(): Promise<string[]> {
@@ -74,6 +87,16 @@ export async function getFile(
 
 	const resp = await fetch(url.toString());
 	if (!resp.ok) throw new Error(`getFile: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}
+
+export async function listDir(source: string, prefix = ''): Promise<TreeResponse> {
+	const url = new URL('/api/v1/tree', location.origin);
+	url.searchParams.set('source', source);
+	if (prefix) url.searchParams.set('prefix', prefix);
+
+	const resp = await fetch(url.toString());
+	if (!resp.ok) throw new Error(`listDir: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
 

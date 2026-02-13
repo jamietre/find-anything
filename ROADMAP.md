@@ -155,7 +155,7 @@ Move beyond single shared token:
 These are less structured ideas that may evolve into formal features.
 
 ### Web UI Ideas
-
+- [ ] Folder path browsing
 - [ ] Search suggestions / autocomplete
 - [ ] Recent searches dropdown
 - [ ] Command palette (Cmd+K style)

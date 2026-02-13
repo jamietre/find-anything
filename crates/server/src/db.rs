@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 
-use find_common::api::{ContextLine, FileRecord, IndexFile};
+use find_common::api::{ContextLine, DirEntry, FileRecord, IndexFile};
 
 use crate::archive::{ArchiveManager, ChunkRef};
 
@@ -573,4 +573,82 @@ fn resolve_content(
     }
 
     result
+}
+
+// ── Directory listing ─────────────────────────────────────────────────────────
+
+/// List the immediate children (dirs + files) of `prefix` within the source.
+///
+/// `prefix` should end with `/` for non-root queries (e.g. `"src/"`).
+/// An empty string means the root of the source.
+pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
+    // Compute the upper bound for the range scan.
+    let (low, high) = if prefix.is_empty() {
+        (String::new(), "\u{FFFF}".to_string())
+    } else {
+        (prefix.to_string(), prefix_bump(prefix))
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT path, kind, size, mtime FROM files WHERE path >= ?1 AND path < ?2 ORDER BY path",
+    )?;
+
+    let rows: Vec<(String, String, i64, i64)> = stmt
+        .query_map(params![low, high], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+
+    // Group into dirs and files at this level.
+    let mut seen_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut dirs: Vec<DirEntry> = Vec::new();
+    let mut files: Vec<DirEntry> = Vec::new();
+
+    for (path, kind, size, mtime) in rows {
+        let rest = path.strip_prefix(prefix).unwrap_or(&path);
+        if let Some(slash_pos) = rest.find('/') {
+            // This path has more components: the first component is a directory.
+            let dir_name = &rest[..slash_pos];
+            if seen_dirs.insert(dir_name.to_string()) {
+                dirs.push(DirEntry {
+                    name: dir_name.to_string(),
+                    path: format!("{}{}/", prefix, dir_name),
+                    entry_type: "dir".to_string(),
+                    kind: None,
+                    size: None,
+                    mtime: None,
+                });
+            }
+        } else {
+            // No more slashes: this is a file directly in the prefix directory.
+            files.push(DirEntry {
+                name: rest.to_string(),
+                path,
+                entry_type: "file".to_string(),
+                kind: Some(kind),
+                size: Some(size),
+                mtime: Some(mtime),
+            });
+        }
+    }
+
+    let mut entries = dirs;
+    entries.extend(files);
+    Ok(entries)
+}
+
+/// Produce the upper-bound key for a prefix range scan by incrementing the
+/// last byte.  Works for ASCII paths (the path separator `/` is 0x2F, safely
+/// below 0xFF).
+fn prefix_bump(prefix: &str) -> String {
+    let mut bytes = prefix.as_bytes().to_vec();
+    if let Some(last) = bytes.last_mut() {
+        *last += 1;
+    }
+    String::from_utf8(bytes).unwrap_or_else(|_| "\u{FFFF}".to_string())
 }

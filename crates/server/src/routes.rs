@@ -13,7 +13,7 @@ use tokio::task::spawn_blocking;
 use find_common::{
     api::{
         ContextResponse, DeleteRequest, FileResponse, ScanCompleteRequest, SearchResponse,
-        SearchResult,
+        SearchResult, TreeResponse,
     },
     fuzzy::FuzzyScorer,
 };
@@ -521,4 +521,53 @@ pub async fn get_metrics(
         "total_archives":    total_archives,
     }))
     .into_response()
+}
+
+// ── GET /api/v1/tree ──────────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TreeParams {
+    pub source: String,
+    /// Directory prefix to list (empty string = root). Must end with `/` for
+    /// non-root queries, e.g. `"src/"`.
+    #[serde(default)]
+    pub prefix: String,
+}
+
+pub async fn list_dir(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<TreeParams>,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let db_path = match source_db_path(&state, &params.source) {
+        Ok(p) => p,
+        Err(s) => return (s, Json(serde_json::Value::Null)).into_response(),
+    };
+
+    if !db_path.exists() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let prefix = params.prefix.clone();
+    let result = spawn_blocking(move || {
+        let conn = db::open(&db_path)?;
+        db::list_dir(&conn, &prefix)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(entries)) => Json(TreeResponse { entries }).into_response(),
+        Ok(Err(e)) => {
+            tracing::error!("list_dir error: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Err(e) => {
+            tracing::error!("list_dir task error: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
