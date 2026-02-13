@@ -287,6 +287,217 @@ pub fn get_context(
     center: usize,
     window: usize,
 ) -> Result<Vec<ContextLine>> {
+    // Get file kind to determine context strategy
+    let kind = get_file_kind(conn, file_path)?;
+
+    match kind.as_str() {
+        "image" | "audio" => get_metadata_context(conn, file_path),
+        "pdf" => get_pdf_context(conn, file_path, archive_path, center, window),
+        _ => get_line_context(conn, file_path, archive_path, center, window),
+    }
+}
+
+fn get_file_kind(conn: &Connection, file_path: &str) -> Result<String> {
+    conn.query_row(
+        "SELECT kind FROM files WHERE path = ?1",
+        params![file_path],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
+fn get_metadata_context(conn: &Connection, file_path: &str) -> Result<Vec<ContextLine>> {
+    // For images and audio, return ALL metadata tags
+    let mut stmt = conn.prepare(
+        "SELECT l.line_number, l.content
+         FROM lines l
+         JOIN files f ON f.id = l.file_id
+         WHERE f.path = ?1
+           AND l.line_number = 0
+         ORDER BY l.content",
+    )?;
+
+    let rows = stmt
+        .query_map([file_path], |row| {
+            Ok(ContextLine {
+                line_number: row.get::<_, i64>(0)? as usize,
+                content: row.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(rows)
+}
+
+fn get_pdf_context(
+    conn: &Connection,
+    file_path: &str,
+    archive_path: Option<&str>,
+    center: usize,
+    window: usize,
+) -> Result<Vec<ContextLine>> {
+    // For PDFs, use character-based context (avg 80 chars/line)
+    let window_chars = window * 80;
+
+    // Get lines before the match
+    let mut before = get_lines_before_with_limit(
+        conn,
+        file_path,
+        archive_path,
+        center,
+        window_chars,
+    )?;
+
+    // Get the matched line
+    let matched = get_line_exact(conn, file_path, archive_path, center)?;
+
+    // Get lines after the match
+    let after = get_lines_after_with_limit(
+        conn,
+        file_path,
+        archive_path,
+        center,
+        window_chars,
+    )?;
+
+    // Combine: before + matched + after
+    before.extend(matched);
+    before.extend(after);
+
+    Ok(before)
+}
+
+fn get_line_exact(
+    conn: &Connection,
+    file_path: &str,
+    archive_path: Option<&str>,
+    line_number: usize,
+) -> Result<Vec<ContextLine>> {
+    let mut stmt = conn.prepare(
+        "SELECT l.line_number, l.content
+         FROM lines l
+         JOIN files f ON f.id = l.file_id
+         WHERE f.path = ?1
+           AND ((?2 IS NULL AND l.archive_path IS NULL)
+                OR l.archive_path = ?2)
+           AND l.line_number = ?3",
+    )?;
+
+    let rows = stmt
+        .query_map(
+            params![file_path, archive_path, line_number as i64],
+            |row| {
+                Ok(ContextLine {
+                    line_number: row.get::<_, i64>(0)? as usize,
+                    content: row.get(1)?,
+                })
+            },
+        )?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok(rows)
+}
+
+fn get_lines_before_with_limit(
+    conn: &Connection,
+    file_path: &str,
+    archive_path: Option<&str>,
+    center: usize,
+    max_chars: usize,
+) -> Result<Vec<ContextLine>> {
+    let mut stmt = conn.prepare(
+        "SELECT l.line_number, l.content
+         FROM lines l
+         JOIN files f ON f.id = l.file_id
+         WHERE f.path = ?1
+           AND ((?2 IS NULL AND l.archive_path IS NULL)
+                OR l.archive_path = ?2)
+           AND l.line_number < ?3
+         ORDER BY l.line_number DESC",
+    )?;
+
+    let mut lines = Vec::new();
+    let mut char_count = 0;
+
+    let rows = stmt.query_map(
+        params![file_path, archive_path, center as i64],
+        |row| {
+            Ok(ContextLine {
+                line_number: row.get::<_, i64>(0)? as usize,
+                content: row.get(1)?,
+            })
+        },
+    )?;
+
+    for row in rows {
+        let line = row?;
+        char_count += line.content.len();
+
+        if char_count > max_chars && !lines.is_empty() {
+            break;
+        }
+
+        lines.push(line);
+    }
+
+    // Reverse to natural order
+    lines.reverse();
+    Ok(lines)
+}
+
+fn get_lines_after_with_limit(
+    conn: &Connection,
+    file_path: &str,
+    archive_path: Option<&str>,
+    center: usize,
+    max_chars: usize,
+) -> Result<Vec<ContextLine>> {
+    let mut stmt = conn.prepare(
+        "SELECT l.line_number, l.content
+         FROM lines l
+         JOIN files f ON f.id = l.file_id
+         WHERE f.path = ?1
+           AND ((?2 IS NULL AND l.archive_path IS NULL)
+                OR l.archive_path = ?2)
+           AND l.line_number > ?3
+         ORDER BY l.line_number",
+    )?;
+
+    let mut lines = Vec::new();
+    let mut char_count = 0;
+
+    let rows = stmt.query_map(
+        params![file_path, archive_path, center as i64],
+        |row| {
+            Ok(ContextLine {
+                line_number: row.get::<_, i64>(0)? as usize,
+                content: row.get(1)?,
+            })
+        },
+    )?;
+
+    for row in rows {
+        let line = row?;
+        char_count += line.content.len();
+
+        if char_count > max_chars && !lines.is_empty() {
+            break;
+        }
+
+        lines.push(line);
+    }
+
+    Ok(lines)
+}
+
+fn get_line_context(
+    conn: &Connection,
+    file_path: &str,
+    archive_path: Option<&str>,
+    center: usize,
+    window: usize,
+) -> Result<Vec<ContextLine>> {
+    // Standard line-based context for text and archive files
     let lo = center.saturating_sub(window) as i64;
     let hi = (center + window) as i64;
 
