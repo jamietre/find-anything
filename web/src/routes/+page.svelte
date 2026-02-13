@@ -12,6 +12,11 @@
 	import { search, listSources } from '$lib/api';
 	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { profile } from '$lib/profile';
+	import {
+		type LineSelection,
+		parseHash,
+		formatHash
+	} from '$lib/lineSelection';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -34,7 +39,7 @@
 	let fileSource = '';
 	let filePath = '';
 	let fileArchivePath: string | null = null;
-	let fileTargetLine: number | null = null;
+	let fileSelection: LineSelection = [];
 
 	let panelMode: PanelMode = 'file';
 	let currentDirPrefix = '';
@@ -72,7 +77,7 @@
 		fileSource: string;
 		filePath: string;
 		fileArchivePath: string | null;
-		fileTargetLine: number | null;
+		fileSelection: LineSelection;
 		panelMode: PanelMode;
 		currentDirPrefix: string;
 	}
@@ -86,7 +91,7 @@
 			fileSource,
 			filePath,
 			fileArchivePath,
-			fileTargetLine,
+			fileSelection,
 			panelMode,
 			currentDirPrefix
 		};
@@ -102,7 +107,6 @@
 			p.set('fsource', s.fileSource);
 			p.set('path', s.filePath);
 			if (s.fileArchivePath) p.set('apath', s.fileArchivePath);
-			if (s.fileTargetLine != null) p.set('line', String(s.fileTargetLine));
 			if (s.panelMode === 'dir') {
 				p.set('panel', 'dir');
 				p.set('dir', s.currentDirPrefix);
@@ -114,7 +118,15 @@
 
 	function pushState() {
 		const s = captureState();
-		history.pushState(s, '', buildUrl(s));
+		const hash = formatHash(fileSelection);
+		history.pushState(s, '', buildUrl(s) + hash);
+	}
+
+	/** Update just the hash without adding a history entry. */
+	function syncHash() {
+		const hash = formatHash(fileSelection);
+		const base = window.location.pathname + window.location.search;
+		history.replaceState(history.state, '', hash ? base + hash : base);
 	}
 
 	function applyState(s: AppState) {
@@ -125,9 +137,10 @@
 		fileSource = s.fileSource;
 		filePath = s.filePath;
 		fileArchivePath = s.fileArchivePath;
-		fileTargetLine = s.fileTargetLine;
+		fileSelection = s.fileSelection;
 		panelMode = s.panelMode;
 		currentDirPrefix = s.currentDirPrefix;
+		// Only change view when performing a live interactive search (push=true).
 		if (s.query) doSearch(s.query, s.mode, s.selectedSources, false);
 	}
 
@@ -144,7 +157,7 @@
 			fileSource: params.get('fsource') ?? '',
 			filePath: params.get('path') ?? '',
 			fileArchivePath: params.get('apath') ?? null,
-			fileTargetLine: params.has('line') ? parseInt(params.get('line')!) : null,
+			fileSelection: parseHash(window.location.hash),
 			panelMode: (params.get('panel') ?? 'file') as PanelMode,
 			currentDirPrefix: params.get('dir') ?? ''
 		};
@@ -203,10 +216,11 @@
 			const resp = await search({ q, mode: m, sources: srcs, limit: 50 });
 			results = resp.results;
 			totalResults = resp.total;
-			view = 'results';
+			// Only switch to results view on interactive searches, not state restoration.
+			if (push) view = 'results';
 		} catch (e) {
 			searchError = String(e);
-			view = 'results';
+			if (push) view = 'results';
 		} finally {
 			searching = false;
 		}
@@ -230,7 +244,7 @@
 		fileSource = r.source;
 		filePath = r.path;
 		fileArchivePath = r.archive_path ?? null;
-		fileTargetLine = r.line_number;
+		fileSelection = r.line_number ? [r.line_number] : [];
 		panelMode = 'file';
 		view = 'file';
 		showTree = true;
@@ -241,7 +255,7 @@
 		fileSource = e.detail.source;
 		filePath = e.detail.path;
 		fileArchivePath = null;
-		fileTargetLine = null;
+		fileSelection = [];
 		panelMode = 'file';
 		view = 'file';
 		pushState();
@@ -250,7 +264,7 @@
 	function handleDirOpenFile(e: CustomEvent<{ source: string; path: string; kind: string }>) {
 		filePath = e.detail.path;
 		fileArchivePath = null;
-		fileTargetLine = null;
+		fileSelection = [];
 		panelMode = 'file';
 		pushState();
 	}
@@ -265,13 +279,18 @@
 		pushState();
 	}
 
+	function handleLineSelect(e: CustomEvent<{ selection: LineSelection }>) {
+		fileSelection = e.detail.selection;
+		syncHash();
+	}
+
 	// ── Command palette (Ctrl+P) ────────────────────────────────────────────────
 
 	function handlePaletteSelect(e: CustomEvent<{ source: string; path: string }>) {
 		fileSource = e.detail.source;
 		filePath = e.detail.path;
 		fileArchivePath = null;
-		fileTargetLine = null;
+		fileSelection = [];
 		panelMode = 'file';
 		view = 'file';
 		showTree = true;
@@ -369,7 +388,8 @@
 							source={fileSource}
 							path={filePath}
 							archivePath={fileArchivePath}
-							targetLine={fileTargetLine}
+							selection={fileSelection}
+							on:lineselect={handleLineSelect}
 						/>
 					{/key}
 				{/if}

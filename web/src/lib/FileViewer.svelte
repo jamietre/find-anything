@@ -1,24 +1,30 @@
 <script lang="ts">
-	import { onMount, tick } from 'svelte';
+	import { createEventDispatcher, onMount, tick } from 'svelte';
 	import { getFile } from '$lib/api';
 	import { highlightFile } from '$lib/highlight';
+	import {
+		type LineSelection,
+		selectionSet,
+		firstLine,
+		toggleLine
+	} from '$lib/lineSelection';
 
 	export let source: string;
 	export let path: string;
 	export let archivePath: string | null = null;
-	export let targetLine: number | null = null;
+	export let selection: LineSelection = [];
+
+	const dispatch = createEventDispatcher<{ lineselect: { selection: LineSelection } }>();
 
 	let loading = true;
 	let error: string | null = null;
 	let highlightedCode = '';
-	let totalLines = 0;
-	/** Maps line_number → 0-based index in the rendered lines array */
+	/** Maps 0-based render index → line_number */
 	let lineOffsets: number[] = [];
 
 	onMount(async () => {
 		try {
 			const data = await getFile(source, path, archivePath ?? undefined);
-			totalLines = data.total_lines;
 			const contents = data.lines.map((l) => l.content);
 			lineOffsets = data.lines.map((l) => l.line_number);
 			highlightedCode = highlightFile(contents, path);
@@ -28,9 +34,10 @@
 			loading = false;
 		}
 
-		if (targetLine !== null) {
+		const ln = firstLine(selection);
+		if (ln !== null) {
 			await tick();
-			scrollToLine(targetLine);
+			scrollToLine(ln);
 		}
 	});
 
@@ -39,9 +46,23 @@
 		if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
 	}
 
-	// Split the full highlighted block into per-line segments.
-	// We do this after rendering so we can assign IDs.
+	function handleLineClick(lineNum: number, e: MouseEvent) {
+		let next: LineSelection;
+		if (e.ctrlKey || e.metaKey) {
+			next = toggleLine(selection, lineNum);
+		} else if (e.shiftKey && selection.length > 0) {
+			const anchor = firstLine(selection)!;
+			next = [anchor <= lineNum ? [anchor, lineNum] : [lineNum, anchor]];
+		} else {
+			next = [lineNum];
+		}
+		selection = next;
+		dispatch('lineselect', { selection: next });
+	}
+
 	$: codeLines = highlightedCode ? highlightedCode.split('\n') : [];
+	$: highlightedSet = selectionSet(selection);
+	$: arrowLine = firstLine(selection);
 </script>
 
 <div class="file-viewer">
@@ -55,13 +76,16 @@
 				<tbody>
 					{#each codeLines as line, i}
 						{@const lineNum = lineOffsets[i] ?? i + 1}
+						<!-- svelte-ignore a11y-click-events-have-key-events -->
+						<!-- svelte-ignore a11y-no-static-element-interactions -->
 						<tr
 							id="line-{lineNum}"
 							class="code-row"
-							class:target={lineNum === targetLine}
+							class:target={highlightedSet.has(lineNum)}
+							on:click={(e) => handleLineClick(lineNum, e)}
 						>
 							<td class="td-ln">{lineNum}</td>
-							<td class="td-arrow">{lineNum === targetLine ? '▶' : ''}</td>
+							<td class="td-arrow">{lineNum === arrowLine ? '▶' : ''}</td>
 							<td class="td-code"><code>{@html line}</code></td>
 						</tr>
 					{/each}
@@ -105,6 +129,11 @@
 
 	.code-row {
 		border-left: 2px solid transparent;
+		cursor: pointer;
+	}
+
+	.code-row:hover {
+		background: var(--bg-hover, rgba(255, 255, 255, 0.04));
 	}
 
 	.code-row.target {
