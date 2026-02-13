@@ -119,6 +119,7 @@ token = "change-me"
 [[sources]]
 name  = "code"
 paths = ["/home/user/code"]
+base_url = "file:///home/user/code"  # optional: for hyperlinkable results
 
 [[sources]]
 name  = "documents"
@@ -265,10 +266,13 @@ token = "your-token"
 [[sources]]
 name  = "unique-source-name"   # alphanumeric, hyphens, underscores
 paths = ["/path/to/index"]     # multiple paths per source
+base_url = "file:///path/to/index"  # optional: enables resource URLs in results
 
 [[sources]]
 name  = "another-source"
 paths = ["/another/path"]
+# base_url can use any protocol: file://, http://, https://, smb://
+# base_url = "https://github.com/owner/repo/blob/main"
 
 [scan]
 exclude          = ["**/.git/**", "**/node_modules/**"]
@@ -284,48 +288,4 @@ enabled = true
 
 ## Roadmap
 
-### Near-term
-
-- **`find-watch`** — real-time incremental indexing via inotify (Linux) /
-  FSEvents (macOS) / ReadDirectoryChangesW (Windows). Already scaffolded;
-  needs debounce logic and event → API mapping.
-
-- **PDF text extraction** — `pdf-extract` crate (pure Rust, no external deps).
-  Stub exists in `crates/common/src/extract/pdf.rs`.
-
-- **Image EXIF metadata** — `kamadak-exif` crate. Index tags like Make, Model,
-  DateTimeOriginal, GPS coordinates, ImageDescription. Stub in `extract/image.rs`.
-
-- **Audio tag extraction** — `id3` (MP3), `metaflac` (FLAC), `mp4ameta` (M4A/AAC).
-  Stub in `extract/audio.rs`.
-
-- **Systemd unit files** — ship ready-to-install `.service` and `.timer` files
-  in `deploy/systemd/`.
-
-### Medium-term
-
-- **Native Windows client** — a Windows service and Task Scheduler integration
-  wrapping `find-scan` and `find-watch`, replacing the systemd dependency.
-  Likely a small Rust binary that registers itself as a Windows Service
-  (`windows-service` crate) and schedules periodic rescans. Optionally a
-  system-tray status icon.
-
-- **Search ranking improvements** — recency bias (recently modified files rank
-  higher), result deduplication across sources with identical content.
-
-### Post-MVP
-
-- **OCR** — opt-in (`ocr = true` in config), requires `tesseract` in PATH.
-  Images run through tesseract; scanned PDFs fall back to page-render + OCR
-  when `pdf-extract` returns no text.
-
-- **Saved searches / search history** — stored in web UI (localStorage or
-  server-side per-user).
-
-- **Webhook notifications** — POST to a URL when new content matching a saved
-  pattern is indexed.
-
-- **Index export** — `find-server export --source <name> --format json`
-
-- **Token rotation** — multiple named tokens with expiry; add a `tokens` table
-  to replace the current single shared token.
+See [ROADMAP.md](ROADMAP.md) for the full development roadmap, including completed features, planned work, and future ideas.
