@@ -1,5 +1,6 @@
 #![allow(dead_code)] // some helpers reserved for future endpoints
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -7,12 +8,44 @@ use rusqlite::{Connection, params};
 
 use find_common::api::{ContextLine, FileRecord, IndexFile};
 
+use crate::archive::{ArchiveManager, ChunkRef};
+
 // ── Schema ────────────────────────────────────────────────────────────────────
 
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("opening {}", db_path.display()))?;
-    conn.execute_batch(include_str!("schema.sql"))
+
+    // Detect v1 schema (lines table has a `content` column instead of chunk refs).
+    // If found, drop all old objects so schema_v2 initialises cleanly.
+    let is_v1: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('lines') WHERE name = 'content'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if is_v1 {
+        tracing::warn!(
+            "Detected v1 schema in {}; dropping old data for v2 migration \
+             (re-run find-scan to rebuild the index)",
+            db_path.display()
+        );
+        conn.execute_batch(
+            "DROP TRIGGER IF EXISTS lines_au;
+             DROP TRIGGER IF EXISTS lines_ad;
+             DROP TRIGGER IF EXISTS lines_ai;
+             DROP TABLE  IF EXISTS lines_fts;
+             DROP TABLE  IF EXISTS lines;
+             DROP TABLE  IF EXISTS files;
+             DROP TABLE  IF EXISTS meta;",
+        )
+        .context("dropping v1 schema")?;
+    }
+
+    conn.execute_batch(include_str!("schema_v2.sql"))
         .context("initialising schema")?;
     Ok(conn)
 }
@@ -168,30 +201,43 @@ pub struct CandidateRow {
 /// usable tokens remain we fall back to a LIKE scan.
 pub fn fts_candidates(
     conn: &Connection,
+    archive_mgr: &ArchiveManager,
     query: &str,
     limit: usize,
     phrase: bool,
 ) -> Result<Vec<CandidateRow>> {
+    // Short queries can't use FTS5 trigrams; content is in ZIPs so LIKE fallback
+    // is too expensive. Return empty results for very short queries.
     let fts_query = if phrase {
         if query.len() < 3 {
-            return like_candidates(conn, query, limit);
+            return Ok(vec![]);
         }
         format!("\"{}\"", query.replace('"', "\"\""))
     } else {
-        // Build "word1" AND "word2" … keeping only tokens ≥ 3 chars.
         let terms: Vec<String> = query
             .split_whitespace()
             .filter(|w| w.len() >= 3)
             .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
             .collect();
         if terms.is_empty() {
-            return like_candidates(conn, query, limit);
+            return Ok(vec![]);
         }
         terms.join(" AND ")
     };
 
+    struct RawRow {
+        file_path: String,
+        file_kind: String,
+        archive_path: Option<String>,
+        line_number: usize,
+        chunk_archive: String,
+        chunk_name: String,
+        line_offset: usize,
+    }
+
     let mut stmt = conn.prepare(
-        "SELECT f.path, f.kind, l.archive_path, l.line_number, l.content
+        "SELECT f.path, f.kind, l.archive_path, l.line_number,
+                l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines_fts
          JOIN lines l ON l.id = lines_fts.rowid
          JOIN files f ON f.id = l.file_id
@@ -199,52 +245,42 @@ pub fn fts_candidates(
          LIMIT ?2",
     )?;
 
-    let rows = stmt
+    let raw: Vec<RawRow> = stmt
         .query_map(params![fts_query, limit as i64], |row| {
-            Ok(CandidateRow {
+            Ok(RawRow {
                 file_path:    row.get(0)?,
                 file_kind:    row.get(1)?,
                 archive_path: row.get(2)?,
                 line_number:  row.get::<_, i64>(3)? as usize,
-                content:      row.get(4)?,
+                chunk_archive: row.get(4)?,
+                chunk_name:   row.get(5)?,
+                line_offset:  row.get::<_, i64>(6)? as usize,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    Ok(rows)
-}
+    // Read content from ZIP archives, caching chunks to avoid redundant reads.
+    let mut chunk_cache: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut results = Vec::with_capacity(raw.len());
 
-/// LIKE-based fallback for queries shorter than 3 characters.
-/// No index support — full table scan — but correct.
-fn like_candidates(conn: &Connection, query: &str, limit: usize) -> Result<Vec<CandidateRow>> {
-    // Escape LIKE special characters in the query itself.
-    let escaped = query
-        .replace('\\', "\\\\")
-        .replace('%', "\\%")
-        .replace('_', "\\_");
-    let pattern = format!("%{escaped}%");
+    for row in raw {
+        let key = (row.chunk_archive.clone(), row.chunk_name.clone());
+        if !chunk_cache.contains_key(&key) {
+            let chunk_ref = ChunkRef { archive_name: key.0.clone(), chunk_name: key.1.clone() };
+            let text = archive_mgr.read_chunk(&chunk_ref).unwrap_or_default();
+            chunk_cache.insert(key.clone(), text.lines().map(|l| l.to_string()).collect());
+        }
+        let content = chunk_cache[&key].get(row.line_offset).cloned().unwrap_or_default();
+        results.push(CandidateRow {
+            file_path:    row.file_path,
+            file_kind:    row.file_kind,
+            archive_path: row.archive_path,
+            line_number:  row.line_number,
+            content,
+        });
+    }
 
-    let mut stmt = conn.prepare(
-        "SELECT f.path, f.kind, l.archive_path, l.line_number, l.content
-         FROM lines l
-         JOIN files f ON f.id = l.file_id
-         WHERE l.content LIKE ?1 ESCAPE '\\'
-         LIMIT ?2",
-    )?;
-
-    let rows = stmt
-        .query_map(params![pattern, limit as i64], |row| {
-            Ok(CandidateRow {
-                file_path:    row.get(0)?,
-                file_kind:    row.get(1)?,
-                archive_path: row.get(2)?,
-                line_number:  row.get::<_, i64>(3)? as usize,
-                content:      row.get(4)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    Ok(rows)
+    Ok(results)
 }
 
 // ── File lines ────────────────────────────────────────────────────────────────
@@ -253,11 +289,12 @@ fn like_candidates(conn: &Connection, query: &str, limit: usize) -> Result<Vec<C
 /// Used by the GET /api/v1/file endpoint.
 pub fn get_file_lines(
     conn: &Connection,
+    archive_mgr: &ArchiveManager,
     path: &str,
     archive_path: Option<&str>,
 ) -> Result<Vec<ContextLine>> {
     let mut stmt = conn.prepare(
-        "SELECT l.line_number, l.content
+        "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
@@ -266,34 +303,36 @@ pub fn get_file_lines(
          ORDER BY l.line_number",
     )?;
 
-    let rows = stmt
+    let rows: Vec<(usize, String, String, usize)> = stmt
         .query_map(params![path, archive_path], |row| {
-            Ok(ContextLine {
-                line_number: row.get::<_, i64>(0)? as usize,
-                content: row.get(1)?,
-            })
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, i64>(3)? as usize,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    Ok(rows)
+    Ok(resolve_content(archive_mgr, rows))
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
 pub fn get_context(
     conn: &Connection,
+    archive_mgr: &ArchiveManager,
     file_path: &str,
     archive_path: Option<&str>,
     center: usize,
     window: usize,
 ) -> Result<Vec<ContextLine>> {
-    // Get file kind to determine context strategy
     let kind = get_file_kind(conn, file_path)?;
 
     match kind.as_str() {
-        "image" | "audio" => get_metadata_context(conn, file_path),
-        "pdf" => get_pdf_context(conn, file_path, archive_path, center, window),
-        _ => get_line_context(conn, file_path, archive_path, center, window),
+        "image" | "audio" => get_metadata_context(conn, archive_mgr, file_path),
+        "pdf" => get_pdf_context(conn, archive_mgr, file_path, archive_path, center, window),
+        _ => get_line_context(conn, archive_mgr, file_path, archive_path, center, window),
     }
 }
 
@@ -306,31 +345,38 @@ fn get_file_kind(conn: &Connection, file_path: &str) -> Result<String> {
     .map_err(Into::into)
 }
 
-fn get_metadata_context(conn: &Connection, file_path: &str) -> Result<Vec<ContextLine>> {
-    // For images and audio, return ALL metadata tags
+fn get_metadata_context(
+    conn: &Connection,
+    archive_mgr: &ArchiveManager,
+    file_path: &str,
+) -> Result<Vec<ContextLine>> {
+    // For images and audio, return ALL metadata tags (stored at line_number=0).
     let mut stmt = conn.prepare(
-        "SELECT l.line_number, l.content
+        "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
            AND l.line_number = 0
-         ORDER BY l.content",
+         ORDER BY l.id",
     )?;
 
-    let rows = stmt
+    let rows: Vec<(usize, String, String, usize)> = stmt
         .query_map([file_path], |row| {
-            Ok(ContextLine {
-                line_number: row.get::<_, i64>(0)? as usize,
-                content: row.get(1)?,
-            })
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, i64>(3)? as usize,
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    Ok(rows)
+    Ok(resolve_content(archive_mgr, rows))
 }
 
 fn get_pdf_context(
     conn: &Connection,
+    archive_mgr: &ArchiveManager,
     file_path: &str,
     archive_path: Option<&str>,
     center: usize,
@@ -339,42 +385,24 @@ fn get_pdf_context(
     // For PDFs, use character-based context (avg 80 chars/line)
     let window_chars = window * 80;
 
-    // Get lines before the match
-    let mut before = get_lines_before_with_limit(
-        conn,
-        file_path,
-        archive_path,
-        center,
-        window_chars,
-    )?;
+    let mut before = get_lines_before_with_limit(conn, archive_mgr, file_path, archive_path, center, window_chars)?;
+    let matched = get_line_exact(conn, archive_mgr, file_path, archive_path, center)?;
+    let after = get_lines_after_with_limit(conn, archive_mgr, file_path, archive_path, center, window_chars)?;
 
-    // Get the matched line
-    let matched = get_line_exact(conn, file_path, archive_path, center)?;
-
-    // Get lines after the match
-    let after = get_lines_after_with_limit(
-        conn,
-        file_path,
-        archive_path,
-        center,
-        window_chars,
-    )?;
-
-    // Combine: before + matched + after
     before.extend(matched);
     before.extend(after);
-
     Ok(before)
 }
 
 fn get_line_exact(
     conn: &Connection,
+    archive_mgr: &ArchiveManager,
     file_path: &str,
     archive_path: Option<&str>,
     line_number: usize,
 ) -> Result<Vec<ContextLine>> {
     let mut stmt = conn.prepare(
-        "SELECT l.line_number, l.content
+        "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
@@ -383,30 +411,32 @@ fn get_line_exact(
            AND l.line_number = ?3",
     )?;
 
-    let rows = stmt
-        .query_map(
-            params![file_path, archive_path, line_number as i64],
-            |row| {
-                Ok(ContextLine {
-                    line_number: row.get::<_, i64>(0)? as usize,
-                    content: row.get(1)?,
-                })
-            },
-        )?
+    let rows: Vec<(usize, String, String, usize)> = stmt
+        .query_map(params![file_path, archive_path, line_number as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, i64>(3)? as usize,
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    Ok(rows)
+    Ok(resolve_content(archive_mgr, rows))
 }
 
 fn get_lines_before_with_limit(
     conn: &Connection,
+    archive_mgr: &ArchiveManager,
     file_path: &str,
     archive_path: Option<&str>,
     center: usize,
     max_chars: usize,
 ) -> Result<Vec<ContextLine>> {
+    // Fetch lines before `center` in reverse order (newest first) so we can
+    // apply the char limit before reading from ZIP.
     let mut stmt = conn.prepare(
-        "SELECT l.line_number, l.content
+        "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
@@ -416,44 +446,43 @@ fn get_lines_before_with_limit(
          ORDER BY l.line_number DESC",
     )?;
 
+    // We need the content to count chars, so resolve all and then trim.
+    let all_raw: Vec<(usize, String, String, usize)> = stmt
+        .query_map(params![file_path, archive_path, center as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, i64>(3)? as usize,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // Resolve content, then trim by char budget.
+    let resolved = resolve_content(archive_mgr, all_raw);
     let mut lines = Vec::new();
     let mut char_count = 0;
-
-    let rows = stmt.query_map(
-        params![file_path, archive_path, center as i64],
-        |row| {
-            Ok(ContextLine {
-                line_number: row.get::<_, i64>(0)? as usize,
-                content: row.get(1)?,
-            })
-        },
-    )?;
-
-    for row in rows {
-        let line = row?;
+    for line in resolved {
         char_count += line.content.len();
-
         if char_count > max_chars && !lines.is_empty() {
             break;
         }
-
         lines.push(line);
     }
-
-    // Reverse to natural order
-    lines.reverse();
+    lines.reverse(); // restore natural order
     Ok(lines)
 }
 
 fn get_lines_after_with_limit(
     conn: &Connection,
+    archive_mgr: &ArchiveManager,
     file_path: &str,
     archive_path: Option<&str>,
     center: usize,
     max_chars: usize,
 ) -> Result<Vec<ContextLine>> {
     let mut stmt = conn.prepare(
-        "SELECT l.line_number, l.content
+        "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
@@ -463,46 +492,43 @@ fn get_lines_after_with_limit(
          ORDER BY l.line_number",
     )?;
 
+    let all_raw: Vec<(usize, String, String, usize)> = stmt
+        .query_map(params![file_path, archive_path, center as i64], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, i64>(3)? as usize,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let resolved = resolve_content(archive_mgr, all_raw);
     let mut lines = Vec::new();
     let mut char_count = 0;
-
-    let rows = stmt.query_map(
-        params![file_path, archive_path, center as i64],
-        |row| {
-            Ok(ContextLine {
-                line_number: row.get::<_, i64>(0)? as usize,
-                content: row.get(1)?,
-            })
-        },
-    )?;
-
-    for row in rows {
-        let line = row?;
+    for line in resolved {
         char_count += line.content.len();
-
         if char_count > max_chars && !lines.is_empty() {
             break;
         }
-
         lines.push(line);
     }
-
     Ok(lines)
 }
 
 fn get_line_context(
     conn: &Connection,
+    archive_mgr: &ArchiveManager,
     file_path: &str,
     archive_path: Option<&str>,
     center: usize,
     window: usize,
 ) -> Result<Vec<ContextLine>> {
-    // Standard line-based context for text and archive files
     let lo = center.saturating_sub(window) as i64;
     let hi = (center + window) as i64;
 
     let mut stmt = conn.prepare(
-        "SELECT l.line_number, l.content
+        "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
@@ -512,17 +538,39 @@ fn get_line_context(
          ORDER BY l.line_number",
     )?;
 
-    let rows = stmt
-        .query_map(
-            params![file_path, archive_path, lo, hi],
-            |row| {
-                Ok(ContextLine {
-                    line_number: row.get::<_, i64>(0)? as usize,
-                    content: row.get(1)?,
-                })
-            },
-        )?
+    let rows: Vec<(usize, String, String, usize)> = stmt
+        .query_map(params![file_path, archive_path, lo, hi], |row| {
+            Ok((
+                row.get::<_, i64>(0)? as usize,
+                row.get(1)?,
+                row.get(2)?,
+                row.get::<_, i64>(3)? as usize,
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    Ok(rows)
+    Ok(resolve_content(archive_mgr, rows))
+}
+
+/// Read line content from ZIP archives, caching chunks to avoid redundant reads.
+/// Input: `(line_number, chunk_archive, chunk_name, line_offset_in_chunk)` tuples.
+fn resolve_content(
+    archive_mgr: &ArchiveManager,
+    rows: Vec<(usize, String, String, usize)>,
+) -> Vec<ContextLine> {
+    let mut cache: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let mut result = Vec::with_capacity(rows.len());
+
+    for (line_number, chunk_archive, chunk_name, offset) in rows {
+        let key = (chunk_archive.clone(), chunk_name.clone());
+        if !cache.contains_key(&key) {
+            let chunk_ref = ChunkRef { archive_name: key.0.clone(), chunk_name: key.1.clone() };
+            let text = archive_mgr.read_chunk(&chunk_ref).unwrap_or_default();
+            cache.insert(key.clone(), text.lines().map(|l| l.to_string()).collect());
+        }
+        let content = cache[&key].get(offset).cloned().unwrap_or_default();
+        result.push(ContextLine { line_number, content });
+    }
+
+    result
 }

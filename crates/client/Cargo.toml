@@ -1,6 +1,6 @@
 [package]
 name = "find-client"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 
 [[bin]]
@@ -31,3 +31,4 @@ notify      = "6"
 toml        = "0.8"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 colored     = "2"
+flate2      = "1"

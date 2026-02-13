@@ -1,7 +1,9 @@
 #![allow(dead_code)] // methods are used by different binaries in this crate
 
 use anyhow::{Context, Result};
+use flate2::{write::GzEncoder, Compression};
 use reqwest::Client;
+use std::io::Write;
 
 use find_common::api::{
     ContextResponse, DeleteRequest, FileRecord, ScanCompleteRequest, SearchResponse, UpsertRequest,
@@ -47,18 +49,29 @@ impl ApiClient {
             .context("parsing file list")
     }
 
-    /// PUT /api/v1/files  — upsert a batch of files + lines.
+    /// PUT /api/v1/files  — upsert a batch of files + lines (gzip-compressed).
     pub async fn upsert_files(&self, req: &UpsertRequest) -> Result<()> {
-        self.client
+        let json = serde_json::to_vec(req).context("serialising upsert request")?;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&json).context("compressing upsert request")?;
+        let compressed = encoder.finish().context("finishing gzip stream")?;
+
+        let resp = self.client
             .put(self.url("/api/v1/files"))
             .bearer_auth(&self.token)
-            .json(req)
+            .header("Content-Encoding", "gzip")
+            .header("Content-Type", "application/json")
+            .body(compressed)
             .send()
             .await
-            .context("PUT /api/v1/files")?
-            .error_for_status()
-            .context("PUT /api/v1/files status")?;
-        Ok(())
+            .context("PUT /api/v1/files")?;
+
+        let status = resp.status();
+        if status == reqwest::StatusCode::ACCEPTED || status.is_success() {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!("PUT /api/v1/files: unexpected status {status}"))
+        }
     }
 
     /// DELETE /api/v1/files  — remove files from the index.

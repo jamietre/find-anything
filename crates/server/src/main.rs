@@ -1,5 +1,7 @@
+mod archive;
 mod db;
 mod routes;
+mod worker;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -38,10 +40,20 @@ async fn main() -> Result<()> {
 
     let data_dir = PathBuf::from(&config.server.data_dir);
     std::fs::create_dir_all(data_dir.join("sources"))
-        .context("creating data directory")?;
+        .context("creating sources directory")?;
+    std::fs::create_dir_all(data_dir.join("inbox").join("failed"))
+        .context("creating inbox directory")?;
 
     let bind = config.server.bind.clone();
-    let state = Arc::new(AppState { config, data_dir });
+    let state = Arc::new(AppState { config, data_dir: data_dir.clone() });
+
+    // Spawn the async inbox worker.
+    let worker_data_dir = data_dir.clone();
+    tokio::spawn(async move {
+        if let Err(e) = worker::start_inbox_worker(worker_data_dir).await {
+            tracing::error!("Inbox worker failed: {e}");
+        }
+    });
 
     let app = Router::new()
         .route("/api/v1/sources",       get(routes::list_sources))
@@ -52,6 +64,7 @@ async fn main() -> Result<()> {
         .route("/api/v1/scan-complete", post(routes::scan_complete))
         .route("/api/v1/search",        get(routes::search))
         .route("/api/v1/context",       get(routes::get_context))
+        .route("/api/v1/metrics",       get(routes::get_metrics))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state);
 
