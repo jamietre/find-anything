@@ -48,6 +48,120 @@ Current plan files are stored in `docs/plans/`:
 
 ---
 
+## Architecture
+
+### High-level overview
+
+find-anything is a two-process system:
+
+- **`find-scan` (client)** — walks the filesystem, extracts content, and sends
+  batches to the server over HTTP
+- **`find-server`** — receives batches, stores them, and serves search queries
+
+A shared **`find-common`** crate contains API types, config structs, and all
+content extractors (text, PDF, image EXIF, audio metadata, archive).
+
+The **web UI** is a SvelteKit app in `web/` that talks to the server via a
+proxy that injects the bearer token.
+
+### Write path (indexing)
+
+```
+find-scan → POST /api/v1/bulk (gzip JSON) → inbox/{id}.gz on disk
+                                              ↓
+                                    background worker (polls every 1s)
+                                              ↓
+                              for each file: remove old chunks from ZIPs
+                                              ↓
+                              chunk content → append to content_NNNNN.zip
+                                              ↓
+                              upsert files table + insert lines table + FTS5
+```
+
+Key invariants:
+- **All DB writes go through the inbox worker** — no route handler writes to
+  SQLite directly. This eliminates write contention entirely.
+- The bulk route handler only writes a `.gz` file to `data_dir/inbox/` and
+  returns `202 Accepted` immediately.
+- The worker processes inbox files sequentially (one at a time), so there is
+  never concurrent write access to a source database.
+- Within a `BulkRequest`, the worker processes **deletes first, then upserts**,
+  so renames (path in both lists) are handled correctly.
+
+### Content storage (ZIP archives)
+
+File content is stored in rotating ZIP archives under `data_dir/sources/`,
+not in SQLite. SQLite holds only metadata and FTS index.
+
+- Archives are named `content_00001.zip`, `content_00002.zip`, etc.
+- Target size is 10 MB per archive (measured by on-disk compressed size).
+- Each file's content is split into ~1 KB chunks.
+- Chunk names: `{relative_path}.chunk{N}.txt`
+- The `lines` table stores `(chunk_archive, chunk_name, line_offset_in_chunk)`
+  — no content inline in SQLite.
+- On re-indexing a file, old chunks are **removed before new ones are written**
+  to prevent duplicate entry names in the ZIP.
+- On deletion, the SQLite transaction stays open across the ZIP rewrite; only
+  committed if the ZIP rewrite succeeds (rollback on failure = atomicity).
+
+### Read path (search)
+
+```
+GET /api/v1/search → FTS5 query → candidate rows (chunk_archive, chunk_name,
+                                   line_offset_in_chunk)
+                   → read chunk from ZIP (cached per request)
+                   → return matched lines + snippets
+```
+
+Context retrieval (`/api/v1/context`, `/api/v1/file`) reads chunks from ZIP
+the same way, with a per-request HashMap cache to avoid re-reading the same
+chunk file twice.
+
+### Directory tree
+
+`GET /api/v1/tree?source=X&prefix=foo/bar/` uses a **range-scan** on the
+`files` table:
+
+```sql
+WHERE path >= 'foo/bar/' AND path < 'foo/bar0'
+```
+
+(`prefix_bump` increments the last byte of the prefix string to get the upper
+bound.) Results are grouped server-side into virtual directory nodes and file
+nodes. Only immediate children of the prefix are returned; the UI lazy-loads
+subdirectories on expand.
+
+### Key invariants and non-obvious details
+
+- **`line_number = 0`** is always the file's own relative path, indexed so
+  every file is findable by name even if content extraction yields nothing.
+- **`archive_path`** on `IndexLine` is for files-within-archives (zip/tar
+  entries); it is `None` for regular files and PDFs.
+- **PDF extraction** wraps `pdf-extract` in `std::panic::catch_unwind` because
+  the library panics on malformed PDFs rather than returning errors.
+- The `files` table is per-source (one SQLite DB per source name, stored at
+  `data_dir/sources/{source}.db`). Archives are shared across sources.
+- The **FTS5 index is contentless** (`content=''`); content lives only in ZIPs.
+  FTS5 is populated manually by the worker at insert time.
+
+### Key files
+
+| File | Purpose |
+|------|---------|
+| `crates/common/src/api.rs` | All HTTP request/response types |
+| `crates/common/src/extract/` | Content extractors (text, pdf, image, audio, archive) |
+| `crates/server/src/worker.rs` | Inbox polling loop + `BulkRequest` processing |
+| `crates/server/src/archive.rs` | ZIP archive management + `chunk_lines()` |
+| `crates/server/src/db.rs` | All SQLite operations |
+| `crates/server/src/routes.rs` | HTTP route handlers (reads + bulk write) |
+| `crates/server/src/schema_v2.sql` | DB schema |
+| `crates/client/src/scan.rs` | Filesystem walk, extraction, batch submission |
+| `crates/client/src/api.rs` | HTTP client (one method per endpoint) |
+| `web/src/lib/api.ts` | TypeScript API client |
+| `web/src/routes/+page.svelte` | Main page — view state machine |
+
+---
+
 ## Project Conventions
 
 ### Versioning
