@@ -206,6 +206,41 @@ pub struct SearchParams {
 fn default_mode() -> String { "fuzzy".into() }
 fn default_limit() -> usize { 50 }
 
+/// Extract maximal sequences of non-special characters from a regex pattern
+/// to use as FTS5 pre-filter terms. Special regex chars (`^$.*+?|()[]{}\`)
+/// act as delimiters; escaped sequences are skipped entirely.
+///
+/// Examples:
+///   `^fn\s+\w+`   → "fn"   (too short, filtered out by fts_candidates)
+///   `class\s+Foo` → "class Foo"
+///   `password`    → "password"
+fn regex_to_fts_terms(pattern: &str) -> String {
+    let mut terms: Vec<String> = Vec::new();
+    let mut current = String::new();
+    let mut chars = pattern.chars();
+
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            // Escaped sequence — flush and skip the next char.
+            if !current.is_empty() {
+                terms.push(std::mem::take(&mut current));
+            }
+            chars.next();
+        } else if "^$.*+?|()[]{}".contains(c) {
+            // Regex special char — flush current literal sequence.
+            if !current.is_empty() {
+                terms.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(c);
+        }
+    }
+    if !current.is_empty() {
+        terms.push(current);
+    }
+    terms.join(" ")
+}
+
 // Construct resource URL by joining base_url with path
 fn make_resource_url(base_url: &Option<String>, path: &str) -> Option<String> {
     base_url.as_ref().map(|base| {
@@ -262,10 +297,16 @@ pub async fn search(
                 let conn = db::open(&db_path)?;
                 let archive_mgr = ArchiveManager::new(data_dir);
                 let base_url = db::get_base_url(&conn)?;
-                // fuzzy: AND individual words so "pass strength" finds "password strength"
-                // exact/regex: phrase query — literal substring
-                let phrase = mode != "fuzzy";
-                let candidates = db::fts_candidates(&conn, &archive_mgr, &query, fts_limit, phrase)?;
+                // For regex mode, extract literal character sequences from the pattern
+                // for FTS5 pre-filtering, then apply the full regex as a post-filter.
+                // For exact mode, treat the whole query as a phrase (literal substring).
+                // For fuzzy mode, AND individual words.
+                let (fts_phrase, fts_query) = match mode.as_str() {
+                    "fuzzy" => (false, query.clone()),
+                    "regex" => (false, regex_to_fts_terms(&query)),
+                    _ /* "exact" */ => (true, query.clone()),
+                };
+                let candidates = db::fts_candidates(&conn, &archive_mgr, &fts_query, fts_limit, fts_phrase)?;
 
                 let results: Vec<SearchResult> = match mode.as_str() {
                     "exact" => {
@@ -282,7 +323,7 @@ pub async fn search(
                         }).collect()
                     }
                     "regex" => {
-                        let re = regex::Regex::new(&query)?;
+                        let re = regex::RegexBuilder::new(&query).case_insensitive(true).build()?;
                         candidates.into_iter()
                             .filter(|c| re.is_match(&c.content))
                             .map(|c| SearchResult {

@@ -88,6 +88,19 @@ export async function getFile(
 	return resp.json();
 }
 
+export async function listFiles(source: string): Promise<FileRecord[]> {
+	const url = new URL('/api/v1/files', location.origin);
+	url.searchParams.set('source', source);
+	const resp = await fetch(url.toString());
+	if (!resp.ok) throw new Error(`listFiles: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}
+
+export interface FileRecord {
+	path: string;
+	mtime: number;
+}
+
 export async function listDir(source: string, prefix = ''): Promise<TreeResponse> {
 	const url = new URL('/api/v1/tree', location.origin);
 	url.searchParams.set('source', source);

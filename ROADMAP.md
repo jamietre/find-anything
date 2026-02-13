@@ -144,7 +144,7 @@ Move beyond single shared token:
 - Per-user accounts and authentication
 - Token rotation and expiry
 - Role-based access control (read-only, admin)
-- User-specific saved searches and preferences
+- User-specific saved searches and preferences (cloud profile sync)
 - Audit logging
 
 ### Advanced Integrations
