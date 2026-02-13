@@ -36,12 +36,18 @@ async fn main() -> Result<()> {
 
     let client = api::ApiClient::new(&config.server.url, &config.server.token);
 
-    scan::run_scan(
-        &client,
-        &config.source.name,
-        &config.source.paths,
-        &config.scan,
-        args.full,
-    )
-    .await
+    // Scan all configured sources
+    for source in &config.sources {
+        tracing::info!("Scanning source: {}", source.name);
+        scan::run_scan(
+            &client,
+            &source.name,
+            &source.paths,
+            &config.scan,
+            args.full,
+        )
+        .await?;
+    }
+
+    Ok(())
 }

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub server: ServerConfig,
-    pub source: SourceConfig,
+    pub sources: Vec<SourceConfig>,
     #[serde(default)]
     pub scan: ScanConfig,
 }

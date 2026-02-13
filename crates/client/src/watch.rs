@@ -9,10 +9,10 @@ use find_common::config::ClientConfig;
 
 pub async fn run_watch(_config: &ClientConfig) -> Result<()> {
     // TODO: implement with notify crate
-    // 1. Set up notify::RecommendedWatcher on all config.source.paths
+    // 1. Set up notify::RecommendedWatcher on all paths from all config.sources
     // 2. Channel events into a debounce buffer (tokio::time::sleep reset on each event)
     // 3. On flush:
-    //    - CREATE/MODIFY  → extract + PUT /api/v1/files
+    //    - CREATE/MODIFY  → extract + PUT /api/v1/files (with correct source name)
     //    - REMOVE         → DELETE /api/v1/files
     //    - RENAME(old,new) → DELETE old + extract + PUT new
     anyhow::bail!("find-watch is not yet implemented (post-MVP)")
