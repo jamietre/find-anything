@@ -5,11 +5,11 @@ token = "local-dev-token-abc123"
 # Multiple sources can be defined, each with a unique name
 [[sources]]
 name = "code"
-paths = ["/home/jamie/code"]
+paths = ["/home/user/code"]
 
 [[sources]]
 name = "data"
-paths = ["/mnt/data/config"]
+paths = ["/home/user/data"]
 
 [scan]
 exclude = [
