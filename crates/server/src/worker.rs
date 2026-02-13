@@ -124,7 +124,7 @@ fn process_file(
         .collect();
 
     // Chunk lines into ~1KB pieces
-    let chunk_result = archive::chunk_lines(&file.path, None, &line_data);
+    let chunk_result = archive::chunk_lines(&file.path, &line_data);
 
     // Append chunks to ZIP archives
     let chunk_refs = archive_mgr.append_chunks(chunk_result.chunks.clone())?;

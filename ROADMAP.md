@@ -31,6 +31,20 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Resource base URLs** — Hyperlinkable search results (file://, http://, smb://)
 - **Smart context retrieval** — File-type-aware context (metadata for images/audio, paragraph extracts for PDFs)
 
+### ✅ ZIP Content Storage & Async Indexing (v0.1.1)
+- **ZIP-backed content storage** — File content stored in rotating 10MB ZIP archives, separate from SQLite FTS index
+- **Async inbox processing** — Client gzip-compresses and submits batches; server worker polls and processes asynchronously
+- **Schema v2** — Contentless FTS5 index; `lines` table stores chunk references instead of inline content
+- **Filename indexing** — Every file indexed by its path so all files are findable by name regardless of content type
+- **Auto-migration** — Detects and drops v1 schema on startup, prompting re-scan
+
+### ✅ Directory Tree Explorer (v0.1.2)
+- **`GET /api/v1/tree` endpoint** — Prefix-based directory listing using range-scan SQL; returns virtual directory nodes grouped server-side
+- **Directory tree sidebar** — Collapsible tree with lazy loading per directory; auto-expands ancestors of the active file
+- **Breadcrumb navigation** — Clickable path segments at the top of the detail panel; clicking a directory switches to directory listing view
+- **Directory listing view** — Table view of directory contents (name, kind, size, modified date)
+- **Atomic archive deletion** — File deletion keeps the SQLite transaction open until ZIP rewrite succeeds; rolls back on failure
+
 ---
 
 ## Near-term (Next 3-6 months)
@@ -155,7 +169,7 @@ Move beyond single shared token:
 These are less structured ideas that may evolve into formal features.
 
 ### Web UI Ideas
-- [ ] Folder path browsing
+- [x] Folder path browsing
 - [ ] Search suggestions / autocomplete
 - [ ] Recent searches dropdown
 - [ ] Command palette (Cmd+K style)

@@ -19,7 +19,6 @@ pub struct ArchiveManager {
 #[derive(Debug, Clone)]
 pub struct Chunk {
     pub file_path: String,
-    pub archive_path: Option<String>,
     pub chunk_number: usize,
     pub content: String,
 }
@@ -68,7 +67,7 @@ impl ArchiveManager {
         Ok(refs)
     }
 
-    /// Remove chunks from archives by rewriting affected ZIPs
+    /// Remove chunks from archives by rewriting affected ZIPs.
     pub fn remove_chunks(&mut self, refs: Vec<ChunkRef>) -> Result<()> {
         // Group by archive
         let mut by_archive: HashMap<String, HashSet<String>> = HashMap::new();
@@ -192,7 +191,6 @@ impl ArchiveManager {
         Ok(())
     }
 
-    /// Rewrite an archive, removing specified chunks
     fn rewrite_archive(&self, archive_path: &Path, chunks_to_remove: &HashSet<String>) -> Result<()> {
         let temp_path = archive_path.with_extension("zip.tmp");
 
@@ -248,7 +246,7 @@ pub struct ChunkResult {
 }
 
 /// Chunk file content into fixed-size pieces, tracking where each line ends up
-pub fn chunk_lines(file_path: &str, archive_path: Option<&str>, lines: &[(usize, String)]) -> ChunkResult {
+pub fn chunk_lines(file_path: &str, lines: &[(usize, String)]) -> ChunkResult {
     let mut chunks = Vec::new();
     let mut line_mappings = Vec::new();
     let mut current_chunk = String::new();
@@ -263,7 +261,6 @@ pub fn chunk_lines(file_path: &str, archive_path: Option<&str>, lines: &[(usize,
             // Flush current chunk
             chunks.push(Chunk {
                 file_path: file_path.to_string(),
-                archive_path: archive_path.map(|s| s.to_string()),
                 chunk_number,
                 content: current_chunk.clone(),
             });
@@ -289,7 +286,6 @@ pub fn chunk_lines(file_path: &str, archive_path: Option<&str>, lines: &[(usize,
     if !current_chunk.is_empty() {
         chunks.push(Chunk {
             file_path: file_path.to_string(),
-            archive_path: archive_path.map(|s| s.to_string()),
             chunk_number,
             content: current_chunk,
         });
@@ -313,7 +309,7 @@ mod tests {
             (3, "c".repeat(500)),
         ];
 
-        let result = chunk_lines("/test/file.txt", None, &lines);
+        let result = chunk_lines("/test/file.txt", &lines);
 
         // First two lines should fit in one chunk (500 + 1 + 500 + 1 = 1002 < 1024)
         // Third line needs its own chunk
@@ -340,7 +336,7 @@ mod tests {
     fn test_chunk_single_large_line() {
         let lines = vec![(1, "x".repeat(2000))];
 
-        let result = chunk_lines("/test/file.txt", None, &lines);
+        let result = chunk_lines("/test/file.txt", &lines);
 
         // One large line goes into its own chunk (exceeds 1KB but we don't split lines)
         assert_eq!(result.chunks.len(), 1);

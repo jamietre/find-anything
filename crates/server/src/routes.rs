@@ -201,9 +201,11 @@ pub async fn delete_files(
         Err(s) => return s.into_response(),
     };
 
+    let data_dir = state.data_dir.clone();
     match spawn_blocking(move || {
         let conn = db::open(&db_path)?;
-        db::delete_files(&conn, &req.paths)
+        let mut archive_mgr = ArchiveManager::new(data_dir);
+        db::delete_files(&conn, &mut archive_mgr, &req.paths)
     })
     .await
     .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))

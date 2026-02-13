@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use find_common::api::{ContextLine, DirEntry, FileRecord, IndexFile};
 
@@ -113,14 +113,61 @@ pub fn upsert_files(conn: &Connection, files: &[IndexFile]) -> Result<()> {
 
 // ── Delete ────────────────────────────────────────────────────────────────────
 
-pub fn delete_files(conn: &Connection, paths: &[String]) -> Result<()> {
+pub fn delete_files(
+    conn: &Connection,
+    archive_mgr: &mut crate::archive::ArchiveManager,
+    paths: &[String],
+) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
+
+    // Collect chunk refs before the rows are gone.
+    let refs = collect_chunk_refs(&tx, paths)?;
+
+    // Delete rows (CASCADE removes associated lines).
     for path in paths {
-        // CASCADE deletes associated lines automatically.
         tx.execute("DELETE FROM files WHERE path = ?1", params![path])?;
     }
+
+    // Rewrite affected ZIPs. If this fails the transaction is dropped,
+    // rolling back the SQLite deletes automatically.
+    archive_mgr.remove_chunks(refs)?;
+
+    // ZIP rewrite succeeded — safe to commit.
     tx.commit()?;
     Ok(())
+}
+
+/// Collect the chunk refs for every line belonging to the given file paths.
+fn collect_chunk_refs(
+    tx: &rusqlite::Transaction,
+    paths: &[String],
+) -> Result<Vec<crate::archive::ChunkRef>> {
+    let mut refs = Vec::new();
+    for path in paths {
+        let file_id: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if let Some(fid) = file_id {
+            let mut stmt = tx.prepare(
+                "SELECT DISTINCT chunk_archive, chunk_name FROM lines WHERE file_id = ?1",
+            )?;
+            let chunk_refs = stmt.query_map(params![fid], |row| {
+                Ok(crate::archive::ChunkRef {
+                    archive_name: row.get(0)?,
+                    chunk_name: row.get(1)?,
+                })
+            })?;
+            for r in chunk_refs {
+                refs.push(r?);
+            }
+        }
+    }
+    Ok(refs)
 }
 
 // ── Scan timestamp ────────────────────────────────────────────────────────────
