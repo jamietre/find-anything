@@ -61,7 +61,7 @@
 		searching = true;
 		searchError = null;
 		try {
-			const resp = await search({ q, mode: m, sources: srcs, context: 3, limit: 50 });
+			const resp = await search({ q, mode: m, sources: srcs, limit: 50 });
 			results = resp.results;
 			totalResults = resp.total;
 			view = 'results';

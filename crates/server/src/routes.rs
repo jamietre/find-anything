@@ -11,7 +11,10 @@ use serde::Deserialize;
 use tokio::task::spawn_blocking;
 
 use find_common::{
-    api::{ContextResponse, FileResponse, SearchResponse, SearchResult, TreeResponse},
+    api::{
+        ContextBatchRequest, ContextBatchResponse, ContextBatchResult,
+        ContextResponse, FileResponse, SearchResponse, SearchResult, TreeResponse,
+    },
     fuzzy::FuzzyScorer,
 };
 
@@ -198,9 +201,6 @@ pub struct SearchParams {
     pub limit: usize,
     #[serde(default)]
     pub offset: usize,
-    /// Lines of context to include before/after each match (0 = none).
-    #[serde(default)]
-    pub context: usize,
 }
 
 fn default_mode() -> String { "fuzzy".into() }
@@ -227,7 +227,6 @@ pub async fn search(
     let query = params.q.clone();
     let mode = params.mode.clone();
     let limit = params.limit.min(state.config.search.max_limit);
-    let context_size = params.context;
 
     // Build the list of (source_name, db_path) to query.
     let source_dbs: Vec<(String, std::path::PathBuf)> = if params.source.is_empty() {
@@ -315,28 +314,6 @@ pub async fn search(
                             })
                             .collect()
                     }
-                };
-
-                // Optionally enrich each result with context lines.
-                let results = if context_size > 0 {
-                    results
-                        .into_iter()
-                        .map(|mut r| {
-                            if let Ok(ctx) = db::get_context(
-                                &conn,
-                                &archive_mgr,
-                                &r.path,
-                                r.archive_path.as_deref(),
-                                r.line_number,
-                                context_size,
-                            ) {
-                                r.context_lines = ctx;
-                            }
-                            r
-                        })
-                        .collect()
-                } else {
-                    results
                 };
 
                 Ok(results)
@@ -460,6 +437,94 @@ pub async fn get_metrics(
         "total_archives":    total_archives,
     }))
     .into_response()
+}
+
+// ── POST /api/v1/context-batch ────────────────────────────────────────────────
+
+pub async fn context_batch(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(req): Json<ContextBatchRequest>,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let data_dir = state.data_dir.clone();
+
+    match spawn_blocking(move || {
+        let archive_mgr = ArchiveManager::new(data_dir.clone());
+        let mut results = Vec::with_capacity(req.requests.len());
+
+        for item in req.requests {
+            if !item.source.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+                results.push(ContextBatchResult {
+                    source: item.source,
+                    path: item.path,
+                    line: item.line,
+                    lines: vec![],
+                    file_kind: String::new(),
+                });
+                continue;
+            }
+
+            let db_path = data_dir.join("sources").join(format!("{}.db", item.source));
+            if !db_path.exists() {
+                results.push(ContextBatchResult {
+                    source: item.source,
+                    path: item.path,
+                    line: item.line,
+                    lines: vec![],
+                    file_kind: String::new(),
+                });
+                continue;
+            }
+
+            let (file_kind, lines) = match db::open(&db_path).and_then(|conn| {
+                let kind = conn
+                    .query_row(
+                        "SELECT kind FROM files WHERE path = ?1",
+                        rusqlite::params![item.path],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .unwrap_or_else(|_| "text".into());
+                let l = db::get_context(
+                    &conn,
+                    &archive_mgr,
+                    &item.path,
+                    item.archive_path.as_deref(),
+                    item.line,
+                    item.window,
+                )?;
+                Ok((kind, l))
+            }) {
+                Ok(pair) => pair,
+                Err(e) => {
+                    tracing::warn!("context_batch item {}/{}: {e}", item.source, item.path);
+                    (String::new(), vec![])
+                }
+            };
+
+            results.push(ContextBatchResult {
+                source: item.source,
+                path: item.path,
+                line: item.line,
+                lines,
+                file_kind,
+            });
+        }
+
+        Ok::<_, anyhow::Error>(ContextBatchResponse { results })
+    })
+    .await
+    .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
+    {
+        Ok(resp) => Json(resp).into_response(),
+        Err(e) => {
+            tracing::error!("context_batch: {e}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 // ── GET /api/v1/tree ──────────────────────────────────────────────────────────

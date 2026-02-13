@@ -58,7 +58,6 @@ export interface SearchParams {
 	sources?: string[];
 	limit?: number;
 	offset?: number;
-	context?: number;
 }
 
 export async function search(params: SearchParams): Promise<SearchResponse> {
@@ -68,7 +67,6 @@ export async function search(params: SearchParams): Promise<SearchResponse> {
 	if (params.sources) params.sources.forEach((s) => url.searchParams.append('source', s));
 	if (params.limit != null) url.searchParams.set('limit', String(params.limit));
 	if (params.offset != null) url.searchParams.set('offset', String(params.offset));
-	if (params.context != null) url.searchParams.set('context', String(params.context));
 
 	const resp = await fetch(url.toString());
 	if (!resp.ok) throw new Error(`search: ${resp.status} ${resp.statusText}`);
@@ -97,6 +95,36 @@ export async function listDir(source: string, prefix = ''): Promise<TreeResponse
 
 	const resp = await fetch(url.toString());
 	if (!resp.ok) throw new Error(`listDir: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}
+
+export interface ContextBatchItem {
+	source: string;
+	path: string;
+	archive_path?: string | null;
+	line: number;
+	window?: number;
+}
+
+export interface ContextBatchResult {
+	source: string;
+	path: string;
+	line: number;
+	lines: ContextLine[];
+	file_kind: string;
+}
+
+export interface ContextBatchResponse {
+	results: ContextBatchResult[];
+}
+
+export async function contextBatch(requests: ContextBatchItem[]): Promise<ContextBatchResponse> {
+	const resp = await fetch('/api/v1/context-batch', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ requests })
+	});
+	if (!resp.ok) throw new Error(`contextBatch: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
 

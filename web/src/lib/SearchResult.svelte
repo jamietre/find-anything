@@ -1,16 +1,48 @@
 <script lang="ts">
-	import { createEventDispatcher } from 'svelte';
-	import type { SearchResult } from '$lib/api';
+	import { createEventDispatcher, onMount } from 'svelte';
+	import type { ContextLine, SearchResult } from '$lib/api';
+	import { getContext as fetchContext } from '$lib/api';
 	import { highlightLine } from '$lib/highlight';
 
 	export let result: SearchResult;
 
 	const dispatch = createEventDispatcher<{ open: SearchResult }>();
 
-	$: lines =
-		result.context_lines && result.context_lines.length > 0
-			? result.context_lines
+	let containerEl: HTMLElement;
+	let contextLines: ContextLine[] = [];
+	let contextLoaded = false;
+
+	$: displayLines =
+		contextLines.length > 0
+			? contextLines
 			: [{ line_number: result.line_number, content: result.snippet }];
+
+	onMount(() => {
+		const observer = new IntersectionObserver(
+			(entries) => {
+				if (entries[0].isIntersecting && !contextLoaded) {
+					contextLoaded = true;
+					fetchContext(
+						result.source,
+						result.path,
+						result.line_number,
+						3,
+						result.archive_path ?? undefined
+					)
+						.then((resp) => {
+							contextLines = resp.lines;
+						})
+						.catch(() => {
+							// silently fall back to snippet
+						});
+					observer.disconnect();
+				}
+			},
+			{ rootMargin: '200px' }
+		);
+		observer.observe(containerEl);
+		return () => observer.disconnect();
+	});
 
 	function openFile() {
 		dispatch('open', result);
@@ -25,7 +57,7 @@
 	}
 </script>
 
-<article class="result">
+<article class="result" bind:this={containerEl}>
 	<!-- svelte-ignore a11y-no-static-element-interactions -->
 	<div
 		class="result-header"
@@ -41,7 +73,7 @@
 	</div>
 
 	<div class="context-lines">
-		{#each lines as line}
+		{#each displayLines as line}
 			<div class="line" class:match={line.line_number === result.line_number}>
 				<span class="ln">{line.line_number}</span>
 				<span class="arrow">{line.line_number === result.line_number ? '▶' : ' '}</span>

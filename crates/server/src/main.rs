@@ -56,14 +56,15 @@ async fn main() -> Result<()> {
     });
 
     let app = Router::new()
-        .route("/api/v1/sources",       get(routes::list_sources))
-        .route("/api/v1/file",          get(routes::get_file))
-        .route("/api/v1/files",         get(routes::list_files))
-        .route("/api/v1/bulk",          post(routes::bulk))
-        .route("/api/v1/search",        get(routes::search))
-        .route("/api/v1/context",       get(routes::get_context))
-        .route("/api/v1/metrics",       get(routes::get_metrics))
-        .route("/api/v1/tree",          get(routes::list_dir))
+        .route("/api/v1/sources",        get(routes::list_sources))
+        .route("/api/v1/file",           get(routes::get_file))
+        .route("/api/v1/files",          get(routes::list_files))
+        .route("/api/v1/bulk",           post(routes::bulk))
+        .route("/api/v1/search",         get(routes::search))
+        .route("/api/v1/context",        get(routes::get_context))
+        .route("/api/v1/context-batch",  post(routes::context_batch))
+        .route("/api/v1/metrics",        get(routes::get_metrics))
+        .route("/api/v1/tree",           get(routes::list_dir))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state);
 

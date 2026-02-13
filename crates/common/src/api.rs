@@ -114,3 +114,39 @@ pub struct DirEntry {
 pub struct TreeResponse {
     pub entries: Vec<DirEntry>,
 }
+
+/// One item in a POST /api/v1/context-batch request.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContextBatchItem {
+    pub source: String,
+    pub path: String,
+    #[serde(default)]
+    pub archive_path: Option<String>,
+    pub line: usize,
+    #[serde(default = "default_context_window")]
+    pub window: usize,
+}
+
+fn default_context_window() -> usize { 5 }
+
+/// POST /api/v1/context-batch request body.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContextBatchRequest {
+    pub requests: Vec<ContextBatchItem>,
+}
+
+/// One result within a POST /api/v1/context-batch response.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContextBatchResult {
+    pub source: String,
+    pub path: String,
+    pub line: usize,
+    pub lines: Vec<ContextLine>,
+    pub file_kind: String,
+}
+
+/// POST /api/v1/context-batch response.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ContextBatchResponse {
+    pub results: Vec<ContextBatchResult>,
+}
