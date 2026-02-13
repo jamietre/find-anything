@@ -1,5 +1,5 @@
 [server]
-bind = "127.0.0.1:8765"
+bind = "0.0.0.0:8765"
 data_dir = "/home/jamie/.local/share/find-anything"
 token = "local-dev-token-abc123"
 

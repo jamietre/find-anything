@@ -23,7 +23,7 @@ queries to the server and returns ranked results.
 │              Central Server                  │
 │  find-server  ──►  SQLite per source         │
 │       │                                      │
-│  find (CLI)    find-web (planned)            │
+│  find (CLI)    find-web (SvelteKit)          │
 └──────────────────────┬──────────────────────┘
                        │  HTTP + bearer token
           ┌────────────┴────────────┐
@@ -46,6 +46,7 @@ queries to the server and returns ranked results.
 | `find-server` | Working | axum REST API, SQLite FTS5 trigram index, bearer token auth |
 | `find-scan` | Working | incremental mtime-based scan, archive content indexing |
 | `find` CLI | Working | fuzzy / exact / regex modes, colored output |
+| `find-web` | Working | SvelteKit web UI with live search, syntax highlighting, file preview |
 | `find-watch` | Stub | compiles, not yet implemented |
 | Archive indexing | Working | zip, tar, tar.gz, tar.bz2, tar.xz, .gz, .bz2, .xz, 7z |
 | Multi-source search | Working | server queries all source DBs in parallel |
@@ -69,6 +70,7 @@ queries to the server and returns ranked results.
 ### Prerequisites
 
 - Rust toolchain (`rustup.rs`)
+- (Optional, for web UI) Node.js 18+ - recommended via [mise](https://mise.jdx.dev)
 
 ### Build
 
@@ -113,9 +115,14 @@ token    = "change-me"
 url   = "http://127.0.0.1:8765"
 token = "change-me"
 
-[source]
-name  = "my-machine"
+# Multiple sources can be defined
+[[sources]]
+name  = "code"
 paths = ["/home/user/code"]
+
+[[sources]]
+name  = "documents"
+paths = ["/home/user/Documents"]
 
 [scan]
 exclude = [
@@ -138,6 +145,63 @@ max_file_size_kb = 1024
 ./find "some pattern" --mode exact
 ./find "some pattern" --source my-machine --limit 20
 ```
+
+### 4. Start the web UI (optional)
+
+The web UI provides a browser-based interface with live fuzzy search, syntax highlighting, and file preview.
+
+**Prerequisites:**
+- Node.js 18+ (managed via mise)
+- pnpm (managed via corepack)
+
+**Setup with mise (recommended):**
+
+```bash
+# Install mise if not already installed: https://mise.jdx.dev
+mise trust        # trust the .mise.toml config
+mise install      # installs Node.js
+
+# Create .env file from example
+cd web
+cp .env.example .env
+```
+
+**Setup without mise:**
+
+```bash
+# Enable corepack for pnpm
+corepack enable
+
+cd web
+pnpm install
+
+# Create .env file from example
+cp .env.example .env
+```
+
+Edit `.env` to match your server configuration:
+
+```bash
+FIND_SERVER_URL=http://localhost:8765
+FIND_TOKEN=change-me  # must match server.toml token
+```
+
+**Development mode:**
+
+```bash
+pnpm dev
+```
+
+The web UI will be available at `http://localhost:5173`
+
+**Production build:**
+
+```bash
+pnpm build
+pnpm preview
+```
+
+The production server runs on `http://localhost:4173` by default.
 
 ---
 
@@ -197,9 +261,14 @@ fts_candidate_limit = 2000    # FTS5 rows passed to nucleo re-scorer
 url   = "http://host:8765"
 token = "your-token"
 
-[source]
+# Define multiple sources - each will be scanned and indexed separately
+[[sources]]
 name  = "unique-source-name"   # alphanumeric, hyphens, underscores
-paths = ["/path/to/index"]     # multiple paths supported
+paths = ["/path/to/index"]     # multiple paths per source
+
+[[sources]]
+name  = "another-source"
+paths = ["/another/path"]
 
 [scan]
 exclude          = ["**/.git/**", "**/node_modules/**"]
@@ -234,10 +303,6 @@ enabled = true
   in `deploy/systemd/`.
 
 ### Medium-term
-
-- **Web UI** — SvelteKit single-page app: live fuzzy search with 150ms debounce,
-  mode switcher, source filter chips, context panel with syntax highlighting.
-  Talks to `find-server` directly via the same bearer token.
 
 - **Native Windows client** — a Windows service and Task Scheduler integration
   wrapping `find-scan` and `find-watch`, replacing the systemd dependency.

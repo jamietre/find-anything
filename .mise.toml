@@ -1,0 +1,21 @@
+[tools]
+node = "24"
+
+[hooks]
+# Enable corepack after mise installs node
+# The pnpm version is managed by package.json's packageManager field
+postinstall = "corepack enable"
+
+[settings]
+experimental = true  # Enables hook support
+
+[env]
+# Optional: Adds node_modules/.bin to PATH for easier command running
+_.path = ["./node_modules/.bin"]
+
+# Optional: Set up a task to install dependencies
+[tasks.install]
+description = "Install dependencies"
+run = "pnpm install"
+sources = ["pnpm-lock.yaml", "package.json"]
+outputs = ["node_modules"]
