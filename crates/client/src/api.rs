@@ -5,9 +5,7 @@ use flate2::{write::GzEncoder, Compression};
 use reqwest::Client;
 use std::io::Write;
 
-use find_common::api::{
-    ContextResponse, DeleteRequest, FileRecord, ScanCompleteRequest, SearchResponse, UpsertRequest,
-};
+use find_common::api::{BulkRequest, ContextResponse, FileRecord, SearchResponse};
 
 pub struct ApiClient {
     client: Client,
@@ -49,60 +47,29 @@ impl ApiClient {
             .context("parsing file list")
     }
 
-    /// PUT /api/v1/files  — upsert a batch of files + lines (gzip-compressed).
-    pub async fn upsert_files(&self, req: &UpsertRequest) -> Result<()> {
-        let json = serde_json::to_vec(req).context("serialising upsert request")?;
+    /// POST /api/v1/bulk  — upserts, deletions, and scan-complete in one request (gzip-compressed).
+    pub async fn bulk(&self, req: &BulkRequest) -> Result<()> {
+        let json = serde_json::to_vec(req).context("serialising bulk request")?;
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(&json).context("compressing upsert request")?;
+        encoder.write_all(&json).context("compressing bulk request")?;
         let compressed = encoder.finish().context("finishing gzip stream")?;
 
         let resp = self.client
-            .put(self.url("/api/v1/files"))
+            .post(self.url("/api/v1/bulk"))
             .bearer_auth(&self.token)
             .header("Content-Encoding", "gzip")
             .header("Content-Type", "application/json")
             .body(compressed)
             .send()
             .await
-            .context("PUT /api/v1/files")?;
+            .context("POST /api/v1/bulk")?;
 
         let status = resp.status();
         if status == reqwest::StatusCode::ACCEPTED || status.is_success() {
             Ok(())
         } else {
-            Err(anyhow::anyhow!("PUT /api/v1/files: unexpected status {status}"))
+            Err(anyhow::anyhow!("POST /api/v1/bulk: unexpected status {status}"))
         }
-    }
-
-    /// DELETE /api/v1/files  — remove files from the index.
-    pub async fn delete_files(&self, req: &DeleteRequest) -> Result<()> {
-        self.client
-            .delete(self.url("/api/v1/files"))
-            .bearer_auth(&self.token)
-            .json(req)
-            .send()
-            .await
-            .context("DELETE /api/v1/files")?
-            .error_for_status()
-            .context("DELETE /api/v1/files status")?;
-        Ok(())
-    }
-
-    /// POST /api/v1/scan-complete  — update last_scan timestamp.
-    pub async fn scan_complete(&self, source: &str, timestamp: i64) -> Result<()> {
-        self.client
-            .post(self.url("/api/v1/scan-complete"))
-            .bearer_auth(&self.token)
-            .json(&ScanCompleteRequest {
-                source: source.to_string(),
-                timestamp,
-            })
-            .send()
-            .await
-            .context("POST /api/v1/scan-complete")?
-            .error_for_status()
-            .context("POST /api/v1/scan-complete status")?;
-        Ok(())
     }
 
     /// GET /api/v1/context

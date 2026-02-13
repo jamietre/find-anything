@@ -13,32 +13,31 @@ impl Extractor for PdfExtractor {
     }
 
     fn extract(&self, path: &Path) -> anyhow::Result<Vec<IndexLine>> {
-        // Extract text from PDF using pdf-extract
         let bytes = std::fs::read(path)?;
 
-        match pdf_extract::extract_text_from_mem(&bytes) {
-            Ok(text) => {
-                // Split into lines and index each one
-                // For now, treat the entire PDF as one continuous text
-                // Future: could extract page-by-page and use archive_path for page numbers
-                let mut lines = Vec::new();
-                for (idx, line) in text.lines().enumerate() {
-                    let trimmed = line.trim();
-                    if !trimmed.is_empty() {
-                        lines.push(IndexLine {
-                            archive_path: None,  // Could be "page:N" if we extract per-page
-                            line_number: idx + 1,
-                            content: trimmed.to_string(),
-                        });
-                    }
-                }
-                Ok(lines)
+        // pdf-extract can panic on malformed PDFs; catch_unwind turns that into
+        // a recoverable error so the scan can continue with other files.
+        let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes));
+
+        let text = match result {
+            Ok(Ok(t)) => t,
+            Ok(Err(_)) | Err(_) => {
+                // Extraction failed or panicked (encrypted, corrupted, unsupported font, etc.)
+                return Ok(vec![]);
             }
-            Err(_) => {
-                // PDF extraction can fail for various reasons (encrypted, corrupted, scanned PDFs)
-                // Just return empty results - this is normal for many PDFs
-                Ok(vec![])
+        };
+
+        let mut lines = Vec::new();
+        for (idx, line) in text.lines().enumerate() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                lines.push(IndexLine {
+                    archive_path: None,
+                    line_number: idx + 1,
+                    content: trimmed.to_string(),
+                });
             }
         }
+        Ok(lines)
     }
 }

@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use walkdir::WalkDir;
 
 use find_common::{
-    api::{DeleteRequest, IndexFile, IndexLine, UpsertRequest},
+    api::{BulkRequest, IndexFile, IndexLine},
     config::ScanConfig,
     extract,
 };
@@ -87,7 +87,7 @@ pub async fn run_scan(
             Ok(l) => l,
             Err(e) => {
                 warn!("extract {}: {e}", abs_path.display());
-                continue;
+                vec![]
             }
         };
 
@@ -110,30 +110,21 @@ pub async fn run_scan(
         });
 
         if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
-            submit_batch(api, source_name, base_url, &mut batch).await?;
+            submit_batch(api, source_name, base_url, &mut batch, vec![], None).await?;
             batch_bytes = 0;
         }
     }
-    if !batch.is_empty() {
-        submit_batch(api, source_name, base_url, &mut batch).await?;
-    }
 
-    // Delete removed files.
-    if !to_delete.is_empty() {
-        info!("deleting {} removed files", to_delete.len());
-        api.delete_files(&DeleteRequest {
-            source: source_name.to_string(),
-            paths: to_delete,
-        })
-        .await?;
-    }
-
-    // Record completion timestamp.
+    // Final batch: remaining files + all deletes + scan-complete timestamp.
     let now = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
-    api.scan_complete(source_name, now).await?;
+
+    if !to_delete.is_empty() {
+        info!("deleting {} removed files", to_delete.len());
+    }
+    submit_batch(api, source_name, base_url, &mut batch, to_delete, Some(now)).await?;
 
     info!("scan complete");
     Ok(())
@@ -236,13 +227,19 @@ async fn submit_batch(
     source_name: &str,
     base_url: Option<&str>,
     batch: &mut Vec<IndexFile>,
+    delete_paths: Vec<String>,
+    scan_timestamp: Option<i64>,
 ) -> Result<()> {
     let files = std::mem::take(batch);
-    info!("submitting batch of {} files", files.len());
-    api.upsert_files(&UpsertRequest {
+    if !files.is_empty() {
+        info!("submitting batch of {} files", files.len());
+    }
+    api.bulk(&BulkRequest {
         source: source_name.to_string(),
         files,
+        delete_paths,
         base_url: base_url.map(|s| s.to_string()),
+        scan_timestamp,
     })
     .await
 }

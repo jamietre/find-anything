@@ -9,7 +9,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Router,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -59,9 +59,7 @@ async fn main() -> Result<()> {
         .route("/api/v1/sources",       get(routes::list_sources))
         .route("/api/v1/file",          get(routes::get_file))
         .route("/api/v1/files",         get(routes::list_files))
-        .route("/api/v1/files",         put(routes::upsert_files))
-        .route("/api/v1/files",         delete(routes::delete_files))
-        .route("/api/v1/scan-complete", post(routes::scan_complete))
+        .route("/api/v1/bulk",          post(routes::bulk))
         .route("/api/v1/search",        get(routes::search))
         .route("/api/v1/context",       get(routes::get_context))
         .route("/api/v1/metrics",       get(routes::get_metrics))

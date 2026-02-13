@@ -1,5 +1,6 @@
 [tools]
 node = "24"
+"cargo:cargo-watch" = "latest"
 
 [hooks]
 # Enable corepack after mise installs node
@@ -11,7 +12,7 @@ experimental = true  # Enables hook support
 
 [env]
 # Optional: Adds node_modules/.bin to PATH for easier command running
-_.path = ["./node_modules/.bin"]
+_.path = ["./node_modules/.bin", "~/.cargo/bin"]
 
 # Optional: Set up a task to install dependencies
 [tasks.install]
@@ -19,3 +20,35 @@ description = "Install dependencies"
 run = "pnpm install"
 sources = ["pnpm-lock.yaml", "package.json"]
 outputs = ["node_modules"]
+
+# ── Rust server ───────────────────────────────────────────────────────────────
+
+[tasks.server]
+description = "Start the server, auto-rebuild on source changes (requires cargo-watch)"
+run = "cargo watch -w crates -x 'run -p find-server -- config/server.toml'"
+
+[tasks.server-once]
+description = "Start the server (single run, no watching)"
+run = "cargo run -p find-server -- config/server.toml"
+
+# ── Client / scanning ─────────────────────────────────────────────────────────
+
+[tasks.scan]
+description = "Incremental scan of all configured sources"
+run = "cargo run -p find-client --bin find-scan -- --config config/client.toml 2>&1 | grep -v '^unknown glyph\\|^No state to pop'"
+
+[tasks.scan-full]
+description = "Full (non-incremental) scan of all configured sources"
+run = "cargo run -p find-client --bin find-scan -- --config config/client.toml --full 2>&1 | grep -v '^unknown glyph\\|^No state to pop'"
+
+# ── Web UI ────────────────────────────────────────────────────────────────────
+
+[tasks.web]
+description = "Start the web UI dev server (hot-reloads on change)"
+run = "pnpm --dir web dev"
+
+# ── Checks ────────────────────────────────────────────────────────────────────
+
+[tasks.check]
+description = "Type-check all Rust crates and the web UI"
+run = ["cargo check --workspace", "pnpm --dir web check"]

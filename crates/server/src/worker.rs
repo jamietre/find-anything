@@ -1,12 +1,12 @@
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use find_common::api::UpsertRequest;
+use find_common::api::BulkRequest;
 
 use crate::archive::{self, ArchiveManager, ChunkRef};
 use crate::db;
@@ -89,8 +89,8 @@ fn process_request(data_dir: &Path, request_path: &Path) -> Result<()> {
     let mut json = String::new();
     decoder.read_to_string(&mut json)?;
 
-    let request: UpsertRequest = serde_json::from_str(&json)
-        .context("parsing index request JSON")?;
+    let request: BulkRequest = serde_json::from_str(&json)
+        .context("parsing bulk request JSON")?;
 
     // Open source database
     let db_path = data_dir.join("sources").join(format!("{}.db", request.source));
@@ -99,13 +99,20 @@ fn process_request(data_dir: &Path, request_path: &Path) -> Result<()> {
     // Initialize archive manager
     let mut archive_mgr = ArchiveManager::new(data_dir.to_path_buf());
 
-    // Process files: chunk content, append to archives, update database
+    // 1. Deletions first (handles renames where path appears in both lists)
+    if !request.delete_paths.is_empty() {
+        db::delete_files(&conn, &mut archive_mgr, &request.delete_paths)?;
+    }
+
+    // 2. Upserts
     for file in &request.files {
         process_file(&conn, &mut archive_mgr, file)?;
     }
 
-    // Update metadata
-    db::update_last_scan(&conn, chrono::Utc::now().timestamp())?;
+    // 3. Metadata
+    if let Some(ts) = request.scan_timestamp {
+        db::update_last_scan(&conn, ts)?;
+    }
     if let Some(base_url) = &request.base_url {
         db::update_base_url(&conn, Some(base_url))?;
     }
@@ -118,6 +125,28 @@ fn process_file(
     archive_mgr: &mut ArchiveManager,
     file: &find_common::api::IndexFile,
 ) -> Result<()> {
+    // If this file was previously indexed, remove its old chunks from the ZIPs
+    // before writing new ones to avoid duplicate entry names.
+    let existing_id: Option<i64> = conn.query_row(
+        "SELECT id FROM files WHERE path = ?1",
+        rusqlite::params![file.path],
+        |row| row.get(0),
+    ).optional()?;
+
+    if let Some(fid) = existing_id {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT chunk_archive, chunk_name FROM lines WHERE file_id = ?1",
+        )?;
+        let old_refs: Vec<ChunkRef> = stmt
+            .query_map(rusqlite::params![fid], |row| {
+                Ok(ChunkRef { archive_name: row.get(0)?, chunk_name: row.get(1)? })
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+        if !old_refs.is_empty() {
+            archive_mgr.remove_chunks(old_refs)?;
+        }
+    }
+
     // Prepare lines for chunking (line_number, content)
     let line_data: Vec<(usize, String)> = file.lines.iter()
         .map(|l| (l.line_number, l.content.clone()))

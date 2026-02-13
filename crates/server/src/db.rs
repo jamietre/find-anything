@@ -16,6 +16,7 @@ pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("opening {}", db_path.display()))?;
 
+
     // Detect v1 schema (lines table has a `content` column instead of chunk refs).
     // If found, drop all old objects so schema_v2 initialises cleanly.
     let is_v1: bool = conn

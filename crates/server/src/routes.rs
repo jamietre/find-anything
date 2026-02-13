@@ -11,10 +11,7 @@ use serde::Deserialize;
 use tokio::task::spawn_blocking;
 
 use find_common::{
-    api::{
-        ContextResponse, DeleteRequest, FileResponse, ScanCompleteRequest, SearchResponse,
-        SearchResult, TreeResponse,
-    },
+    api::{ContextResponse, FileResponse, SearchResponse, SearchResult, TreeResponse},
     fuzzy::FuzzyScorer,
 };
 
@@ -148,9 +145,9 @@ pub async fn list_files(
     }
 }
 
-// ── PUT /api/v1/files ─────────────────────────────────────────────────────────
+// ── POST /api/v1/bulk ─────────────────────────────────────────────────────────
 
-pub async fn upsert_files(
+pub async fn bulk(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     body: Bytes,
@@ -177,71 +174,11 @@ pub async fn upsert_files(
 
     match tokio::fs::write(&inbox_path, &body).await {
         Ok(()) => {
-            tracing::info!("Queued index request: {}", inbox_path.display());
+            tracing::info!("Queued bulk request: {}", inbox_path.display());
             StatusCode::ACCEPTED.into_response()
         }
         Err(e) => {
             tracing::error!("Failed to write inbox request: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
-// ── DELETE /api/v1/files ──────────────────────────────────────────────────────
-
-pub async fn delete_files(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(req): Json<DeleteRequest>,
-) -> impl IntoResponse {
-    if let Err(s) = check_auth(&state, &headers) { return s.into_response(); }
-
-    let db_path = match source_db_path(&state, &req.source) {
-        Ok(p) => p,
-        Err(s) => return s.into_response(),
-    };
-
-    let data_dir = state.data_dir.clone();
-    match spawn_blocking(move || {
-        let conn = db::open(&db_path)?;
-        let mut archive_mgr = ArchiveManager::new(data_dir);
-        db::delete_files(&conn, &mut archive_mgr, &req.paths)
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
-    {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(e) => {
-            tracing::error!("delete_files: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
-}
-
-// ── POST /api/v1/scan-complete ────────────────────────────────────────────────
-
-pub async fn scan_complete(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(req): Json<ScanCompleteRequest>,
-) -> impl IntoResponse {
-    if let Err(s) = check_auth(&state, &headers) { return s.into_response(); }
-
-    let db_path = match source_db_path(&state, &req.source) {
-        Ok(p) => p,
-        Err(s) => return s.into_response(),
-    };
-
-    match spawn_blocking(move || {
-        let conn = db::open(&db_path)?;
-        db::update_last_scan(&conn, req.timestamp)
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
-    {
-        Ok(()) => StatusCode::OK.into_response(),
-        Err(e) => {
-            tracing::error!("scan_complete: {e}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

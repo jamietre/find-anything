@@ -21,27 +21,22 @@ pub struct IndexFile {
     pub lines: Vec<IndexLine>,
 }
 
-/// PUT /api/v1/files request body.
+/// POST /api/v1/bulk request body.
+/// Combines upserts, deletes, and scan-complete into a single async operation.
 #[derive(Debug, Serialize, Deserialize)]
-pub struct UpsertRequest {
+pub struct BulkRequest {
     pub source: String,
+    /// Files to upsert into the index.
+    #[serde(default)]
     pub files: Vec<IndexFile>,
+    /// Paths to remove from the index.
+    #[serde(default)]
+    pub delete_paths: Vec<String>,
     #[serde(default)]
     pub base_url: Option<String>,
-}
-
-/// DELETE /api/v1/files request body.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct DeleteRequest {
-    pub source: String,
-    pub paths: Vec<String>,
-}
-
-/// POST /api/v1/scan-complete request body.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct ScanCompleteRequest {
-    pub source: String,
-    pub timestamp: i64,
+    /// If present, update the last_scan timestamp for this source.
+    #[serde(default)]
+    pub scan_timestamp: Option<i64>,
 }
 
 /// One search result.
