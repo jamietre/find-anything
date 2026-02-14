@@ -52,6 +52,17 @@ This document tracks the development roadmap for find-anything, from completed f
 - **FilePath class refactor** — Unified path representation eliminates sync issues between split (path+archivePath) and composite (path::member) formats
 - **Consistent archive behavior** — Ctrl+P and clicking archive nodes both expand to one level and show contents
 
+### ✅ Investigations
+
+**Archive Index Compression** (2026-02-14)
+- Investigated FTS5 trigram index storage and compression options
+- Key finding: FTS5 index naturally ~3x original text size (inherent to trigram indexing)
+- Current architecture is optimal: contentless FTS5 + ZIP content storage
+- FTS5 already uses built-in page-level compression (not user-configurable)
+- Increasing ZIP compression level (6→9) would have minimal benefit (~5-10% reduction)
+- **Conclusion:** No changes needed - current implementation is well-balanced
+- See: `docs/investigations/001-archive-index-compression.md`
+
 ---
 
 ## Near-term (Next 3-6 months)

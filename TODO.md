@@ -1,30 +1,6 @@
 # TODO - High Priority
 
-## 1. Archive Index Compression Investigation
-
-**Questions to answer:**
-- Is the FTS5 index currently compressed?
-- Can SQLite FTS5 search on compressed content tokens?
-- What's the size overhead of trigram indexing vs. content storage?
-
-**Research:**
-- SQLite FTS5 compression options (if any)
-- Alternative: compress content_NNNNN.zip archives more aggressively?
-- Trade-offs: compression ratio vs. search performance
-
-**Potential optimizations:**
-- Enable content compression in FTS5 if supported
-- Benchmark search speed with/without compression
-- Measure index size reduction
-
-**Files to investigate:**
-- `crates/server/src/schema_v2.sql` - FTS5 table definition
-- `crates/server/src/archive.rs` - Content ZIP compression level
-- SQLite FTS5 documentation on compression
-
----
-
-## 2. Video Metadata Extraction
+## 1. Video Metadata Extraction
 
 **Goal:** Extract and index video file metadata (like audio/image already supported)
 
@@ -49,7 +25,7 @@
 
 ---
 
-## 3. Word Wrap in File Viewer
+## 2. Word Wrap in File Viewer
 
 **Current behavior:**
 - Long lines overflow horizontally, require scrolling
@@ -71,7 +47,7 @@
 
 ---
 
-## 4. Content Archive Subfolder Strategy
+## 3. Content Archive Subfolder Strategy
 
 **Current problem:**
 - All `content_NNNNN.zip` archives in flat `data_dir/sources/` folder
