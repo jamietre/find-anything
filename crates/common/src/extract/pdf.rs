@@ -1,6 +1,7 @@
 use std::path::Path;
 use crate::api::IndexLine;
 use crate::extract::Extractor;
+use tracing::warn;
 
 pub struct PdfExtractor;
 
@@ -21,8 +22,14 @@ impl Extractor for PdfExtractor {
 
         let text = match result {
             Ok(Ok(t)) => t,
-            Ok(Err(_)) | Err(_) => {
-                // Extraction failed or panicked (encrypted, corrupted, unsupported font, etc.)
+            Ok(Err(e)) => {
+                warn!("pdf extraction error for {}: {e}", path.display());
+                return Ok(vec![]);
+            }
+            Err(_) => {
+                // catch_unwind caught a panic from pdf-extract; the panic message
+                // was already printed to stderr by Rust's panic handler.
+                warn!("pdf extraction panicked for {} (see panic output above)", path.display());
                 return Ok(vec![]);
             }
         };

@@ -243,6 +243,9 @@ These are less structured ideas that may evolve into formal features.
 - [ ] Calendar event indexing
 - [ ] Chat history indexing (Slack export, Discord)
 
+### Miscellaneous
+
+- [ ] Generate some sample data so we can spin up a server using no personal data, and take some screenshots for the readme
 ---
 
 ## Contributing Ideas

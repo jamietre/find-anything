@@ -151,7 +151,6 @@ fn walk_paths(
     scan: &ScanConfig,
     excludes: &GlobSet,
 ) -> HashMap<String, PathBuf> {
-    let max_bytes = scan.max_file_size_kb * 1024;
     let mut map = HashMap::new();
 
     for root_str in paths {
@@ -183,12 +182,6 @@ fn walk_paths(
             };
             if !entry.file_type().is_file() {
                 continue;
-            }
-            // Skip oversized files
-            if let Ok(meta) = entry.metadata() {
-                if meta.len() > max_bytes {
-                    continue;
-                }
             }
             let abs = entry.path().to_path_buf();
             let rel = relative_path(&abs, paths);

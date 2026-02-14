@@ -135,15 +135,15 @@
 					<div class="cp-status">No matches</div>
 				{:else}
 					{#each filtered as item, i (item.path)}
-						<!-- svelte-ignore a11y-no-static-element-interactions -->
-						<div
+						<button
+							type="button"
 							class="cp-item"
 							class:active={i === selected}
 							on:click={confirm}
 							on:mouseenter={() => (selected = i)}
 						>
 							<span class="cp-path">{item.path}</span>
-						</div>
+						</button>
 					{/each}
 				{/if}
 			</div>
@@ -218,6 +218,11 @@
 	}
 
 	.cp-item {
+		display: block;
+		width: 100%;
+		background: none;
+		border: none;
+		text-align: left;
 		padding: 6px 14px;
 		cursor: pointer;
 		font-family: var(--font-mono);

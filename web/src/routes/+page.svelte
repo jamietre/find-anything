@@ -67,6 +67,19 @@
 		document.addEventListener('mouseup', onUp);
 	}
 
+	function onResizeKeydown(e: KeyboardEvent) {
+		const step = e.shiftKey ? 32 : 8;
+		if (e.key === 'ArrowRight') {
+			e.preventDefault();
+			sidebarWidth = Math.min(600, sidebarWidth + step);
+			profile.update((p) => ({ ...p, sidebarWidth }));
+		} else if (e.key === 'ArrowLeft') {
+			e.preventDefault();
+			sidebarWidth = Math.max(120, sidebarWidth - step);
+			profile.update((p) => ({ ...p, sidebarWidth }));
+		}
+	}
+
 	// ── Browser history ─────────────────────────────────────────────────────────
 
 	interface AppState {
@@ -192,8 +205,22 @@
 			}
 		}
 
+		// Use capture so Ctrl+P is intercepted before any child's stopPropagation
+		// (e.g. the command palette panel) and before the browser's print shortcut.
+		function handleKeydown(e: KeyboardEvent) {
+			const ctrl = e.ctrlKey || e.metaKey;
+			if (ctrl && e.key === 'p') {
+				e.preventDefault();
+				showPalette = !showPalette;
+			}
+		}
+
 		window.addEventListener('popstate', handlePopState);
-		return () => window.removeEventListener('popstate', handlePopState);
+		window.addEventListener('keydown', handleKeydown, { capture: true });
+		return () => {
+			window.removeEventListener('popstate', handlePopState);
+			window.removeEventListener('keydown', handleKeydown, { capture: true });
+		};
 	});
 
 	// ── Search ──────────────────────────────────────────────────────────────────
@@ -297,16 +324,6 @@
 		pushState();
 	}
 
-	// ── Global keyboard shortcuts ───────────────────────────────────────────────
-
-	function handleGlobalKeydown(e: KeyboardEvent) {
-		const ctrl = e.ctrlKey || e.metaKey;
-		if (ctrl && e.key === 'p') {
-			e.preventDefault();
-			showPalette = !showPalette;
-		}
-	}
-
 	// ── Derived ────────────────────────────────────────────────────────────────
 
 	/** Source names for SourceChips / CommandPalette (string[]). */
@@ -331,8 +348,6 @@
 
 	$: pathBarPath = panelMode === 'dir' ? currentDirPrefix : filePath;
 </script>
-
-<svelte:window on:keydown={handleGlobalKeydown} />
 
 <div class="page">
 	{#if view === 'file'}
@@ -364,8 +379,13 @@
 						on:open={openFileFromTree}
 					/>
 				</div>
-				<!-- svelte-ignore a11y-no-static-element-interactions -->
-				<div class="resize-handle" on:mousedown={onResizeStart} role="separator" />
+				<button
+					class="resize-handle"
+					type="button"
+					aria-label="Resize sidebar"
+					on:mousedown={onResizeStart}
+					on:keydown={onResizeKeydown}
+				/>
 			{/if}
 			<div class="viewer-wrap">
 				<PathBar
@@ -510,7 +530,14 @@
 		flex-shrink: 0;
 		cursor: col-resize;
 		background: var(--border);
+		border: none;
+		padding: 0;
 		transition: background 0.15s;
+	}
+
+	.resize-handle:focus-visible {
+		outline: 2px solid var(--accent, #58a6ff);
+		outline-offset: 0;
 	}
 
 	.resize-handle:hover {

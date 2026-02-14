@@ -162,6 +162,15 @@ subdirectories on expand.
 
 ---
 
+## Tooling
+
+- **Package manager:** `pnpm` (not npm). Use `pnpm` for all web commands in `web/`.
+  - Type-check: `pnpm run check`
+  - Dev server: `pnpm run dev`
+  - Build: `pnpm run build`
+
+---
+
 ## Project Conventions
 
 ### Versioning

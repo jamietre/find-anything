@@ -624,6 +624,7 @@ dependencies = [
  "serde_json",
  "sevenz-rust",
  "tar",
+ "tracing",
  "walkdir",
  "xz2",
  "zip",
