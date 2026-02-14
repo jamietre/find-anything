@@ -45,6 +45,13 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Directory listing view** — Table view of directory contents (name, kind, size, modified date)
 - **Atomic archive deletion** — File deletion keeps the SQLite transaction open until ZIP rewrite succeeds; rolls back on failure
 
+### ✅ Archive Navigation & Path Refactoring (v0.1.3)
+- **Archive node highlighting** — Clicking nested archive members now correctly highlights the actual file, not the outermost archive
+- **Split click behavior** — Archive tree nodes: arrow toggles expansion, name opens/highlights node
+- **Improved fuzzy scoring** — Exact substring matches get massive score boost; searching "inner.zip" now correctly ranks files containing that string at top
+- **FilePath class refactor** — Unified path representation eliminates sync issues between split (path+archivePath) and composite (path::member) formats
+- **Consistent archive behavior** — Ctrl+P and clicking archive nodes both expand to one level and show contents
+
 ---
 
 ## Near-term (Next 3-6 months)

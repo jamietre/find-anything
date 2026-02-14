@@ -48,11 +48,29 @@
 		expanded = true;
 	}
 
-	async function toggleDir() {
+	async function toggleDir(e: MouseEvent) {
+		e.stopPropagation();
 		if (!expanded) {
 			await expandDir();
 		} else {
 			expanded = false;
+		}
+	}
+
+	async function onDirRowClick() {
+		// For archive nodes: expand to one level and dispatch open event
+		if (entry.kind === 'archive') {
+			if (!expanded) {
+				await expandDir();
+			}
+			dispatch('open', {
+				source,
+				path: entry.path,
+				kind: 'archive',
+			});
+		} else {
+			// Regular directories: just toggle
+			await toggleDir(new MouseEvent('click'));
 		}
 	}
 
@@ -66,18 +84,6 @@
 				kind: entry.kind ?? 'text',
 				archivePath: entry.path.slice(i + 2),
 			});
-		} else if (entry.kind === 'archive') {
-			// Special case: clicking an archive file should expand it AND show its contents
-			// in the right pane as a directory listing.
-			if (!expanded) {
-				expandDir();
-			}
-			dispatch('open', {
-				source,
-				path: entry.path,
-				kind: 'archive',
-				showAsDirectory: true,
-			});
 		} else {
 			dispatch('open', {
 				source,
@@ -90,10 +96,14 @@
 
 <li class="row-item">
 	{#if isExpandable}
-		<button class="row row--dir" style="padding-left: {8 + depth * 16}px" on:click={toggleDir}>
-			<span class="icon">{expanded ? '▾' : '▸'}</span>
-			<span class="name">{entry.name}</span>
-		</button>
+		<div class="row row--dir" class:active={entry.kind === 'archive' && entry.path === activePath} style="padding-left: {8 + depth * 16}px">
+			<button class="expand-arrow" on:click={toggleDir} title={expanded ? 'Collapse' : 'Expand'}>
+				<span class="icon">{expanded ? '▾' : '▸'}</span>
+			</button>
+			<button class="dir-name" on:click={onDirRowClick}>
+				<span class="name">{entry.name}</span>
+			</button>
+		</div>
 		{#if expanded}
 			{#if loadError}
 				<div class="load-error" style="padding-left: {8 + (depth + 1) * 16}px">Error loading</div>
@@ -140,28 +150,77 @@
 	.row {
 		display: flex;
 		align-items: center;
-		gap: 4px;
+		gap: 0;
 		width: 100%;
 		background: none;
 		border: none;
-		cursor: pointer;
 		padding-top: 2px;
 		padding-bottom: 2px;
 		padding-right: 8px;
-		text-align: left;
 		color: var(--text);
 		font-size: 13px;
 		white-space: nowrap;
 		overflow: hidden;
 	}
 
-	.row:hover {
+	.row--file {
+		cursor: pointer;
+		text-align: left;
+	}
+
+	.row--file:hover {
 		background: var(--bg-hover, rgba(255, 255, 255, 0.06));
 	}
 
 	.row--file.active {
 		background: var(--accent-subtle, rgba(88, 166, 255, 0.15));
 		color: var(--accent, #58a6ff);
+	}
+
+	.row--dir {
+		position: relative;
+	}
+
+	.row--dir:hover {
+		background: var(--bg-hover, rgba(255, 255, 255, 0.06));
+	}
+
+	.row--dir.active {
+		background: var(--accent-subtle, rgba(88, 166, 255, 0.15));
+		color: var(--accent, #58a6ff);
+	}
+
+	.expand-arrow {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 18px;
+		height: 100%;
+		background: none;
+		border: none;
+		cursor: pointer;
+		padding: 0;
+		color: var(--text);
+		flex-shrink: 0;
+	}
+
+	.expand-arrow:hover {
+		opacity: 0.7;
+	}
+
+	.dir-name {
+		display: flex;
+		align-items: center;
+		flex: 1;
+		background: none;
+		border: none;
+		cursor: pointer;
+		padding: 0;
+		padding-left: 4px;
+		color: inherit;
+		font-size: inherit;
+		text-align: left;
+		overflow: hidden;
 	}
 
 	.icon {

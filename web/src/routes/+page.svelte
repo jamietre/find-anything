@@ -17,6 +17,7 @@
 		parseHash,
 		formatHash
 	} from '$lib/lineSelection';
+	import { FilePath } from '$lib/filePath';
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -37,8 +38,7 @@
 
 	// File / directory detail state
 	let fileSource = '';
-	let filePath = '';
-	let fileArchivePath: string | null = null;
+	let currentFile: FilePath | null = null;
 	let fileSelection: LineSelection = [];
 
 	let panelMode: PanelMode = 'file';
@@ -88,8 +88,7 @@
 		mode: string;
 		selectedSources: string[];
 		fileSource: string;
-		filePath: string;
-		fileArchivePath: string | null;
+		currentFile: FilePath | null;
 		fileSelection: LineSelection;
 		panelMode: PanelMode;
 		currentDirPrefix: string;
@@ -102,8 +101,7 @@
 			mode,
 			selectedSources,
 			fileSource,
-			filePath,
-			fileArchivePath,
+			currentFile,
 			fileSelection,
 			panelMode,
 			currentDirPrefix
@@ -115,11 +113,12 @@
 		if (s.query) p.set('q', s.query);
 		if (s.mode && s.mode !== 'fuzzy') p.set('mode', s.mode);
 		s.selectedSources.forEach((src) => p.append('source', src));
-		if (s.view === 'file') {
+		if (s.view === 'file' && s.currentFile) {
 			p.set('view', 'file');
 			p.set('fsource', s.fileSource);
-			p.set('path', s.filePath);
-			if (s.fileArchivePath) p.set('apath', s.fileArchivePath);
+			// Serialize FilePath as separate path/apath for backward compatibility
+			p.set('path', s.currentFile.outer);
+			if (s.currentFile.inner) p.set('apath', s.currentFile.inner);
 			if (s.panelMode === 'dir') {
 				p.set('panel', 'dir');
 				p.set('dir', s.currentDirPrefix);
@@ -148,8 +147,7 @@
 		mode = s.mode;
 		selectedSources = s.selectedSources;
 		fileSource = s.fileSource;
-		filePath = s.filePath;
-		fileArchivePath = s.fileArchivePath;
+		currentFile = s.currentFile;
 		fileSelection = s.fileSelection;
 		panelMode = s.panelMode;
 		currentDirPrefix = s.currentDirPrefix;
@@ -162,14 +160,19 @@
 		const m = params.get('mode') ?? 'fuzzy';
 		const srcs = params.getAll('source');
 		const v = (params.get('view') ?? 'results') as View;
+
+		// Deserialize FilePath from URL params
+		const path = params.get('path');
+		const apath = params.get('apath');
+		const restoredFile = path ? FilePath.fromParts(path, apath) : null;
+
 		const s: AppState = {
 			view: v,
 			query: q,
 			mode: m,
 			selectedSources: srcs,
 			fileSource: params.get('fsource') ?? '',
-			filePath: params.get('path') ?? '',
-			fileArchivePath: params.get('apath') ?? null,
+			currentFile: restoredFile,
 			fileSelection: parseHash(window.location.hash),
 			panelMode: (params.get('panel') ?? 'file') as PanelMode,
 			currentDirPrefix: params.get('dir') ?? ''
@@ -269,8 +272,7 @@
 	function openFile(e: CustomEvent<SearchResult>) {
 		const r = e.detail;
 		fileSource = r.source;
-		filePath = r.path;
-		fileArchivePath = r.archive_path ?? null;
+		currentFile = FilePath.fromParts(r.path, r.archive_path ?? null);
 		fileSelection = r.line_number ? [r.line_number] : [];
 		panelMode = 'file';
 		view = 'file';
@@ -280,14 +282,13 @@
 
 	function openFileFromTree(e: CustomEvent<{ source: string; path: string; kind: string; archivePath?: string; showAsDirectory?: boolean }>) {
 		fileSource = e.detail.source;
-		filePath = e.detail.path;  // Always set for tree highlighting
-		fileArchivePath = e.detail.archivePath ?? null;
+		currentFile = FilePath.fromParts(e.detail.path, e.detail.archivePath ?? null);
 		fileSelection = [];
 
 		// Archives should show as directory listings, not file views
 		if (e.detail.showAsDirectory || (e.detail.kind === 'archive' && !e.detail.archivePath)) {
 			panelMode = 'dir';
-			currentDirPrefix = e.detail.path + '::';
+			currentDirPrefix = currentFile.full + '::';
 		} else {
 			panelMode = 'file';
 		}
@@ -297,8 +298,7 @@
 	}
 
 	function handleDirOpenFile(e: CustomEvent<{ source: string; path: string; kind: string; archivePath?: string }>) {
-		filePath = e.detail.path;
-		fileArchivePath = e.detail.archivePath ?? null;
+		currentFile = FilePath.fromParts(e.detail.path, e.detail.archivePath ?? null);
 		fileSelection = [];
 		panelMode = 'file';
 		pushState();
@@ -326,15 +326,14 @@
 		fileSelection = [];
 		view = 'file';
 		showTree = true;
-		// Outer archive files have no viewable content — browse their members instead.
-		if (e.detail.kind === 'archive' && e.detail.archivePath === null) {
-			filePath = e.detail.path;  // Set for tree highlighting
-			fileArchivePath = null;
+
+		currentFile = FilePath.fromParts(e.detail.path, e.detail.archivePath);
+
+		// Archive files (top-level or nested) show directory listing instead of file content
+		if (e.detail.kind === 'archive') {
 			panelMode = 'dir';
-			currentDirPrefix = e.detail.path + '::';
+			currentDirPrefix = currentFile.full + '::';
 		} else {
-			filePath = e.detail.path;
-			fileArchivePath = e.detail.archivePath;
 			panelMode = 'file';
 		}
 		pushState();
@@ -362,7 +361,8 @@
 			? [fileSource]
 			: sourceNames;
 
-	$: pathBarPath = panelMode === 'dir' ? currentDirPrefix : filePath;
+	// Path for the PathBar component
+	$: pathBarPath = panelMode === 'dir' ? currentDirPrefix : (currentFile?.full ?? '');
 </script>
 
 <div class="page">
@@ -391,7 +391,7 @@
 				<div class="sidebar" style="width: {sidebarWidth}px">
 					<DirectoryTree
 						source={fileSource}
-						activePath={filePath}
+						activePath={currentFile?.full ?? null}
 						on:open={openFileFromTree}
 					/>
 				</div>
@@ -407,7 +407,7 @@
 				<PathBar
 					source={fileSource}
 					path={pathBarPath}
-					archivePath={panelMode === 'file' ? fileArchivePath : null}
+					archivePath={panelMode === 'file' ? currentFile?.inner ?? null : null}
 					baseUrl={effectiveBaseUrl(fileSource)}
 					on:back={backToResults}
 				/>
@@ -418,12 +418,12 @@
 						on:openFile={handleDirOpenFile}
 						on:openDir={handleDirOpenDir}
 					/>
-				{:else}
-					{#key `${fileSource}:${filePath}:${fileArchivePath}`}
+				{:else if currentFile}
+					{#key `${fileSource}:${currentFile.full}`}
 						<FileViewer
 							source={fileSource}
-							path={filePath}
-							archivePath={fileArchivePath}
+							path={currentFile.outer}
+							archivePath={currentFile.inner}
 							selection={fileSelection}
 							on:lineselect={handleLineSelect}
 						/>

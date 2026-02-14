@@ -44,11 +44,25 @@
 		}
 	}
 
-	// Simple character-subsequence fuzzy scorer.
+	// Simple character-subsequence fuzzy scorer with exact match boosting.
 	function fuzzyScore(q: string, path: string): number {
 		if (!q) return 0;
 		const ql = q.toLowerCase();
 		const pl = path.toLowerCase();
+
+		// Huge bonus for exact substring match (case-insensitive)
+		if (pl.includes(ql)) {
+			let bonus = 100;
+			// Extra bonus if match is in the filename portion (after last / or ::)
+			const lastSlash = Math.max(pl.lastIndexOf('/'), pl.lastIndexOf('::'));
+			const filename = lastSlash >= 0 ? pl.slice(lastSlash + 1) : pl;
+			if (filename.includes(ql)) bonus += 50;
+			// Extra bonus if match is at the start of filename
+			if (filename.startsWith(ql)) bonus += 50;
+			return bonus;
+		}
+
+		// Fallback to character subsequence matching
 		let qi = 0;
 		let score = 0;
 		let lastMatch = -1;
