@@ -20,6 +20,8 @@ pub struct IndexLine {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IndexFile {
     /// Relative path within the source base_path.
+    /// For inner archive members this is a composite path: "archive.zip::member.txt".
+    /// Nesting is supported: "outer.zip::inner.tar.gz::file.txt".
     pub path: String,
     pub mtime: i64,
     pub size: i64,
@@ -92,11 +94,12 @@ pub struct FileResponse {
     pub total_lines: usize,
 }
 
-/// GET /api/v1/files response entry (for deletion detection).
+/// GET /api/v1/files response entry (for deletion detection / Ctrl+P).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileRecord {
     pub path: String,
     pub mtime: i64,
+    pub kind: String,
 }
 
 /// One entry in a directory listing.
@@ -104,9 +107,9 @@ pub struct FileRecord {
 pub struct DirEntry {
     /// Last path component (file or directory name).
     pub name: String,
-    /// Full relative path within the source.
+    /// Full relative path within the source, including `::` for archive members.
     pub path: String,
-    /// `"dir"` or `"file"`.
+    /// `"dir"` or `"file"`. Archive files have `kind = "archive"` and can be expanded.
     pub entry_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,

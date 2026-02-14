@@ -56,10 +56,28 @@ impl Default for ScanConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveConfig {
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Maximum nesting depth for archives-within-archives.
+    /// Prevents infinite recursion from malicious zip bombs.
+    /// Default: 10. Set to 1 to only extract direct members (no nested archives).
+    #[serde(default = "default_max_archive_depth")]
+    pub max_depth: usize,
+}
+
+impl Default for ArchiveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_depth: default_max_archive_depth(),
+        }
+    }
+}
+
+fn default_max_archive_depth() -> usize {
+    10
 }
 
 fn default_excludes() -> Vec<String> {

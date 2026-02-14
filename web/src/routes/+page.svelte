@@ -278,19 +278,27 @@
 		pushState();
 	}
 
-	function openFileFromTree(e: CustomEvent<{ source: string; path: string; kind: string }>) {
+	function openFileFromTree(e: CustomEvent<{ source: string; path: string; kind: string; archivePath?: string; showAsDirectory?: boolean }>) {
 		fileSource = e.detail.source;
-		filePath = e.detail.path;
-		fileArchivePath = null;
+		filePath = e.detail.path;  // Always set for tree highlighting
+		fileArchivePath = e.detail.archivePath ?? null;
 		fileSelection = [];
-		panelMode = 'file';
+
+		// Archives should show as directory listings, not file views
+		if (e.detail.showAsDirectory || (e.detail.kind === 'archive' && !e.detail.archivePath)) {
+			panelMode = 'dir';
+			currentDirPrefix = e.detail.path + '::';
+		} else {
+			panelMode = 'file';
+		}
+
 		view = 'file';
 		pushState();
 	}
 
-	function handleDirOpenFile(e: CustomEvent<{ source: string; path: string; kind: string }>) {
+	function handleDirOpenFile(e: CustomEvent<{ source: string; path: string; kind: string; archivePath?: string }>) {
 		filePath = e.detail.path;
-		fileArchivePath = null;
+		fileArchivePath = e.detail.archivePath ?? null;
 		fileSelection = [];
 		panelMode = 'file';
 		pushState();
@@ -313,14 +321,22 @@
 
 	// ── Command palette (Ctrl+P) ────────────────────────────────────────────────
 
-	function handlePaletteSelect(e: CustomEvent<{ source: string; path: string }>) {
+	function handlePaletteSelect(e: CustomEvent<{ source: string; path: string; archivePath: string | null; kind: string }>) {
 		fileSource = e.detail.source;
-		filePath = e.detail.path;
-		fileArchivePath = null;
 		fileSelection = [];
-		panelMode = 'file';
 		view = 'file';
 		showTree = true;
+		// Outer archive files have no viewable content — browse their members instead.
+		if (e.detail.kind === 'archive' && e.detail.archivePath === null) {
+			filePath = e.detail.path;  // Set for tree highlighting
+			fileArchivePath = null;
+			panelMode = 'dir';
+			currentDirPrefix = e.detail.path + '::';
+		} else {
+			filePath = e.detail.path;
+			fileArchivePath = e.detail.archivePath;
+			panelMode = 'file';
+		}
 		pushState();
 	}
 

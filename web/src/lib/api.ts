@@ -104,6 +104,7 @@ export async function listFiles(source: string): Promise<FileRecord[]> {
 export interface FileRecord {
 	path: string;
 	mtime: number;
+	kind: string;
 }
 
 export async function listDir(source: string, prefix = ''): Promise<TreeResponse> {
@@ -114,6 +115,11 @@ export async function listDir(source: string, prefix = ''): Promise<TreeResponse
 	const resp = await fetch(url.toString());
 	if (!resp.ok) throw new Error(`listDir: ${resp.status} ${resp.statusText}`);
 	return resp.json();
+}
+
+/** List the inner members of an archive file by using the "::" prefix convention. */
+export async function listArchiveMembers(source: string, archivePath: string): Promise<TreeResponse> {
+	return listDir(source, archivePath + '::');
 }
 
 export interface ContextBatchItem {

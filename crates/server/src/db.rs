@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, params};
 
 use find_common::api::{ContextLine, DirEntry, FileRecord, IndexFile};
 
@@ -15,37 +15,6 @@ use crate::archive::{ArchiveManager, ChunkRef};
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("opening {}", db_path.display()))?;
-
-
-    // Detect v1 schema (lines table has a `content` column instead of chunk refs).
-    // If found, drop all old objects so schema_v2 initialises cleanly.
-    let is_v1: bool = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('lines') WHERE name = 'content'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        > 0;
-
-    if is_v1 {
-        tracing::warn!(
-            "Detected v1 schema in {}; dropping old data for v2 migration \
-             (re-run find-scan to rebuild the index)",
-            db_path.display()
-        );
-        conn.execute_batch(
-            "DROP TRIGGER IF EXISTS lines_au;
-             DROP TRIGGER IF EXISTS lines_ad;
-             DROP TRIGGER IF EXISTS lines_ai;
-             DROP TABLE  IF EXISTS lines_fts;
-             DROP TABLE  IF EXISTS lines;
-             DROP TABLE  IF EXISTS files;
-             DROP TABLE  IF EXISTS meta;",
-        )
-        .context("dropping v1 schema")?;
-    }
-
     conn.execute_batch(include_str!("schema_v2.sql"))
         .context("initialising schema")?;
     Ok(conn)
@@ -54,12 +23,13 @@ pub fn open(db_path: &Path) -> Result<Connection> {
 // ── File listing (for deletion detection) ────────────────────────────────────
 
 pub fn list_files(conn: &Connection) -> Result<Vec<FileRecord>> {
-    let mut stmt = conn.prepare("SELECT path, mtime FROM files ORDER BY path")?;
+    let mut stmt = conn.prepare("SELECT path, mtime, kind FROM files ORDER BY path")?;
     let rows = stmt
         .query_map([], |row| {
             Ok(FileRecord {
                 path: row.get(0)?,
                 mtime: row.get(1)?,
+                kind: row.get(2)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -72,7 +42,6 @@ pub fn upsert_files(conn: &Connection, files: &[IndexFile]) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
 
     for file in files {
-        // Upsert the file row, getting back its id.
         tx.execute(
             "INSERT INTO files (path, mtime, size, kind)
              VALUES (?1, ?2, ?3, ?4)
@@ -89,18 +58,16 @@ pub fn upsert_files(conn: &Connection, files: &[IndexFile]) -> Result<()> {
             |row| row.get(0),
         )?;
 
-        // Replace all lines for this file.
         tx.execute("DELETE FROM lines WHERE file_id = ?1", params![file_id])?;
 
         {
             let mut stmt = tx.prepare_cached(
-                "INSERT INTO lines (file_id, archive_path, line_number, content)
-                 VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO lines (file_id, line_number, content)
+                 VALUES (?1, ?2, ?3)",
             )?;
             for line in &file.lines {
                 stmt.execute(params![
                     file_id,
-                    line.archive_path,
                     line.line_number as i64,
                     line.content,
                 ])?;
@@ -121,12 +88,16 @@ pub fn delete_files(
 ) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
 
-    // Collect chunk refs before the rows are gone.
+    // Collect chunk refs before the rows are gone, including all inner archive members.
     let refs = collect_chunk_refs(&tx, paths)?;
 
-    // Delete rows (CASCADE removes associated lines).
+    // Delete rows for the outer path AND all inner archive members (path LIKE 'x::%').
+    // ON DELETE CASCADE removes associated lines automatically.
     for path in paths {
-        tx.execute("DELETE FROM files WHERE path = ?1", params![path])?;
+        tx.execute(
+            "DELETE FROM files WHERE path = ?1 OR path LIKE ?2",
+            params![path, format!("{}::%", path)],
+        )?;
     }
 
     // Rewrite affected ZIPs. If this fails the transaction is dropped,
@@ -138,22 +109,22 @@ pub fn delete_files(
     Ok(())
 }
 
-/// Collect the chunk refs for every line belonging to the given file paths.
+/// Collect chunk refs for all lines belonging to the given outer paths and their members.
 fn collect_chunk_refs(
     tx: &rusqlite::Transaction,
     paths: &[String],
 ) -> Result<Vec<crate::archive::ChunkRef>> {
     let mut refs = Vec::new();
     for path in paths {
-        let file_id: Option<i64> = tx
-            .query_row(
-                "SELECT id FROM files WHERE path = ?1",
-                params![path],
-                |row| row.get(0),
-            )
-            .optional()?;
+        // Collect file_ids for the outer file and all inner members (path::*).
+        let mut id_stmt = tx.prepare(
+            "SELECT id FROM files WHERE path = ?1 OR path LIKE ?2",
+        )?;
+        let file_ids: Vec<i64> = id_stmt
+            .query_map(params![path, format!("{}::%", path)], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
 
-        if let Some(fid) = file_id {
+        for fid in file_ids {
             let mut stmt = tx.prepare(
                 "SELECT DISTINCT chunk_archive, chunk_name FROM lines WHERE file_id = ?1",
             )?;
@@ -205,7 +176,6 @@ pub fn update_base_url(conn: &Connection, base_url: Option<&str>) -> Result<()> 
             params![url],
         )?;
     } else {
-        // Remove base_url if None
         conn.execute("DELETE FROM meta WHERE key = 'base_url'", [])?;
     }
     Ok(())
@@ -227,26 +197,17 @@ pub fn get_base_url(conn: &Connection) -> Result<Option<String>> {
 // ── Search ────────────────────────────────────────────────────────────────────
 
 pub struct CandidateRow {
+    /// Full path, potentially composite ("archive.zip::member.txt").
     pub file_path: String,
     pub file_kind: String,
+    /// For archive members: the part after the first "::".
+    /// For outer files: None.
     pub archive_path: Option<String>,
     pub line_number: usize,
     pub content: String,
 }
 
 /// FTS5 trigram pre-filter.  Returns up to `limit` candidate rows.
-/// For fuzzy mode the caller re-scores with nucleo.  For exact/regex the FTS5
-/// result is already a substring match; the caller can apply regex post-filtering.
-///
-/// `phrase=true`  → wraps the whole query in double-quotes (literal substring /
-///                  phrase match).  Used by exact and regex modes.
-/// `phrase=false` → splits on whitespace and ANDs each word (≥3 chars) as a
-///                  separate trigram term.  Used by fuzzy mode so that e.g.
-///                  "pass strength" finds "password strength".
-///
-/// FTS5 trigram needs at least 3 characters per term; short tokens are dropped
-/// from the FTS5 query (nucleo re-scores the candidates afterwards).  If no
-/// usable tokens remain we fall back to a LIKE scan.
 pub fn fts_candidates(
     conn: &Connection,
     archive_mgr: &ArchiveManager,
@@ -254,8 +215,6 @@ pub fn fts_candidates(
     limit: usize,
     phrase: bool,
 ) -> Result<Vec<CandidateRow>> {
-    // Short queries can't use FTS5 trigrams; content is in ZIPs so LIKE fallback
-    // is too expensive. Return empty results for very short queries.
     let fts_query = if phrase {
         if query.len() < 3 {
             return Ok(vec![]);
@@ -276,7 +235,6 @@ pub fn fts_candidates(
     struct RawRow {
         file_path: String,
         file_kind: String,
-        archive_path: Option<String>,
         line_number: usize,
         chunk_archive: String,
         chunk_name: String,
@@ -284,7 +242,7 @@ pub fn fts_candidates(
     }
 
     let mut stmt = conn.prepare(
-        "SELECT f.path, f.kind, l.archive_path, l.line_number,
+        "SELECT f.path, f.kind, l.line_number,
                 l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines_fts
          JOIN lines l ON l.id = lines_fts.rowid
@@ -298,11 +256,10 @@ pub fn fts_candidates(
             Ok(RawRow {
                 file_path:    row.get(0)?,
                 file_kind:    row.get(1)?,
-                archive_path: row.get(2)?,
-                line_number:  row.get::<_, i64>(3)? as usize,
-                chunk_archive: row.get(4)?,
-                chunk_name:   row.get(5)?,
-                line_offset:  row.get::<_, i64>(6)? as usize,
+                line_number:  row.get::<_, i64>(2)? as usize,
+                chunk_archive: row.get(3)?,
+                chunk_name:   row.get(4)?,
+                line_offset:  row.get::<_, i64>(5)? as usize,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -319,10 +276,14 @@ pub fn fts_candidates(
             chunk_cache.insert(key.clone(), text.lines().map(|l| l.to_string()).collect());
         }
         let content = chunk_cache[&key].get(row.line_offset).cloned().unwrap_or_default();
+
+        // Split composite path into outer path + archive_path for search result compat.
+        let (file_path, archive_path) = split_composite_path(&row.file_path);
+
         results.push(CandidateRow {
-            file_path:    row.file_path,
+            file_path,
             file_kind:    row.file_kind,
-            archive_path: row.archive_path,
+            archive_path,
             line_number:  row.line_number,
             content,
         });
@@ -331,28 +292,35 @@ pub fn fts_candidates(
     Ok(results)
 }
 
+/// Split a potentially composite path ("zip::member") into (outer_path, archive_path).
+/// Returns (path, None) for non-composite paths.
+pub fn split_composite_path(path: &str) -> (String, Option<String>) {
+    if let Some(pos) = path.find("::") {
+        (path[..pos].to_string(), Some(path[pos + 2..].to_string()))
+    } else {
+        (path.to_string(), None)
+    }
+}
+
 // ── File lines ────────────────────────────────────────────────────────────────
 
 /// Returns every indexed line for a file, ordered by line number.
-/// Used by the GET /api/v1/file endpoint.
+/// `path` may be a composite path ("archive.zip::member.txt") or a plain path.
 pub fn get_file_lines(
     conn: &Connection,
     archive_mgr: &ArchiveManager,
     path: &str,
-    archive_path: Option<&str>,
 ) -> Result<Vec<ContextLine>> {
     let mut stmt = conn.prepare(
         "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
-           AND ((?2 IS NULL AND l.archive_path IS NULL)
-                OR l.archive_path = ?2)
          ORDER BY l.line_number",
     )?;
 
     let rows: Vec<(usize, String, String, usize)> = stmt
-        .query_map(params![path, archive_path], |row| {
+        .query_map(params![path], |row| {
             Ok((
                 row.get::<_, i64>(0)? as usize,
                 row.get(1)?,
@@ -371,7 +339,6 @@ pub fn get_context(
     conn: &Connection,
     archive_mgr: &ArchiveManager,
     file_path: &str,
-    archive_path: Option<&str>,
     center: usize,
     window: usize,
 ) -> Result<Vec<ContextLine>> {
@@ -379,14 +346,14 @@ pub fn get_context(
 
     match kind.as_str() {
         "image" | "audio" => get_metadata_context(conn, archive_mgr, file_path),
-        "pdf" => get_pdf_context(conn, archive_mgr, file_path, archive_path, center, window),
-        _ => get_line_context(conn, archive_mgr, file_path, archive_path, center, window),
+        "pdf" => get_pdf_context(conn, archive_mgr, file_path, center, window),
+        _ => get_line_context(conn, archive_mgr, file_path, center, window),
     }
 }
 
 fn get_file_kind(conn: &Connection, file_path: &str) -> Result<String> {
     conn.query_row(
-        "SELECT kind FROM files WHERE path = ?1",
+        "SELECT kind FROM files WHERE path = ?1 LIMIT 1",
         params![file_path],
         |row| row.get(0),
     )
@@ -398,7 +365,6 @@ fn get_metadata_context(
     archive_mgr: &ArchiveManager,
     file_path: &str,
 ) -> Result<Vec<ContextLine>> {
-    // For images and audio, return ALL metadata tags (stored at line_number=0).
     let mut stmt = conn.prepare(
         "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines l
@@ -426,16 +392,14 @@ fn get_pdf_context(
     conn: &Connection,
     archive_mgr: &ArchiveManager,
     file_path: &str,
-    archive_path: Option<&str>,
     center: usize,
     window: usize,
 ) -> Result<Vec<ContextLine>> {
-    // For PDFs, use character-based context (avg 80 chars/line)
     let window_chars = window * 80;
 
-    let mut before = get_lines_before_with_limit(conn, archive_mgr, file_path, archive_path, center, window_chars)?;
-    let matched = get_line_exact(conn, archive_mgr, file_path, archive_path, center)?;
-    let after = get_lines_after_with_limit(conn, archive_mgr, file_path, archive_path, center, window_chars)?;
+    let mut before = get_lines_before_with_limit(conn, archive_mgr, file_path, center, window_chars)?;
+    let matched = get_line_exact(conn, archive_mgr, file_path, center)?;
+    let after = get_lines_after_with_limit(conn, archive_mgr, file_path, center, window_chars)?;
 
     before.extend(matched);
     before.extend(after);
@@ -446,7 +410,6 @@ fn get_line_exact(
     conn: &Connection,
     archive_mgr: &ArchiveManager,
     file_path: &str,
-    archive_path: Option<&str>,
     line_number: usize,
 ) -> Result<Vec<ContextLine>> {
     let mut stmt = conn.prepare(
@@ -454,13 +417,11 @@ fn get_line_exact(
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
-           AND ((?2 IS NULL AND l.archive_path IS NULL)
-                OR l.archive_path = ?2)
-           AND l.line_number = ?3",
+           AND l.line_number = ?2",
     )?;
 
     let rows: Vec<(usize, String, String, usize)> = stmt
-        .query_map(params![file_path, archive_path, line_number as i64], |row| {
+        .query_map(params![file_path, line_number as i64], |row| {
             Ok((
                 row.get::<_, i64>(0)? as usize,
                 row.get(1)?,
@@ -477,26 +438,20 @@ fn get_lines_before_with_limit(
     conn: &Connection,
     archive_mgr: &ArchiveManager,
     file_path: &str,
-    archive_path: Option<&str>,
     center: usize,
     max_chars: usize,
 ) -> Result<Vec<ContextLine>> {
-    // Fetch lines before `center` in reverse order (newest first) so we can
-    // apply the char limit before reading from ZIP.
     let mut stmt = conn.prepare(
         "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
-           AND ((?2 IS NULL AND l.archive_path IS NULL)
-                OR l.archive_path = ?2)
-           AND l.line_number < ?3
+           AND l.line_number < ?2
          ORDER BY l.line_number DESC",
     )?;
 
-    // We need the content to count chars, so resolve all and then trim.
     let all_raw: Vec<(usize, String, String, usize)> = stmt
-        .query_map(params![file_path, archive_path, center as i64], |row| {
+        .query_map(params![file_path, center as i64], |row| {
             Ok((
                 row.get::<_, i64>(0)? as usize,
                 row.get(1)?,
@@ -506,7 +461,6 @@ fn get_lines_before_with_limit(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    // Resolve content, then trim by char budget.
     let resolved = resolve_content(archive_mgr, all_raw);
     let mut lines = Vec::new();
     let mut char_count = 0;
@@ -517,7 +471,7 @@ fn get_lines_before_with_limit(
         }
         lines.push(line);
     }
-    lines.reverse(); // restore natural order
+    lines.reverse();
     Ok(lines)
 }
 
@@ -525,7 +479,6 @@ fn get_lines_after_with_limit(
     conn: &Connection,
     archive_mgr: &ArchiveManager,
     file_path: &str,
-    archive_path: Option<&str>,
     center: usize,
     max_chars: usize,
 ) -> Result<Vec<ContextLine>> {
@@ -534,14 +487,12 @@ fn get_lines_after_with_limit(
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
-           AND ((?2 IS NULL AND l.archive_path IS NULL)
-                OR l.archive_path = ?2)
-           AND l.line_number > ?3
+           AND l.line_number > ?2
          ORDER BY l.line_number",
     )?;
 
     let all_raw: Vec<(usize, String, String, usize)> = stmt
-        .query_map(params![file_path, archive_path, center as i64], |row| {
+        .query_map(params![file_path, center as i64], |row| {
             Ok((
                 row.get::<_, i64>(0)? as usize,
                 row.get(1)?,
@@ -568,7 +519,6 @@ fn get_line_context(
     conn: &Connection,
     archive_mgr: &ArchiveManager,
     file_path: &str,
-    archive_path: Option<&str>,
     center: usize,
     window: usize,
 ) -> Result<Vec<ContextLine>> {
@@ -580,14 +530,12 @@ fn get_line_context(
          FROM lines l
          JOIN files f ON f.id = l.file_id
          WHERE f.path = ?1
-           AND ((?2 IS NULL AND l.archive_path IS NULL)
-                OR l.archive_path = ?2)
-           AND l.line_number BETWEEN ?3 AND ?4
+           AND l.line_number BETWEEN ?2 AND ?3
          ORDER BY l.line_number",
     )?;
 
     let rows: Vec<(usize, String, String, usize)> = stmt
-        .query_map(params![file_path, archive_path, lo, hi], |row| {
+        .query_map(params![file_path, lo, hi], |row| {
             Ok((
                 row.get::<_, i64>(0)? as usize,
                 row.get(1)?,
@@ -601,7 +549,6 @@ fn get_line_context(
 }
 
 /// Read line content from ZIP archives, caching chunks to avoid redundant reads.
-/// Input: `(line_number, chunk_archive, chunk_name, line_offset_in_chunk)` tuples.
 fn resolve_content(
     archive_mgr: &ArchiveManager,
     rows: Vec<(usize, String, String, usize)>,
@@ -627,10 +574,12 @@ fn resolve_content(
 
 /// List the immediate children (dirs + files) of `prefix` within the source.
 ///
-/// `prefix` should end with `/` for non-root queries (e.g. `"src/"`).
+/// `prefix` should end with `/` for non-root directory queries (e.g. `"src/"`).
+/// For archive member listings, `prefix` ends with `"::"` (e.g. `"archive.zip::"`).
 /// An empty string means the root of the source.
 pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
-    // Compute the upper bound for the range scan.
+    let is_archive_listing = prefix.contains("::");
+
     let (low, high) = if prefix.is_empty() {
         (String::new(), "\u{FFFF}".to_string())
     } else {
@@ -652,36 +601,83 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
         })?
         .collect::<rusqlite::Result<_>>()?;
 
-    // Group into dirs and files at this level.
     let mut seen_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut dirs: Vec<DirEntry> = Vec::new();
     let mut files: Vec<DirEntry> = Vec::new();
 
+    // First pass: collect all actual files to avoid creating duplicate virtual dirs
+    if is_archive_listing {
+        for (path, _, _, _) in &rows {
+            let rest = path.strip_prefix(prefix).unwrap_or(path);
+            if !rest.contains("::") && !rest.contains('/') {
+                seen_files.insert(rest.to_string());
+            }
+        }
+    }
+
+    // Second pass: build the directory listing
     for (path, kind, size, mtime) in rows {
         let rest = path.strip_prefix(prefix).unwrap_or(&path);
-        if let Some(slash_pos) = rest.find('/') {
-            // This path has more components: the first component is a directory.
-            let dir_name = &rest[..slash_pos];
-            if seen_dirs.insert(dir_name.to_string()) {
-                dirs.push(DirEntry {
-                    name: dir_name.to_string(),
-                    path: format!("{}{}/", prefix, dir_name),
-                    entry_type: "dir".to_string(),
-                    kind: None,
-                    size: None,
-                    mtime: None,
+
+        if is_archive_listing {
+            // Inside an archive: "::"-separated segments act like directories.
+            // Treat first "::"-delimited or "/"-delimited component as the child.
+            let sep_pos = rest.find("::").or_else(|| rest.find('/'));
+            if let Some(pos) = sep_pos {
+                let child_name = &rest[..pos];
+                // Only create virtual dir if we haven't seen a real file with this path
+                if !seen_files.contains(child_name) && seen_dirs.insert(child_name.to_string()) {
+                    dirs.push(DirEntry {
+                        name: child_name.to_string(),
+                        path: format!("{}{}", prefix, child_name),
+                        entry_type: "dir".to_string(),
+                        kind: None,
+                        size: None,
+                        mtime: None,
+                    });
+                }
+            } else {
+                // Leaf member within the archive.
+                files.push(DirEntry {
+                    name: rest.to_string(),
+                    path,
+                    entry_type: "file".to_string(),
+                    kind: Some(kind),
+                    size: Some(size),
+                    mtime: Some(mtime),
                 });
             }
         } else {
-            // No more slashes: this is a file directly in the prefix directory.
-            files.push(DirEntry {
-                name: rest.to_string(),
-                path,
-                entry_type: "file".to_string(),
-                kind: Some(kind),
-                size: Some(size),
-                mtime: Some(mtime),
-            });
+            // Regular directory listing.
+            // Skip inner archive members (composite paths) — they appear only when
+            // the user explicitly expands the archive.
+            if rest.contains("::") {
+                continue;
+            }
+
+            if let Some(slash_pos) = rest.find('/') {
+                let dir_name = &rest[..slash_pos];
+                if seen_dirs.insert(dir_name.to_string()) {
+                    dirs.push(DirEntry {
+                        name: dir_name.to_string(),
+                        path: format!("{}{}/", prefix, dir_name),
+                        entry_type: "dir".to_string(),
+                        kind: None,
+                        size: None,
+                        mtime: None,
+                    });
+                }
+            } else {
+                files.push(DirEntry {
+                    name: rest.to_string(),
+                    path,
+                    entry_type: "file".to_string(),
+                    kind: Some(kind),
+                    size: Some(size),
+                    mtime: Some(mtime),
+                });
+            }
         }
     }
 
@@ -690,9 +686,7 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
     Ok(entries)
 }
 
-/// Produce the upper-bound key for a prefix range scan by incrementing the
-/// last byte.  Works for ASCII paths (the path separator `/` is 0x2F, safely
-/// below 0xFF).
+/// Produce the upper-bound key for a prefix range scan by incrementing the last byte.
 fn prefix_bump(prefix: &str) -> String {
     let mut bytes = prefix.as_bytes().to_vec();
     if let Some(last) = bytes.last_mut() {

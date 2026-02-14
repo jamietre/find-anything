@@ -30,11 +30,14 @@ pub async fn run_scan(
     let excludes = build_globset(&scan.exclude)?;
 
     // Fetch what the server already knows about this source.
+    // Only consider outer files (no "::" in path) for deletion/mtime comparison;
+    // inner archive members are managed server-side.
     info!("fetching existing file list from server...");
     let server_files: HashMap<String, i64> = api
         .list_files(source_name)
         .await?
         .into_iter()
+        .filter(|f| !f.path.contains("::"))
         .map(|f| (f.path, f.mtime))
         .collect();
 
@@ -77,13 +80,15 @@ pub async fn run_scan(
     let mut batch: Vec<IndexFile> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_bytes: usize = 0;
 
+    let max_archive_depth = scan.archives.max_depth;
+
     for abs_path in &to_index {
         let rel_path = relative_path(abs_path, paths);
         let mtime = mtime_of(abs_path).unwrap_or(0);
         let size = size_of(abs_path).unwrap_or(0);
         let kind = extract::detect_kind(abs_path).to_string();
 
-        let mut lines = match extract::extract(abs_path, scan.max_file_size_kb) {
+        let lines = match extract::extract(abs_path, scan.max_file_size_kb, max_archive_depth) {
             Ok(l) => l,
             Err(e) => {
                 warn!("extract {}: {e}", abs_path.display());
@@ -91,27 +96,19 @@ pub async fn run_scan(
             }
         };
 
-        // Always index the relative path (line_number 0) so every file is
-        // findable by name/path even if it has no other extractable content.
-        lines.push(IndexLine {
-            archive_path: None,
-            line_number: 0,
-            content: rel_path.clone(),
-        });
+        // Group lines by archive_path. For non-archive files all archive_paths are None.
+        // For archive files, each distinct archive_path becomes a separate IndexFile.
+        let index_files = build_index_files(rel_path, mtime, size, kind, lines);
 
-        let file_bytes: usize = lines.iter().map(|l| l.content.len()).sum();
-        batch_bytes += file_bytes;
-        batch.push(IndexFile {
-            path: rel_path,
-            mtime,
-            size,
-            kind,
-            lines,
-        });
+        for file in index_files {
+            let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
+            batch_bytes += file_bytes;
+            batch.push(file);
 
-        if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
-            submit_batch(api, source_name, base_url, &mut batch, vec![], None).await?;
-            batch_bytes = 0;
+            if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
+                submit_batch(api, source_name, base_url, &mut batch, vec![], None).await?;
+                batch_bytes = 0;
+            }
         }
     }
 
@@ -128,6 +125,88 @@ pub async fn run_scan(
 
     info!("scan complete");
     Ok(())
+}
+
+/// Convert extracted lines for one filesystem file into one or more IndexFiles.
+///
+/// For non-archive files: one IndexFile with path = rel_path.
+/// For archive files: one IndexFile per distinct archive member (archive_path on the lines),
+/// each with a composite path "rel_path::member_path". The outer archive file itself also
+/// gets its own IndexFile so it's searchable by name.
+fn build_index_files(
+    rel_path: String,
+    mtime: i64,
+    size: i64,
+    kind: String,
+    lines: Vec<IndexLine>,
+) -> Vec<IndexFile> {
+    let has_archive_members = lines.iter().any(|l| l.archive_path.is_some());
+
+    if !has_archive_members {
+        // Non-archive (or archive with no extractable text members): single IndexFile.
+        let mut all_lines = lines;
+        // Always index the relative path so the file is findable by name.
+        all_lines.push(IndexLine {
+            archive_path: None,
+            line_number: 0,
+            content: rel_path.clone(),
+        });
+        return vec![IndexFile { path: rel_path, mtime, size, kind, lines: all_lines }];
+    }
+
+    // Group by archive_path.
+    let mut member_groups: HashMap<String, Vec<IndexLine>> = HashMap::new();
+    let mut outer_extra: Vec<IndexLine> = Vec::new();
+
+    for line in lines {
+        match line.archive_path.clone() {
+            None => outer_extra.push(line),
+            Some(member) => member_groups.entry(member).or_default().push(line),
+        }
+    }
+
+    let mut result = Vec::new();
+
+    // Outer file: searchable by path name.
+    let mut outer_lines = outer_extra;
+    outer_lines.push(IndexLine {
+        archive_path: None,
+        line_number: 0,
+        content: rel_path.clone(),
+    });
+    result.push(IndexFile {
+        path: rel_path.clone(),
+        mtime,
+        size,
+        kind: kind.clone(),
+        lines: outer_lines,
+    });
+
+    // One IndexFile per archive member, with composite path "zip::member".
+    for (member, mut content_lines) in member_groups {
+        let composite_path = format!("{}::{}", rel_path, member);
+        // Strip archive_path from individual lines (redundant now that path is composite).
+        for l in &mut content_lines {
+            l.archive_path = None;
+        }
+        // Add a line_number=0 entry so the member is findable by name.
+        content_lines.push(IndexLine {
+            archive_path: None,
+            line_number: 0,
+            content: composite_path.clone(),
+        });
+        // Detect the member's actual kind from its filename, not the outer archive's kind.
+        let member_kind = extract::detect_kind(std::path::Path::new(&member)).to_string();
+        result.push(IndexFile {
+            path: composite_path,
+            mtime,
+            size,
+            kind: member_kind,
+            lines: content_lines,
+        });
+    }
+
+    result
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

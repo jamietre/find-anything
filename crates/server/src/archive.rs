@@ -171,8 +171,24 @@ impl ArchiveManager {
         Ok(new_path)
     }
 
-    /// Append a single entry to a ZIP file
+    /// Append a single entry to a ZIP file.
+    ///
+    /// If `entry_name` already exists in the archive (e.g. left over from a
+    /// previous partially-failed run), the existing entry is removed first so
+    /// that the write is idempotent and never produces a "Duplicate filename"
+    /// error.
     fn append_to_zip(&self, archive_path: &Path, entry_name: &str, content: &[u8]) -> Result<()> {
+        // Remove a pre-existing entry with the same name before appending.
+        {
+            let file = File::open(archive_path)?;
+            let zip = ZipArchive::new(file)?;
+            if zip.index_for_name(entry_name).is_some() {
+                let to_remove: HashSet<String> = std::iter::once(entry_name.to_string()).collect();
+                self.rewrite_archive(archive_path, &to_remove)?;
+                tracing::warn!("removed stale chunk {entry_name} before re-appending");
+            }
+        }
+
         let file = OpenOptions::new()
             .read(true)
             .write(true)

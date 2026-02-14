@@ -52,3 +52,20 @@ run = "pnpm --dir web dev"
 [tasks.check]
 description = "Type-check all Rust crates and the web UI"
 run = ["cargo check --workspace", "pnpm --dir web check"]
+
+# ── Database management ───────────────────────────────────────────────────────
+
+[tasks.clean-db]
+description = "Delete all databases and content archives (requires re-scan)"
+run = """
+set -e
+DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/find-anything"
+if [ -d "$DATA_DIR" ]; then
+  echo "Deleting: $DATA_DIR"
+  rm -rf "$DATA_DIR"
+  echo "✓ Database and content archives deleted"
+  echo "Run 'mise scan' or 'mise scan-full' to rebuild the index"
+else
+  echo "No data directory found at: $DATA_DIR"
+fi
+"""

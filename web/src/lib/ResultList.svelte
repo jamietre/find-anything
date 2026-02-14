@@ -9,7 +9,7 @@
 </script>
 
 <div class="result-list">
-	{#each results as result (result.source + result.path + result.line_number)}
+	{#each results as result (result.source + result.path + (result.archive_path ?? '') + result.line_number)}
 		<SearchResultItem {result} on:open={(e) => dispatch('open', e.detail)} />
 	{/each}
 

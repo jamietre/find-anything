@@ -9,7 +9,7 @@
 	export let sources: string[] = [];
 
 	const dispatch = createEventDispatcher<{
-		select: { source: string; path: string };
+		select: { source: string; path: string; archivePath: string | null; kind: string };
 		close: void;
 	}>();
 
@@ -63,6 +63,21 @@
 		return qi === ql.length ? score : -1;
 	}
 
+	/** For a composite path "archive.zip::member.txt", returns the member portion. */
+	function archivePathOf(path: string): string | null {
+		const i = path.indexOf('::');
+		return i >= 0 ? path.slice(i + 2) : null;
+	}
+
+	/** Display label for a file record: show archive members as "zip → member". */
+	function displayPath(path: string): string {
+		const i = path.indexOf('::');
+		if (i < 0) return path;
+		const zip = path.slice(0, i);
+		const member = path.slice(i + 2);
+		return `${zip} → ${member}`;
+	}
+
 	$: filtered = (() => {
 		if (!query) return allFiles.slice(0, 50).map((f) => ({ ...f, score: 0 }));
 		return allFiles
@@ -84,7 +99,10 @@
 	function confirm() {
 		const item = filtered[selected];
 		if (item && activeSource) {
-			dispatch('select', { source: activeSource, path: item.path });
+			const i = item.path.indexOf('::');
+			const outerPath = i >= 0 ? item.path.slice(0, i) : item.path;
+			const archivePath = i >= 0 ? item.path.slice(i + 2) : null;
+			dispatch('select', { source: activeSource, path: outerPath, archivePath, kind: item.kind });
 			close();
 		}
 	}
@@ -142,7 +160,7 @@
 							on:click={confirm}
 							on:mouseenter={() => (selected = i)}
 						>
-							<span class="cp-path">{item.path}</span>
+							<span class="cp-path">{displayPath(item.path)}</span>
 						</button>
 					{/each}
 				{/if}

@@ -74,12 +74,16 @@ pub async fn list_sources(
     Json(infos).into_response()
 }
 
-// ── GET /api/v1/file?source=X&path=Y&archive_path=Z ──────────────────────────
+// ── GET /api/v1/file?source=X&path=Y[&archive_path=Z] ────────────────────────
+//
+// `path` may be a composite path ("archive.zip::member.txt") or, for backward
+// compatibility, a plain path with `archive_path` supplied separately.
 
 #[derive(Deserialize)]
 pub struct FileParams {
     pub source: String,
     pub path: String,
+    /// Legacy: combine with `path` into a composite path if provided.
     pub archive_path: Option<String>,
 }
 
@@ -97,6 +101,12 @@ pub async fn get_file(
         Err(s) => return (s, Json(serde_json::Value::Null)).into_response(),
     };
 
+    // Build composite path from path + optional archive_path (backward compat).
+    let full_path = match &params.archive_path {
+        Some(ap) if !ap.is_empty() => format!("{}::{}", params.path, ap),
+        _ => params.path.clone(),
+    };
+
     let data_dir = state.data_dir.clone();
     match spawn_blocking(move || {
         let conn = db::open(&db_path)?;
@@ -104,12 +114,11 @@ pub async fn get_file(
         let kind: String = conn
             .query_row(
                 "SELECT kind FROM files WHERE path = ?1",
-                rusqlite::params![params.path],
+                rusqlite::params![full_path],
                 |row| row.get(0),
             )
             .unwrap_or_else(|_| "text".into());
-        let lines =
-            db::get_file_lines(&conn, &archive_mgr, &params.path, params.archive_path.as_deref())?;
+        let lines = db::get_file_lines(&conn, &archive_mgr, &full_path)?;
         let total_lines = lines.len();
         Ok::<_, anyhow::Error>(FileResponse { lines, file_kind: kind, total_lines })
     })
@@ -393,6 +402,7 @@ pub async fn search(
 pub struct ContextParams {
     pub source: String,
     pub path: String,
+    /// Legacy: combined with `path` into a composite path if provided.
     pub archive_path: Option<String>,
     pub line: usize,
     #[serde(default = "default_window")]
@@ -413,21 +423,25 @@ pub async fn get_context(
         Err(s) => return (s, Json(serde_json::Value::Null)).into_response(),
     };
 
+    let full_path = match &params.archive_path {
+        Some(ap) if !ap.is_empty() => format!("{}::{}", params.path, ap),
+        _ => params.path.clone(),
+    };
+
     let data_dir = state.data_dir.clone();
     match spawn_blocking(move || {
         let conn = db::open(&db_path)?;
         let archive_mgr = ArchiveManager::new(data_dir);
         let kind: String = conn.query_row(
             "SELECT kind FROM files WHERE path = ?1",
-            rusqlite::params![params.path],
+            rusqlite::params![full_path],
             |row| row.get(0),
         ).unwrap_or_else(|_| "text".into());
 
         let lines = db::get_context(
             &conn,
             &archive_mgr,
-            &params.path,
-            params.archive_path.as_deref(),
+            &full_path,
             params.line,
             params.window,
         )?;
@@ -531,19 +545,23 @@ pub async fn context_batch(
                 continue;
             }
 
+            let full_path = match &item.archive_path {
+                Some(ap) if !ap.is_empty() => format!("{}::{}", item.path, ap),
+                _ => item.path.clone(),
+            };
+
             let (file_kind, lines) = match db::open(&db_path).and_then(|conn| {
                 let kind = conn
                     .query_row(
                         "SELECT kind FROM files WHERE path = ?1",
-                        rusqlite::params![item.path],
+                        rusqlite::params![full_path],
                         |row| row.get::<_, String>(0),
                     )
                     .unwrap_or_else(|_| "text".into());
                 let l = db::get_context(
                     &conn,
                     &archive_mgr,
-                    &item.path,
-                    item.archive_path.as_deref(),
+                    &full_path,
                     item.line,
                     item.window,
                 )?;

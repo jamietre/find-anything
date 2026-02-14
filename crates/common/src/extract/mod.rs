@@ -16,7 +16,8 @@ pub trait Extractor: Send + Sync {
 
 /// Dispatch to the first matching extractor.
 /// Order matters: archives before text (zip files would otherwise be skipped as binary).
-pub fn extract(path: &Path, max_bytes: u64) -> anyhow::Result<Vec<IndexLine>> {
+/// `max_archive_depth` limits how many nesting levels of archives-within-archives are extracted.
+pub fn extract(path: &Path, max_bytes: u64, max_archive_depth: usize) -> anyhow::Result<Vec<IndexLine>> {
     // Skip files that exceed the size limit
     if let Ok(meta) = std::fs::metadata(path) {
         if meta.len() > max_bytes * 1024 {
@@ -25,7 +26,7 @@ pub fn extract(path: &Path, max_bytes: u64) -> anyhow::Result<Vec<IndexLine>> {
     }
 
     let extractors: Vec<Box<dyn Extractor>> = vec![
-        Box::new(archive::ArchiveExtractor),
+        Box::new(archive::ArchiveExtractor { max_depth: max_archive_depth }),
         Box::new(pdf::PdfExtractor),
         Box::new(image::ImageExtractor),
         Box::new(audio::AudioExtractor),

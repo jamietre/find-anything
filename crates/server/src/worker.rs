@@ -125,8 +125,42 @@ fn process_file(
     archive_mgr: &mut ArchiveManager,
     file: &find_common::api::IndexFile,
 ) -> Result<()> {
-    // If this file was previously indexed, remove its old chunks from the ZIPs
-    // before writing new ones to avoid duplicate entry names.
+    // If this is an outer archive file being re-indexed, delete stale inner members
+    // first. They'll be re-submitted as separate IndexFile entries in the same batch.
+    // We detect "outer archive" by kind == "archive" and no "::" in the path.
+    let is_outer_archive = file.kind == "archive" && !file.path.contains("::");
+    if is_outer_archive {
+        // Collect and remove chunks for all old inner members.
+        let like_pat = format!("{}::%", file.path);
+        let inner_ids: Vec<i64> = {
+            let mut stmt = conn.prepare(
+                "SELECT id FROM files WHERE path LIKE ?1",
+            )?;
+            let ids = stmt.query_map(rusqlite::params![like_pat], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            ids
+        };
+        let mut old_refs: Vec<ChunkRef> = Vec::new();
+        for fid in inner_ids {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT chunk_archive, chunk_name FROM lines WHERE file_id = ?1",
+            )?;
+            for r in stmt.query_map(rusqlite::params![fid], |row| {
+                Ok(ChunkRef { archive_name: row.get(0)?, chunk_name: row.get(1)? })
+            })? {
+                old_refs.push(r?);
+            }
+        }
+        if !old_refs.is_empty() {
+            archive_mgr.remove_chunks(old_refs)?;
+        }
+        conn.execute(
+            "DELETE FROM files WHERE path LIKE ?1",
+            rusqlite::params![like_pat],
+        )?;
+    }
+
+    // Remove old chunks for this specific file before writing new ones.
     let existing_id: Option<i64> = conn.query_row(
         "SELECT id FROM files WHERE path = ?1",
         rusqlite::params![file.path],
@@ -198,14 +232,12 @@ fn process_file(
         let line_content = line_content_map.get(&mapping.line_number)
             .context("line content not found")?;
 
-        // Insert into lines table with offset information
         let line_id = conn.query_row(
-            "INSERT INTO lines (file_id, archive_path, line_number, chunk_archive, chunk_name, line_offset_in_chunk)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "INSERT INTO lines (file_id, line_number, chunk_archive, chunk_name, line_offset_in_chunk)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              RETURNING id",
             rusqlite::params![
                 file_id,
-                None::<String>, // archive_path handled separately if needed
                 mapping.line_number as i64,
                 chunk_ref.archive_name,
                 chunk_ref.chunk_name,
@@ -214,7 +246,6 @@ fn process_file(
             |row| row.get::<_, i64>(0),
         )?;
 
-        // Populate FTS5 with content (still in memory)
         conn.execute(
             "INSERT INTO lines_fts(rowid, content) VALUES (?1, ?2)",
             rusqlite::params![line_id, line_content],

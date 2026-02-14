@@ -135,14 +135,30 @@ subdirectories on expand.
 
 - **`line_number = 0`** is always the file's own relative path, indexed so
   every file is findable by name even if content extraction yields nothing.
-- **`archive_path`** on `IndexLine` is for files-within-archives (zip/tar
-  entries); it is `None` for regular files and PDFs.
+- **Archive members as first-class files (plan 012):**
+  - Inner archive members use **composite paths** with `::` as a separator:
+    - `taxes/w2.zip::wages.pdf` (member of a ZIP)
+    - `data.tar.gz::report.txt::inner.zip::file.txt` (nested archives)
+  - Each member has its own `file_id` in the `files` table
+  - The `::` separator is reserved and cannot be used in regular file paths
+  - Archive members get their `kind` detected from their filename (not inherited from outer archive)
+  - Deletion: `DELETE FROM files WHERE path = 'x' OR path LIKE 'x::%'` removes all members
+  - Re-indexing: When an outer archive changes, the server deletes all `path LIKE 'archive::%'` members first
+  - Client filters `::` paths from deletion detection (only outer files are tracked client-side)
+  - Tree browsing: `GET /api/v1/tree?prefix=archive.zip::` lists archive members
+  - Ctrl+P: Archive members appear as `zip → member` and are fully searchable
+  - UI: Archive files (`kind="archive"`) expand in the tree like directories
+- **`archive_path`** on `IndexLine` is deprecated (schema v3) — composite paths in `files.path` replaced it.
+  For backward compatibility, external API endpoints still accept an `archive_path` query param.
 - **PDF extraction** wraps `pdf-extract` in `std::panic::catch_unwind` because
   the library panics on malformed PDFs rather than returning errors.
 - The `files` table is per-source (one SQLite DB per source name, stored at
   `data_dir/sources/{source}.db`). Archives are shared across sources.
 - The **FTS5 index is contentless** (`content=''`); content lives only in ZIPs.
   FTS5 is populated manually by the worker at insert time.
+- **Archive depth limit:** Nested archives are extracted recursively up to
+  `scan.archives.max_depth` (default: 10) to prevent zip bomb attacks. When
+  exceeded, only the filename is indexed with a warning logged.
 
 ### Key files
 

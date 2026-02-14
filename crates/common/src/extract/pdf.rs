@@ -15,21 +15,32 @@ impl Extractor for PdfExtractor {
 
     fn extract(&self, path: &Path) -> anyhow::Result<Vec<IndexLine>> {
         let bytes = std::fs::read(path)?;
+        let path_str = path.display().to_string();
 
         // pdf-extract can panic on malformed PDFs; catch_unwind turns that into
         // a recoverable error so the scan can continue with other files.
+        //
+        // Temporarily install a custom panic hook so the file path appears in
+        // the panic output (the default hook prints no context about which file
+        // triggered the panic).
+        let prev_hook = std::panic::take_hook();
+        let path_for_hook = path_str.clone();
+        std::panic::set_hook(Box::new(move |info| {
+            eprintln!("pdf-extract panicked while processing: {path_for_hook}");
+            prev_hook(info);
+        }));
         let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes));
+        // Restore default hook (our custom hook, and thus prev_hook, is dropped here).
+        drop(std::panic::take_hook());
 
         let text = match result {
             Ok(Ok(t)) => t,
             Ok(Err(e)) => {
-                warn!("pdf extraction error for {}: {e}", path.display());
+                warn!("pdf extraction error for {path_str}: {e}");
                 return Ok(vec![]);
             }
             Err(_) => {
-                // catch_unwind caught a panic from pdf-extract; the panic message
-                // was already printed to stderr by Rust's panic handler.
-                warn!("pdf extraction panicked for {} (see panic output above)", path.display());
+                warn!("pdf extraction panicked for {path_str} (see panic output above)");
                 return Ok(vec![]);
             }
         };

@@ -170,6 +170,11 @@ These are less structured ideas that may evolve into formal features.
 
 ### Web UI Ideas
 - [x] Folder path browsing
+- [ ] The first line of a file is the same as the path, which we already show above it
+- [ ] Wrap lines by default; but have an option in the settings menu to toggle this
+- [ ] Show file metadata in detail view (create/edit time)
+- [ ] Sources visibility. Pills don't actually work right now; is this a good ux? What if there are a large number of sources?
+Consider other UI: dropdown list with checkboxes. A source explorer of some kind. Looking for ideas here.
 - [ ] Search suggestions / autocomplete
 - [ ] Recent searches dropdown
 - [ ] Command palette (Cmd+K style)
@@ -184,12 +189,13 @@ These are less structured ideas that may evolve into formal features.
 - [ ] Custom URI scheme (`find://source/path:line`)
 - [ ] Protocol handler for opening files in local editor
 - [ ] Deep linking from external tools (IDE, chat apps)
-- [ ] Line number anchors (`#L42`)
+- [x] Line number anchors (`#L42`)
 - [ ] Archive entry URLs (`archive.zip#!/entry.txt`)
 - [ ] Template-based URL construction
 
 ### Performance & Scalability
 
+- [ ] Don't store zip content archives all in same folder; develop a scheme to partition them in subfoldes. 
 - [ ] Distributed indexing (multiple scan clients per source)
 - [ ] Database partitioning for large sources (>100GB)
 - [ ] Elasticsearch backend option (alternative to SQLite)
@@ -198,7 +204,6 @@ These are less structured ideas that may evolve into formal features.
 - [ ] Incremental FTS5 rebuilds
 
 ### Additional Content Types
-
 - [ ] Video metadata (MP4, MKV duration, resolution, codecs)
 - [ ] Office documents (DOCX, XLSX, PPTX via external tools)
 - [ ] Markdown frontmatter extraction
