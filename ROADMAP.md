@@ -76,6 +76,14 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Subfolder scanning** — Metrics and archive discovery scan across all subfolders
 - **Breaking change** — Requires re-indexing; old flat archive structure not backward compatible
 
+### ✅ Source Selector Dropdown (v0.1.6)
+- **Dropdown with checkboxes** — Replaced pill-based source filter with compact dropdown selector
+- **Scalable to many sources** — Dropdown scrolls and handles dozens of sources gracefully
+- **Clear filter state** — Shows "All sources", "2 of 5 sources", or single source name in button
+- **Visual indicator** — Badge shows number of selected sources when filtering is active
+- **Quick actions** — "All" and "None" buttons for fast selection/deselection
+- **Click-outside handling** — Dropdown closes when clicking outside for clean UX
+
 ### ✅ Investigations
 
 **Archive Index Compression** (2026-02-14)
@@ -221,11 +229,10 @@ These are less structured ideas that may evolve into formal features.
 
 ### Web UI Ideas
 - [x] Folder path browsing
+- [x] Sources visibility — Replaced pills with dropdown selector (v0.1.6)
 - [ ] The first line of a file is the same as the path, which we already show above it
 - [ ] Wrap lines by default; but have an option in the settings menu to toggle this
 - [ ] Show file metadata in detail view (create/edit time)
-- [ ] Sources visibility. Pills don't actually work right now; is this a good ux? What if there are a large number of sources?
-Consider other UI: dropdown list with checkboxes. A source explorer of some kind. Looking for ideas here.
 - [ ] Search suggestions / autocomplete
 - [ ] Recent searches dropdown
 - [ ] Command palette (Cmd+K style)

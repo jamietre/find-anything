@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import SearchBox from '$lib/SearchBox.svelte';
-	import SourceChips from '$lib/SourceChips.svelte';
+	import SourceSelector from '$lib/SourceSelector.svelte';
 	import ResultList from '$lib/ResultList.svelte';
 	import FileViewer from '$lib/FileViewer.svelte';
 	import DirectoryTree from '$lib/DirectoryTree.svelte';
@@ -341,7 +341,7 @@
 
 	// ── Derived ────────────────────────────────────────────────────────────────
 
-	/** Source names for SourceChips / CommandPalette (string[]). */
+	/** Source names for SourceSelector / CommandPalette (string[]). */
 	$: sourceNames = sources.map((s) => s.name);
 
 	/** Server-configured base URLs keyed by source name. */
@@ -379,13 +379,11 @@
 			<div class="search-wrap">
 				<SearchBox {query} {mode} on:change={handleSearchChange} />
 			</div>
+			{#if sourceNames.length > 0}
+				<SourceSelector sources={sourceNames} selected={selectedSources} on:change={handleSourceChange} />
+			{/if}
 			<button class="gear-btn" title="Settings" on:click={() => (showSettings = !showSettings)}>⚙</button>
 		</div>
-		{#if sourceNames.length > 0}
-			<div class="source-bar">
-				<SourceChips sources={sourceNames} selected={selectedSources} on:change={handleSourceChange} />
-			</div>
-		{/if}
 		<div class="content content--full content--with-tree">
 			{#if showTree}
 				<div class="sidebar" style="width: {sidebarWidth}px">
@@ -438,13 +436,11 @@
 			<div class="search-wrap">
 				<SearchBox {query} {mode} on:change={handleSearchChange} />
 			</div>
+			{#if sourceNames.length > 0}
+				<SourceSelector sources={sourceNames} selected={selectedSources} on:change={handleSourceChange} />
+			{/if}
 			<button class="gear-btn" title="Settings" on:click={() => (showSettings = !showSettings)}>⚙</button>
 		</div>
-		{#if sourceNames.length > 0}
-			<div class="source-bar">
-				<SourceChips sources={sourceNames} selected={selectedSources} on:change={handleSourceChange} />
-			</div>
-		{/if}
 		<div class="content">
 			{#if searching}
 				<div class="status">Searching…</div>
@@ -505,15 +501,6 @@
 	.search-wrap {
 		min-width: 260px;
 		flex: 1;
-	}
-
-	/* ── Source bar ─────────────────────────────────────────────────────────── */
-	.source-bar {
-		padding: 6px 16px;
-		background: var(--bg-secondary);
-		border-bottom: 1px solid var(--border);
-		overflow-x: auto;
-		flex-shrink: 0;
 	}
 
 	/* ── Content area ───────────────────────────────────────────────────────── */
