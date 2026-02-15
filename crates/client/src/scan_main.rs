@@ -1,4 +1,5 @@
 mod api;
+mod extract;
 mod scan;
 
 use anyhow::{Context, Result};

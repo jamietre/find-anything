@@ -10,8 +10,9 @@ use walkdir::WalkDir;
 use find_common::{
     api::{BulkRequest, IndexFile, IndexLine},
     config::ScanConfig,
-    extract,
 };
+
+use crate::extract;
 
 use crate::api::ApiClient;
 

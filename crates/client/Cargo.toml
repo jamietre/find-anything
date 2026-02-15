@@ -17,6 +17,10 @@ path = "src/query_main.rs"
 
 [dependencies]
 find-common = { path = "../common" }
+find-extract-text = { path = "../extractors/text" }
+find-extract-pdf = { path = "../extractors/pdf" }
+find-extract-media = { path = "../extractors/media" }
+find-extract-archive = { path = "../extractors/archive" }
 anyhow      = { workspace = true }
 clap        = { workspace = true }
 serde       = { workspace = true }
