@@ -37,15 +37,17 @@ impl ArchiveManager {
 
     /// Calculate full path for an archive number using subfolder structure.
     /// Archives are organized in thousands-based subfolders:
-    /// - content/0/ → content_00000.zip to content_00999.zip
-    /// - content/1/ → content_01000.zip to content_01999.zip
+    /// - content/0000/ → content_00000.zip to content_00999.zip
+    /// - content/0001/ → content_01000.zip to content_01999.zip
+    /// - content/0010/ → content_10000.zip to content_10999.zip
     fn archive_path_for_number(&self, archive_num: usize) -> PathBuf {
         let filename = format!("content_{:05}.zip", archive_num);
         let subfolder = archive_num / 1000;
+        let subfolder_name = format!("{:04}", subfolder);
 
         let subfolder_path = self.sources_dir()
             .join("content")
-            .join(subfolder.to_string());
+            .join(subfolder_name);
 
         subfolder_path.join(filename)
     }

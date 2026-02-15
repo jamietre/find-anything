@@ -68,8 +68,9 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Default behavior** — Defaults to off (no wrap) to preserve current code viewing experience
 
 ### ✅ Archive Subfolder Organization (v0.1.6)
-- **Thousands-based subfolders** — Archives organized as `sources/content/N/` where N = archive_num / 1000
-- **Scalable structure** — Each subfolder contains up to 1000 archives (e.g., `content/0/` → archives 0-999)
+- **Thousands-based subfolders** — Archives organized as `sources/content/NNNN/` where NNNN = 4-digit zero-padded archive_num / 1000
+- **Scalable structure** — Each subfolder contains up to 1000 archives (e.g., `content/0000/` → archives 0-999, `content/0001/` → archives 1000-1999)
+- **High capacity** — Supports up to 9,999,000 archives (~99.99 TB compressed content)
 - **Automatic folder creation** — Subfolders created as needed when archives rotate
 - **Updated path resolution** — `archive_path_for_number()` calculates proper subfolder paths
 - **Subfolder scanning** — Metrics and archive discovery scan across all subfolders
