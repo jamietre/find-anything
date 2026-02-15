@@ -33,7 +33,6 @@
 	// Compute display text for the button
 	$: buttonText = (() => {
 		if (selected.length === 0) return 'All sources';
-		if (selected.length === sources.length) return 'No sources';
 		if (selected.length === 1) return selected[0];
 		return `${selected.length} of ${sources.length} sources`;
 	})();
