@@ -26,11 +26,6 @@
 		isOpen = false;
 	}
 
-	function selectNone() {
-		selected = [...sources];
-		dispatch('change', selected);
-	}
-
 	function handleClickOutside() {
 		isOpen = false;
 	}
@@ -65,8 +60,7 @@
 	{#if isOpen}
 		<div class="dropdown">
 			<div class="dropdown-header">
-				<button class="action-btn" on:click={selectAll}>All</button>
-				<button class="action-btn" on:click={selectNone}>None</button>
+				<button class="action-btn" on:click={selectAll}>All sources</button>
 			</div>
 			<div class="dropdown-list">
 				{#each sources as source}
@@ -161,15 +155,13 @@
 	}
 
 	.dropdown-header {
-		display: flex;
-		gap: 4px;
 		padding: 8px;
 		border-bottom: 1px solid var(--border);
 		background: var(--hover-bg);
 	}
 
 	.action-btn {
-		flex: 1;
+		width: 100%;
 		padding: 4px 8px;
 		border: 1px solid var(--border);
 		border-radius: 4px;
