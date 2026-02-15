@@ -90,10 +90,13 @@ Key invariants:
 
 ### Content storage (ZIP archives)
 
-File content is stored in rotating ZIP archives under `data_dir/sources/`,
-not in SQLite. SQLite holds only metadata and FTS index.
+File content is stored in rotating ZIP archives under `data_dir/sources/content/N/`,
+organized into subfolders by thousands. SQLite holds only metadata and FTS index.
 
-- Archives are named `content_00001.zip`, `content_00002.zip`, etc.
+- Folder structure: `content/0/`, `content/1/`, ... (archive_num / 1000)
+- Each folder contains up to 1000 archives
+- Archives named: `content_00001.zip`, `content_00002.zip`, etc. (5-digit zero-padded)
+- Example: `sources/content/0/content_00123.zip`, `sources/content/1/content_01234.zip`
 - Target size is 10 MB per archive (measured by on-disk compressed size).
 - Each file's content is split into ~1 KB chunks.
 - Chunk names: `{relative_path}.chunk{N}.txt`

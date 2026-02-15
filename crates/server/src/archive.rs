@@ -35,6 +35,21 @@ impl ArchiveManager {
         Self { data_dir, current_archive: None }
     }
 
+    /// Calculate full path for an archive number using subfolder structure.
+    /// Archives are organized in thousands-based subfolders:
+    /// - content/0/ → content_00000.zip to content_00999.zip
+    /// - content/1/ → content_01000.zip to content_01999.zip
+    fn archive_path_for_number(&self, archive_num: usize) -> PathBuf {
+        let filename = format!("content_{:05}.zip", archive_num);
+        let subfolder = archive_num / 1000;
+
+        let subfolder_path = self.sources_dir()
+            .join("content")
+            .join(subfolder.to_string());
+
+        subfolder_path.join(filename)
+    }
+
     /// Append chunks to archives, creating new ones as needed
     pub fn append_chunks(&mut self, chunks: Vec<Chunk>) -> Result<Vec<ChunkRef>> {
         let mut refs = Vec::new();
@@ -80,7 +95,12 @@ impl ArchiveManager {
 
         // Rewrite each affected archive
         for (archive_name, chunks_to_remove) in by_archive {
-            let archive_path = self.sources_dir().join(&archive_name);
+            let archive_path = if let Some(num) = parse_archive_number(&archive_name) {
+                self.archive_path_for_number(num)
+            } else {
+                self.sources_dir().join(&archive_name)
+            };
+
             if archive_path.exists() {
                 self.rewrite_archive(&archive_path, &chunks_to_remove)?;
             }
@@ -91,7 +111,11 @@ impl ArchiveManager {
 
     /// Read chunk content from archive
     pub fn read_chunk(&self, chunk_ref: &ChunkRef) -> Result<String> {
-        let archive_path = self.sources_dir().join(&chunk_ref.archive_name);
+        let archive_path = if let Some(num) = parse_archive_number(&chunk_ref.archive_name) {
+            self.archive_path_for_number(num)
+        } else {
+            self.sources_dir().join(&chunk_ref.archive_name)
+        };
 
         let file = File::open(&archive_path)
             .with_context(|| format!("opening archive {}", archive_path.display()))?;
@@ -116,7 +140,12 @@ impl ArchiveManager {
     /// request).  Only creates a new numbered archive when the latest is full.
     fn current_archive_path(&mut self) -> Result<PathBuf> {
         if let Some(name) = &self.current_archive {
-            let path = self.sources_dir().join(name);
+            // Parse the archive number to construct the proper subfolder path
+            let path = if let Some(num) = parse_archive_number(name) {
+                self.archive_path_for_number(num)
+            } else {
+                self.sources_dir().join(name)
+            };
             let on_disk = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
             if on_disk < TARGET_ARCHIVE_SIZE {
                 return Ok(path);
@@ -125,20 +154,21 @@ impl ArchiveManager {
             self.current_archive = None;
         }
 
-        let sources_dir = self.sources_dir();
-        std::fs::create_dir_all(&sources_dir)?;
+        let content_dir = self.sources_dir().join("content");
+        std::fs::create_dir_all(&content_dir)?;
 
-        // Find the highest-numbered content archive.
+        // Find the highest-numbered content archive across all subfolders.
         let mut max_num = 0;
-        if let Ok(entries) = std::fs::read_dir(&sources_dir) {
+        if let Ok(entries) = std::fs::read_dir(&content_dir) {
             for entry in entries.flatten() {
-                if let Some(name) = entry.file_name().to_str() {
-                    if let Some(num_str) = name
-                        .strip_prefix("content_")
-                        .and_then(|s| s.strip_suffix(".zip"))
-                    {
-                        if let Ok(num) = num_str.parse::<usize>() {
-                            max_num = max_num.max(num);
+                if entry.path().is_dir() {
+                    if let Ok(subdir) = std::fs::read_dir(entry.path()) {
+                        for file_entry in subdir.flatten() {
+                            if let Some(name) = file_entry.file_name().to_str() {
+                                if let Some(num) = parse_archive_number(name) {
+                                    max_num = max_num.max(num);
+                                }
+                            }
                         }
                     }
                 }
@@ -148,7 +178,7 @@ impl ArchiveManager {
         // Reuse the latest archive if it still has room.
         if max_num > 0 {
             let latest_name = format!("content_{:05}.zip", max_num);
-            let latest_path = sources_dir.join(&latest_name);
+            let latest_path = self.archive_path_for_number(max_num);
             let on_disk = std::fs::metadata(&latest_path)
                 .map(|m| m.len() as usize)
                 .unwrap_or(usize::MAX);
@@ -161,7 +191,12 @@ impl ArchiveManager {
         // All existing archives are full (or there are none): create a new one.
         let new_num = max_num + 1;
         let new_name = format!("content_{:05}.zip", new_num);
-        let new_path = sources_dir.join(&new_name);
+        let new_path = self.archive_path_for_number(new_num);
+
+        // Ensure the subfolder exists
+        if let Some(parent) = new_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
 
         let file = File::create(&new_path)?;
         let zip = ZipWriter::new(file);
@@ -247,6 +282,14 @@ impl ArchiveManager {
     }
 }
 
+/// Extract archive number from filename (e.g., "content_00123.zip" → 123)
+fn parse_archive_number(filename: &str) -> Option<usize> {
+    filename
+        .strip_prefix("content_")
+        .and_then(|s| s.strip_suffix(".zip"))
+        .and_then(|s| s.parse::<usize>().ok())
+}
+
 /// Information about where a line ended up after chunking
 #[derive(Debug, Clone)]
 pub struct LineMapping {
@@ -316,6 +359,24 @@ pub fn chunk_lines(file_path: &str, lines: &[(usize, String)]) -> ChunkResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_subfolder_calculation() {
+        assert_eq!(0 / 1000, 0);      // archive 0-999 → folder 0
+        assert_eq!(999 / 1000, 0);
+        assert_eq!(1000 / 1000, 1);   // archive 1000-1999 → folder 1
+        assert_eq!(12345 / 1000, 12); // archive 12345 → folder 12
+    }
+
+    #[test]
+    fn test_parse_archive_number() {
+        assert_eq!(parse_archive_number("content_00001.zip"), Some(1));
+        assert_eq!(parse_archive_number("content_00999.zip"), Some(999));
+        assert_eq!(parse_archive_number("content_12345.zip"), Some(12345));
+        assert_eq!(parse_archive_number("invalid.zip"), None);
+        assert_eq!(parse_archive_number("content_00001.tar"), None);
+        assert_eq!(parse_archive_number("other_00001.zip"), None);
+    }
 
     #[test]
     fn test_chunk_lines() {

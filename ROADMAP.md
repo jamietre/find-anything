@@ -67,6 +67,14 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Syntax preservation** — Line numbers and syntax highlighting preserved when wrapped
 - **Default behavior** — Defaults to off (no wrap) to preserve current code viewing experience
 
+### ✅ Archive Subfolder Organization (v0.1.6)
+- **Thousands-based subfolders** — Archives organized as `sources/content/N/` where N = archive_num / 1000
+- **Scalable structure** — Each subfolder contains up to 1000 archives (e.g., `content/0/` → archives 0-999)
+- **Automatic folder creation** — Subfolders created as needed when archives rotate
+- **Updated path resolution** — `archive_path_for_number()` calculates proper subfolder paths
+- **Subfolder scanning** — Metrics and archive discovery scan across all subfolders
+- **Breaking change** — Requires re-indexing; old flat archive structure not backward compatible
+
 ### ✅ Investigations
 
 **Archive Index Compression** (2026-02-14)
@@ -237,7 +245,7 @@ Consider other UI: dropdown list with checkboxes. A source explorer of some kind
 
 ### Performance & Scalability
 
-- [ ] Don't store zip content archives all in same folder; develop a scheme to partition them in subfoldes. 
+- [x] Archive subfolder organization — Completed in v0.1.6
 - [ ] Distributed indexing (multiple scan clients per source)
 - [ ] Database partitioning for large sources (>100GB)
 - [ ] Elasticsearch backend option (alternative to SQLite)

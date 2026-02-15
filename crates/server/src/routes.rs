@@ -482,19 +482,27 @@ pub async fn get_metrics(
             .unwrap_or(0)
     };
 
-    let count_zip = |dir: &std::path::Path| -> usize {
-        std::fs::read_dir(dir)
-            .map(|rd| {
-                rd.filter_map(|e| e.ok())
-                    .filter(|e| e.path().extension().map(|x| x == "zip").unwrap_or(false))
-                    .count()
-            })
-            .unwrap_or(0)
+    // Count archives across subfolders in sources/content/N/
+    let total_archives = {
+        let content_dir = sources_dir.join("content");
+        let mut count = 0;
+        if let Ok(rd) = std::fs::read_dir(&content_dir) {
+            for entry in rd.filter_map(|e| e.ok()) {
+                if entry.path().is_dir() {
+                    if let Ok(subdir) = std::fs::read_dir(entry.path()) {
+                        count += subdir
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.path().extension().map(|x| x == "zip").unwrap_or(false))
+                            .count();
+                    }
+                }
+            }
+        }
+        count
     };
 
     let inbox_queue_depth = count_gz(&inbox_dir);
     let failed_requests = count_gz(&failed_dir);
-    let total_archives = count_zip(&sources_dir);
 
     Json(serde_json::json!({
         "inbox_queue_depth": inbox_queue_depth,
