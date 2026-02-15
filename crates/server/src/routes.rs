@@ -214,12 +214,49 @@ pub struct SearchParams {
     #[serde(default = "default_mode")]
     pub mode: String,
     /// Repeatable: ?source=a&source=b. Empty = all sources.
-    #[serde(default)]
+    /// Also accepts single value: ?source=a
+    #[serde(default, deserialize_with = "deserialize_string_or_seq")]
     pub source: Vec<String>,
     #[serde(default = "default_limit")]
     pub limit: usize,
     #[serde(default)]
     pub offset: usize,
+}
+
+/// Deserialize either a single string or a sequence of strings into Vec<String>
+fn deserialize_string_or_seq<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringOrVec;
+
+    impl<'de> serde::de::Visitor<'de> for StringOrVec {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("string or sequence of strings")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Vec<String>, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(vec![value.to_string()])
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<String>, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut vec = Vec::new();
+            while let Some(value) = seq.next_element()? {
+                vec.push(value);
+            }
+            Ok(vec)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrVec)
 }
 
 fn default_mode() -> String { "fuzzy".into() }

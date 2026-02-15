@@ -234,9 +234,10 @@
 		srcs: string[],
 		push = true
 	) {
-		if (!q.trim()) {
+		if (q.trim().length < 3) {
 			results = [];
 			totalResults = 0;
+			searchError = null;
 			return;
 		}
 		searching = true;
@@ -446,7 +447,7 @@
 				<div class="status">Searching…</div>
 			{:else if searchError}
 				<div class="status error">{searchError}</div>
-			{:else}
+			{:else if query.trim().length >= 3}
 				<div class="result-meta">{totalResults} result{totalResults !== 1 ? 's' : ''}</div>
 				<ResultList {results} on:open={openFile} />
 			{/if}
