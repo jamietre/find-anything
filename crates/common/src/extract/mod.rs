@@ -3,6 +3,7 @@ pub mod audio;
 pub mod image;
 pub mod pdf;
 pub mod text;
+pub mod video;
 
 use std::path::Path;
 
@@ -30,6 +31,7 @@ pub fn extract(path: &Path, max_bytes: u64, max_archive_depth: usize) -> anyhow:
         Box::new(pdf::PdfExtractor),
         Box::new(image::ImageExtractor),
         Box::new(audio::AudioExtractor),
+        Box::new(video::VideoExtractor),
         Box::new(text::TextExtractor),
     ];
 
@@ -61,6 +63,9 @@ pub fn detect_kind(path: &Path) -> &'static str {
     }
     if audio::is_audio_ext(&ext) {
         return "audio";
+    }
+    if video::is_video_ext(&ext) {
+        return "video";
     }
     "text"
 }
