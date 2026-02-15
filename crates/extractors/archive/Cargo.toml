@@ -1,0 +1,32 @@
+[package]
+name = "find-extract-archive"
+version = "0.1.7"
+edition = "2021"
+
+[lib]
+name = "find_extract_archive"
+path = "src/lib.rs"
+
+[[bin]]
+name = "find-extract-archive"
+path = "src/main.rs"
+
+[dependencies]
+find-common = { path = "../../common" }
+# Depend on other extractors to handle archive members
+find-extract-text = { path = "../text" }
+find-extract-pdf = { path = "../pdf" }
+find-extract-media = { path = "../media" }
+
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+
+# Archive formats
+zip = "2"
+tar = "0.4"
+flate2 = "1"
+bzip2 = "0.4"
+xz2 = { version = "0.1", features = ["static"] }
+sevenz-rust = "0.6"

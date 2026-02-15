@@ -6,6 +6,7 @@ members = [
     "crates/extractors/text",
     "crates/extractors/pdf",
     "crates/extractors/media",
+    "crates/extractors/archive",
 ]
 resolver = "2"
 

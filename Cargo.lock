@@ -666,6 +666,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "find-extract-archive"
+version = "0.1.7"
+dependencies = [
+ "anyhow",
+ "bzip2 0.4.4",
+ "find-common",
+ "find-extract-media",
+ "find-extract-pdf",
+ "find-extract-text",
+ "flate2",
+ "serde",
+ "serde_json",
+ "sevenz-rust",
+ "tar",
+ "tracing",
+ "xz2",
+ "zip",
+]
+
+[[package]]
 name = "find-extract-media"
 version = "0.1.7"
 dependencies = [
