@@ -11,7 +11,7 @@ use anyhow::Result;
 /// * `path` - Path to the file
 /// * `max_size_kb` - Maximum file size in KB
 /// * `_max_archive_depth` - Maximum archive nesting depth (unused in current implementation)
-pub fn extract(path: &Path, max_size_kb: u64, _max_archive_depth: usize) -> Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, max_size_kb: u64, max_archive_depth: usize) -> Result<Vec<IndexLine>> {
     // Skip files that exceed the size limit
     if let Ok(meta) = std::fs::metadata(path) {
         if meta.len() > max_size_kb * 1024 {
@@ -24,7 +24,7 @@ pub fn extract(path: &Path, max_size_kb: u64, _max_archive_depth: usize) -> Resu
     // Dispatch to extractors in priority order
     // Archives first (before text, since ZIPs would otherwise be detected as binary)
     if find_extract_archive::accepts(path) {
-        return find_extract_archive::extract(path, max_size_kb_usize);
+        return find_extract_archive::extract(path, max_size_kb_usize, max_archive_depth);
     }
 
     if find_extract_pdf::accepts(path) {
