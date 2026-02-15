@@ -69,12 +69,17 @@ export async function search(params: SearchParams): Promise<SearchResponse> {
 	const url = new URL('/api/v1/search', location.origin);
 	url.searchParams.set('q', params.q);
 	if (params.mode) url.searchParams.set('mode', params.mode);
-	if (params.sources) params.sources.forEach((s) => url.searchParams.append('source', s));
+	if (params.sources && params.sources.length > 0) {
+		params.sources.forEach((s) => url.searchParams.append('source', s));
+	}
 	if (params.limit != null) url.searchParams.set('limit', String(params.limit));
 	if (params.offset != null) url.searchParams.set('offset', String(params.offset));
 
 	const resp = await fetch(url.toString());
-	if (!resp.ok) throw new Error(`search: ${resp.status} ${resp.statusText}`);
+	if (!resp.ok) {
+		const errorText = await resp.text().catch(() => resp.statusText);
+		throw new Error(`Search failed: ${errorText || resp.statusText}`);
+	}
 	return resp.json();
 }
 
