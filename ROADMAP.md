@@ -52,6 +52,14 @@ This document tracks the development roadmap for find-anything, from completed f
 - **FilePath class refactor** — Unified path representation eliminates sync issues between split (path+archivePath) and composite (path::member) formats
 - **Consistent archive behavior** — Ctrl+P and clicking archive nodes both expand to one level and show contents
 
+### ✅ Video Metadata Extraction (v0.1.4)
+- **Video metadata indexing** — Extract and index technical metadata from video files
+- **audio-video-metadata crate** — Lightweight dependency for format detection (no heavy ffmpeg binding)
+- **Metadata extracted:** Format type, resolution (width×height), duration (minutes:seconds)
+- **Supported formats:** MP4, M4V, MKV, WebM, OGV, OGG, AVI, MOV, WMV, FLV, MPG, MPEG, 3GP
+- **Metadata format:** `[VIDEO:key] value` (matching audio/image pattern)
+- **Kind detection:** Video files now return "video" from `detect_kind()`
+
 ### ✅ Investigations
 
 **Archive Index Compression** (2026-02-14)
@@ -62,6 +70,15 @@ This document tracks the development roadmap for find-anything, from completed f
 - Increasing ZIP compression level (6→9) would have minimal benefit (~5-10% reduction)
 - **Conclusion:** No changes needed - current implementation is well-balanced
 - See: `docs/investigations/001-archive-index-compression.md`
+
+**Audio Metadata Consolidation** (2026-02-14)
+- Investigated whether `audio-video-metadata` crate could replace current audio extractors
+- Current extractors: id3 (MP3), metaflac (FLAC), mp4ameta (M4A/MP4)
+- AudioMetadata struct only provides: format, duration, audio (single optional string)
+- Missing: title, artist, album, year, genre, comments (rich music tag data)
+- Different purpose: audio-video-metadata is for technical A/V metadata, not music library tags
+- **Conclusion:** Keep current audio extractors - they are purpose-built and complementary, not redundant
+- See: `docs/investigations/002-audio-metadata-consolidation.md`
 
 ---
 
@@ -222,7 +239,7 @@ Consider other UI: dropdown list with checkboxes. A source explorer of some kind
 - [ ] Incremental FTS5 rebuilds
 
 ### Additional Content Types
-- [ ] Video metadata (MP4, MKV duration, resolution, codecs)
+- [x] Video metadata (MP4, MKV duration, resolution, codecs) — completed v0.1.4
 - [ ] Office documents (DOCX, XLSX, PPTX via external tools)
 - [ ] Markdown frontmatter extraction
 - [ ] Code symbol indexing (functions, classes, imports)

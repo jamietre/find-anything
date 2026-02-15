@@ -1,31 +1,6 @@
 # TODO - High Priority
 
-## 1. Video Metadata Extraction
-
-**Goal:** Extract and index video file metadata (like audio/image already supported)
-
-**Metadata to extract:**
-- Duration, resolution, codec, framerate
-- Title, artist, album (from container metadata)
-- Creation date, camera model (if embedded)
-
-**Implementation approach:**
-- Add `video.rs` extractor to `crates/common/src/extract/`
-- Use `ffprobe` or Rust crate (e.g., `ffmpeg-next`, `mp4parse`)
-- Detect video extensions: `.mp4`, `.mkv`, `.avi`, `.mov`, `.webm`, etc.
-- Format metadata as key-value lines (similar to audio/image extractors)
-
-**Files to create/modify:**
-- `crates/common/src/extract/video.rs` - New extractor
-- `crates/common/src/extract/mod.rs` - Register video extractor
-- Update `detect_kind()` to return "video" for video files
-
-**Dependencies to add:**
-- Research best Rust crate for video metadata (avoid heavy ffmpeg binding if possible)
-
----
-
-## 2. Word Wrap in File Viewer
+## 1. Word Wrap in File Viewer
 
 **Current behavior:**
 - Long lines overflow horizontally, require scrolling
@@ -47,7 +22,7 @@
 
 ---
 
-## 3. Content Archive Subfolder Strategy
+## 2. Content Archive Subfolder Strategy
 
 **Current problem:**
 - All `content_NNNNN.zip` archives in flat `data_dir/sources/` folder
