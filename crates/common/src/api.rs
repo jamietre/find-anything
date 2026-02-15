@@ -92,6 +92,8 @@ pub struct FileResponse {
     pub lines: Vec<ContextLine>,
     pub file_kind: String,
     pub total_lines: usize,
+    pub mtime: Option<i64>,
+    pub size: Option<i64>,
 }
 
 /// GET /api/v1/files response entry (for deletion detection / Ctrl+P).

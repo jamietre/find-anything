@@ -230,9 +230,8 @@ These are less structured ideas that may evolve into formal features.
 ### Web UI Ideas
 - [x] Folder path browsing
 - [x] Sources visibility — Replaced pills with dropdown selector (v0.1.6)
-- [ ] The first line of a file is the same as the path, which we already show above it
-- [ ] Wrap lines by default; but have an option in the settings menu to toggle this
-- [ ] Show file metadata in detail view (create/edit time)
+- [x] Wrap lines by default; but have an option in the settings menu to toggle this
+- [x] Show file metadata in detail view (create/edit time) — v0.1.6
 - [ ] Search suggestions / autocomplete
 - [ ] Recent searches dropdown
 - [ ] Command palette (Cmd+K style)
@@ -258,7 +257,7 @@ These are less structured ideas that may evolve into formal features.
 - [ ] Database partitioning for large sources (>100GB)
 - [ ] Elasticsearch backend option (alternative to SQLite)
 - [ ] Read replicas for search load balancing
-- [ ] Index compression strategies
+- [x] Index compression strategies
 - [ ] Incremental FTS5 rebuilds
 
 ### Additional Content Types

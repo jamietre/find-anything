@@ -111,16 +111,25 @@ pub async fn get_file(
     match spawn_blocking(move || {
         let conn = db::open(&db_path)?;
         let archive_mgr = ArchiveManager::new(data_dir);
-        let kind: String = conn
+
+        // Query file metadata
+        let (kind, mtime, size): (String, Option<i64>, Option<i64>) = conn
             .query_row(
-                "SELECT kind FROM files WHERE path = ?1",
+                "SELECT kind, mtime, size FROM files WHERE path = ?1",
                 rusqlite::params![full_path],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1).ok(), row.get(2).ok())),
             )
-            .unwrap_or_else(|_| "text".into());
+            .unwrap_or_else(|_| ("text".into(), None, None));
+
         let lines = db::get_file_lines(&conn, &archive_mgr, &full_path)?;
         let total_lines = lines.len();
-        Ok::<_, anyhow::Error>(FileResponse { lines, file_kind: kind, total_lines })
+        Ok::<_, anyhow::Error>(FileResponse {
+            lines,
+            file_kind: kind,
+            total_lines,
+            mtime,
+            size,
+        })
     })
     .await
     .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))

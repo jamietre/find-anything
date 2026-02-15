@@ -29,6 +29,8 @@ export interface FileResponse {
 	lines: ContextLine[];
 	file_kind: string;
 	total_lines: number;
+	mtime: number | null;
+	size: number | null;
 }
 
 export interface ContextResponse {

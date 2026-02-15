@@ -22,6 +22,8 @@
 	let highlightedCode = '';
 	/** Maps 0-based render index → line_number */
 	let lineOffsets: number[] = [];
+	let mtime: number | null = null;
+	let size: number | null = null;
 
 	// Word wrap preference (default: false for code, true for text files)
 	$: wordWrap = $profile.wordWrap ?? false;
@@ -30,12 +32,28 @@
 		$profile.wordWrap = !wordWrap;
 	}
 
+	function formatSize(bytes: number | null): string {
+		if (bytes === null) return '';
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+		return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+	}
+
+	function formatDate(timestamp: number | null): string {
+		if (timestamp === null) return '';
+		const date = new Date(timestamp * 1000);
+		return date.toLocaleString();
+	}
+
 	onMount(async () => {
 		try {
 			const data = await getFile(source, path, archivePath ?? undefined);
 			const contents = data.lines.map((l) => l.content);
 			lineOffsets = data.lines.map((l) => l.line_number);
 			highlightedCode = highlightFile(contents, path);
+			mtime = data.mtime;
+			size = data.size;
 		} catch (e) {
 			error = String(e);
 		} finally {
@@ -83,6 +101,14 @@
 			<button class="toolbar-btn" on:click={toggleWordWrap} title="Toggle word wrap">
 				{wordWrap ? '⊟' : '⊞'} Wrap
 			</button>
+			<div class="metadata">
+				{#if size !== null}
+					<span class="meta-item" title="File size">{formatSize(size)}</span>
+				{/if}
+				{#if mtime !== null}
+					<span class="meta-item" title="Last modified">{formatDate(mtime)}</span>
+				{/if}
+			</div>
 		</div>
 		<div class="code-container">
 			<table class="code-table" cellspacing="0" cellpadding="0">
@@ -184,10 +210,24 @@
 
 	.toolbar {
 		display: flex;
+		align-items: center;
 		gap: 8px;
 		padding: 8px 12px;
 		border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.1));
 		background: var(--bg-secondary, rgba(0, 0, 0, 0.2));
+	}
+
+	.metadata {
+		display: flex;
+		gap: 16px;
+		margin-left: auto;
+		font-size: 12px;
+		color: var(--text-muted);
+	}
+
+	.meta-item {
+		display: flex;
+		align-items: center;
 	}
 
 	.toolbar-btn {
