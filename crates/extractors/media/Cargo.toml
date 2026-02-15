@@ -1,0 +1,29 @@
+[package]
+name = "find-extract-media"
+version = "0.1.7"
+edition = "2021"
+
+[lib]
+name = "find_extract_media"
+path = "src/lib.rs"
+
+[[bin]]
+name = "find-extract-media"
+path = "src/main.rs"
+
+[dependencies]
+find-common = { path = "../../common" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Image EXIF
+kamadak-exif = "0.5"
+
+# Audio tags
+id3 = "1"
+metaflac = "0.2"
+mp4ameta = "0.11"
+
+# Video metadata
+audio-video-metadata = "0.1"

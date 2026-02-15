@@ -666,6 +666,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "find-extract-media"
+version = "0.1.7"
+dependencies = [
+ "anyhow",
+ "audio-video-metadata",
+ "find-common",
+ "id3",
+ "kamadak-exif",
+ "metaflac",
+ "mp4ameta",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "find-extract-pdf"
 version = "0.1.7"
 dependencies = [
