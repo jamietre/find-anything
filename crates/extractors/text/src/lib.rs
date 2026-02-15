@@ -1,68 +1,78 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use crate::api::IndexLine;
-use crate::extract::Extractor;
+use find_common::api::IndexLine;
 use gray_matter::{engine::YAML, Matter, Pod};
 
-pub struct TextExtractor;
+/// Extract text content from a file.
+///
+/// Supports:
+/// - Plain text files
+/// - Source code
+/// - Markdown (with frontmatter extraction)
+/// - Config files (JSON, YAML, TOML, etc.)
+///
+/// # Arguments
+/// * `path` - Path to the file
+/// * `_max_size_kb` - Maximum file size in KB (currently unused, for future size limiting)
+///
+/// # Returns
+/// Vector of IndexLine objects, one per non-empty line
+pub fn extract(path: &Path, _max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+    // Check if this is a Markdown file that might have frontmatter
+    let is_markdown = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
+        .unwrap_or(false);
 
-impl Extractor for TextExtractor {
-    fn accepts(&self, path: &Path) -> bool {
-        // Fast path: known text extensions
-        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if is_text_ext(ext) {
-                return true;
-            }
-            // Known binary extensions are not text
-            if is_binary_ext(ext) {
-                return false;
-            }
-        }
-        // Fallback: sniff first 8 KB
-        if let Ok(mut f) = std::fs::File::open(path) {
-            let mut buf = vec![0u8; 8192];
-            if let Ok(n) = f.read(&mut buf) {
-                buf.truncate(n);
-                return content_inspector::inspect(&buf).is_text();
-            }
-        }
-        false
+    if is_markdown {
+        // Read entire file to parse frontmatter
+        let content = std::fs::read_to_string(path)?;
+        return Ok(extract_markdown_with_frontmatter(&content));
     }
 
-    fn extract(&self, path: &Path) -> anyhow::Result<Vec<IndexLine>> {
-        // Check if this is a Markdown file that might have frontmatter
-        let is_markdown = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .map(|e| e.eq_ignore_ascii_case("md") || e.eq_ignore_ascii_case("markdown"))
-            .unwrap_or(false);
+    // Non-Markdown: use efficient line-by-line reading
+    let file = std::fs::File::open(path)?;
+    let reader = BufReader::new(file);
 
-        if is_markdown {
-            // Read entire file to parse frontmatter
-            let content = std::fs::read_to_string(path)?;
-            return Ok(extract_markdown_with_frontmatter(&content));
-        }
-
-        // Non-Markdown: use efficient line-by-line reading
-        let file = std::fs::File::open(path)?;
-        let reader = BufReader::new(file);
-
-        Ok(reader
-            .lines()
-            .enumerate()
-            .filter_map(|(i, line)| {
-                line.ok().map(|content| IndexLine {
-                    archive_path: None,
-                    line_number: i + 1,
-                    content,
-                })
+    Ok(reader
+        .lines()
+        .enumerate()
+        .filter_map(|(i, line)| {
+            line.ok().map(|content| IndexLine {
+                archive_path: None,
+                line_number: i + 1,
+                content,
             })
-            .collect())
-    }
+        })
+        .collect())
 }
 
-/// Convert a string to IndexLines (used by text extractor and archive text entries).
+/// Check if a file path is likely a text file based on extension.
+pub fn accepts(path: &Path) -> bool {
+    // Fast path: known text extensions
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        if is_text_ext(ext) {
+            return true;
+        }
+        // Known binary extensions are not text
+        if is_binary_ext(ext) {
+            return false;
+        }
+    }
+    // Fallback: sniff first 8 KB
+    if let Ok(mut f) = std::fs::File::open(path) {
+        let mut buf = vec![0u8; 8192];
+        if let Ok(n) = f.read(&mut buf) {
+            buf.truncate(n);
+            return content_inspector::inspect(&buf).is_text();
+        }
+    }
+    false
+}
+
+/// Convert a string to IndexLines (used by archive extractor for text entries).
 pub fn lines_from_str(content: &str, archive_path: Option<String>) -> Vec<IndexLine> {
     content
         .lines()

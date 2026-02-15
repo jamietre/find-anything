@@ -1,0 +1,25 @@
+[package]
+name = "find-extract-text"
+version = "0.1.7"
+edition = "2021"
+
+[lib]
+name = "find_extract_text"
+path = "src/lib.rs"
+
+[[bin]]
+name = "find-extract-text"
+path = "src/main.rs"
+
+[dependencies]
+find-common = { path = "../../common" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# For Markdown frontmatter
+gray_matter = "0.2"
+serde_yaml = "0.9"
+
+# For text detection
+content_inspector = { workspace = true }

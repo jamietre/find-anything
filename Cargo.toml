@@ -3,6 +3,8 @@ members = [
     "crates/common",
     "crates/server",
     "crates/client",
+    "crates/extractors/text",
+    "crates/extractors/pdf",
 ]
 resolver = "2"
 

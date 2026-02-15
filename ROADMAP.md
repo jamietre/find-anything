@@ -262,6 +262,7 @@ These are less structured ideas that may evolve into formal features.
 
 ### Additional Content Types
 - [x] Video metadata (MP4, MKV duration, resolution, codecs) — completed v0.1.4
+  [ ] HTML optimization (don't index tags or atttributes, just actual text content)
 - [ ] Office documents (DOCX, XLSX, PPTX via external tools)
 - [ ] Markdown frontmatter extraction
 - [ ] Code symbol indexing (functions, classes, imports)
