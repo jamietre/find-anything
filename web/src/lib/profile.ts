@@ -3,6 +3,7 @@ import { writable } from 'svelte/store';
 export interface UserProfile {
 	sidebarWidth?: number;
 	sourceBaseUrls?: Record<string, string>;
+	wordWrap?: boolean;
 }
 
 const STORAGE_KEY = 'find-anything.profile';

@@ -1,28 +1,6 @@
 # TODO - High Priority
 
-## 1. Word Wrap in File Viewer
-
-**Current behavior:**
-- Long lines overflow horizontally, require scrolling
-
-**Desired behavior:**
-- Toggle word wrap on/off
-- Preserve syntax highlighting and line numbers when wrapped
-- Remember preference per file type or globally
-
-**Implementation:**
-- Add word-wrap toggle button to FileViewer toolbar
-- CSS: `white-space: pre-wrap` vs. `white-space: pre`
-- Store preference in localStorage or profile
-- Consider: wrap only for text files, not code?
-
-**Files to modify:**
-- `web/src/lib/FileViewer.svelte` - Add toggle button and CSS
-- `web/src/lib/profile.ts` - Store wrap preference
-
----
-
-## 2. Content Archive Subfolder Strategy
+## 1. Content Archive Subfolder Strategy
 
 **Current problem:**
 - All `content_NNNNN.zip` archives in flat `data_dir/sources/` folder

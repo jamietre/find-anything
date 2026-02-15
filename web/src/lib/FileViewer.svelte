@@ -8,6 +8,7 @@
 		firstLine,
 		toggleLine
 	} from '$lib/lineSelection';
+	import { profile } from '$lib/profile';
 
 	export let source: string;
 	export let path: string;
@@ -21,6 +22,13 @@
 	let highlightedCode = '';
 	/** Maps 0-based render index → line_number */
 	let lineOffsets: number[] = [];
+
+	// Word wrap preference (default: false for code, true for text files)
+	$: wordWrap = $profile.wordWrap ?? false;
+
+	function toggleWordWrap() {
+		$profile.wordWrap = !wordWrap;
+	}
 
 	onMount(async () => {
 		try {
@@ -71,6 +79,11 @@
 	{:else if error}
 		<div class="status error">{error}</div>
 	{:else}
+		<div class="toolbar">
+			<button class="toolbar-btn" on:click={toggleWordWrap} title="Toggle word wrap">
+				{wordWrap ? '⊟' : '⊞'} Wrap
+			</button>
+		</div>
 		<div class="code-container">
 			<table class="code-table" cellspacing="0" cellpadding="0">
 				<tbody>
@@ -86,7 +99,7 @@
 						>
 							<td class="td-ln">{lineNum}</td>
 							<td class="td-arrow">{lineNum === arrowLine ? '▶' : ''}</td>
-							<td class="td-code"><code>{@html line}</code></td>
+							<td class="td-code" class:wrap={wordWrap}><code>{@html line}</code></td>
 						</tr>
 					{/each}
 				</tbody>
@@ -162,5 +175,38 @@
 		padding: 0 16px 0 4px;
 		white-space: pre;
 		vertical-align: top;
+	}
+
+	.td-code.wrap {
+		white-space: pre-wrap;
+		word-break: break-word;
+	}
+
+	.toolbar {
+		display: flex;
+		gap: 8px;
+		padding: 8px 12px;
+		border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+		background: var(--bg-secondary, rgba(0, 0, 0, 0.2));
+	}
+
+	.toolbar-btn {
+		padding: 4px 12px;
+		font-size: 12px;
+		font-family: var(--font-mono);
+		background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+		border: 1px solid var(--border, rgba(255, 255, 255, 0.15));
+		border-radius: 4px;
+		color: var(--text);
+		cursor: pointer;
+		transition: background 0.15s;
+	}
+
+	.toolbar-btn:hover {
+		background: var(--bg-hover-strong, rgba(255, 255, 255, 0.1));
+	}
+
+	.toolbar-btn:active {
+		transform: translateY(1px);
 	}
 </style>

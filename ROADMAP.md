@@ -60,6 +60,13 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Metadata format:** `[VIDEO:key] value` (matching audio/image pattern)
 - **Kind detection:** Video files now return "video" from `detect_kind()`
 
+### ✅ Word Wrap Toggle (v0.1.5)
+- **Word wrap toggle button** — Toolbar button in FileViewer to toggle word wrapping on/off
+- **CSS switching** — Dynamically applies `white-space: pre-wrap` when enabled, `white-space: pre` when disabled
+- **Persistent preference** — Word wrap state saved to localStorage via user profile
+- **Syntax preservation** — Line numbers and syntax highlighting preserved when wrapped
+- **Default behavior** — Defaults to off (no wrap) to preserve current code viewing experience
+
 ### ✅ Investigations
 
 **Archive Index Compression** (2026-02-14)
