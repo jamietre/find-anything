@@ -136,12 +136,14 @@
 
 	.context-lines {
 		background: var(--bg);
+		overflow: hidden;
 	}
 
 	.line {
 		display: flex;
 		align-items: baseline;
 		padding: 1px 0;
+		overflow: hidden;
 	}
 
 	.line.match {
@@ -175,7 +177,7 @@
 	.lc {
 		padding: 0 12px 0 4px;
 		white-space: pre;
-		overflow-x: auto;
+		overflow: hidden;
 		flex: 1;
 	}
 </style>
