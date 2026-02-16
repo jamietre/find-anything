@@ -144,6 +144,7 @@
 		align-items: baseline;
 		padding: 1px 0;
 		overflow: hidden;
+		min-width: 0;
 	}
 
 	.line.match {
@@ -178,6 +179,8 @@
 		padding: 0 12px 0 4px;
 		white-space: pre;
 		overflow: hidden;
+		text-overflow: ellipsis;
 		flex: 1;
+		min-width: 0;
 	}
 </style>

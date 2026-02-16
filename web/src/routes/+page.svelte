@@ -35,9 +35,12 @@
 	let totalResults = 0;
 	let searching = false;
 	let isTyping = false;
+	let isLoadingMore = false;
 	let searchError: string | null = null;
 
 	$: isSearchActive = isTyping || searching;
+	$: canLoadMore = results.length < totalResults;
+	$: nextBatchSize = canLoadMore ? Math.min(500, totalResults - results.length) : 0;
 
 	// File / directory detail state
 	let fileSource = '';
@@ -235,7 +238,8 @@
 		q: string,
 		m: string,
 		srcs: string[],
-		push = true
+		push = true,
+		append = false
 	) {
 		if (q.trim().length < 3) {
 			results = [];
@@ -243,12 +247,31 @@
 			searchError = null;
 			return;
 		}
-		searching = true;
+
+		if (append) {
+			isLoadingMore = true;
+		} else {
+			searching = true;
+		}
+
 		searchError = null;
 		if (push) pushState();
 		try {
-			const resp = await search({ q, mode: m, sources: srcs, limit: 50 });
-			results = resp.results;
+			// Use offset-based pagination for "Load More"
+			// Initial search: offset=0, limit=50
+			// Load more: offset=current results length, limit=min(500, remaining)
+			const offset = append ? results.length : 0;
+			const limit = append ? Math.min(500, totalResults - results.length) : 50;
+
+			const resp = await search({ q, mode: m, sources: srcs, limit, offset });
+
+			if (append) {
+				// Append new results to existing ones
+				results = [...results, ...resp.results];
+			} else {
+				// Replace results for new search
+				results = resp.results;
+			}
 			totalResults = resp.total;
 			// Only switch to results view on interactive searches, not state restoration.
 			if (push) view = 'results';
@@ -256,7 +279,11 @@
 			searchError = String(e);
 			if (push) view = 'results';
 		} finally {
-			searching = false;
+			if (append) {
+				isLoadingMore = false;
+			} else {
+				searching = false;
+			}
 		}
 	}
 
@@ -269,6 +296,10 @@
 	function handleSourceChange(e: CustomEvent<string[]>) {
 		selectedSources = e.detail;
 		if (query.trim()) doSearch(query, mode, selectedSources);
+	}
+
+	function loadMore() {
+		doSearch(query, mode, selectedSources, false, true);
 	}
 
 	// ── File viewer ─────────────────────────────────────────────────────────────
@@ -449,8 +480,22 @@
 			{#if searchError}
 				<div class="status error">{searchError}</div>
 			{:else if query.trim().length >= 3}
-				<div class="result-meta">{totalResults} result{totalResults !== 1 ? 's' : ''}</div>
-				<ResultList {results} searching={isSearchActive} on:open={openFile} />
+				<div class="result-meta">
+					{#if results.length < totalResults}
+						Showing {results.length.toLocaleString()} of {totalResults.toLocaleString()} results
+					{:else}
+						{totalResults.toLocaleString()} result{totalResults !== 1 ? 's' : ''}
+					{/if}
+				</div>
+				<ResultList
+					{results}
+					{totalResults}
+					{nextBatchSize}
+					{isLoadingMore}
+					searching={isSearchActive}
+					on:open={openFile}
+					on:loadmore={loadMore}
+				/>
 			{/if}
 		</div>
 	{/if}
@@ -509,6 +554,7 @@
 	.content {
 		flex: 1;
 		overflow-y: auto;
+		overflow-x: hidden;
 		padding: 0 16px;
 		width: 100%;
 	}
