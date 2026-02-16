@@ -35,20 +35,27 @@ pub fn extract(path: &Path, max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>
         .and_then(|n| n.to_str())
         .unwrap_or("");
 
-    let content = if version_info.is_empty() {
-        // No metadata, just index the filename
+    // Build the full metadata content
+    let full_content = if version_info.is_empty() {
+        // No metadata, just the filename
         filename.to_string()
     } else {
-        // Prepend filename to metadata so both are searchable
+        // Prepend filename to metadata
         format!("{}\n{}", filename, version_info)
     };
 
-    // Return as single IndexLine at line 0
-    Ok(vec![IndexLine {
-        line_number: 0,
-        content,
-        archive_path: None,
-    }])
+    // Split into multiple IndexLine objects (one per line) all at line_number=0
+    // This ensures all metadata lines are displayed in the file viewer
+    let lines: Vec<IndexLine> = full_content
+        .lines()
+        .map(|line| IndexLine {
+            line_number: 0,
+            content: line.to_string(),
+            archive_path: None,
+        })
+        .collect();
+
+    Ok(lines)
 }
 
 /// Check if a file is a PE executable based on extension.
