@@ -10,6 +10,8 @@ members = [
     "crates/extractors/html",
     "crates/extractors/office",
     "crates/extractors/epub",
+    "crates/windows/service",
+    "crates/windows/tray",
 ]
 resolver = "2"
 

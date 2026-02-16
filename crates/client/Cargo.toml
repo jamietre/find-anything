@@ -39,3 +39,7 @@ toml        = "0.8"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 colored     = "2"
 flate2      = "1"
+
+[target.'cfg(windows)'.dependencies]
+find-windows-service = { path = "../windows/service" }
+windows-service = "0.8"

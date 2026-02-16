@@ -31,6 +31,29 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
 
+  build-windows:
+    name: Build check (Windows x86_64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: windows-x86_64-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: windows-x86_64-cargo-
+
+      - name: Build (Windows)
+        run: cargo build --workspace --target x86_64-pc-windows-msvc
+
   web:
     name: Type-check (Web)
     runs-on: ubuntu-24.04

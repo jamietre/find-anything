@@ -16,15 +16,23 @@ jobs:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             artifact_name: linux-x86_64
+            ext: ""
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             artifact_name: linux-aarch64
+            ext: ""
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: macos-aarch64
+            ext: ""
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: macos-x86_64
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: windows-x86_64
+            ext: ".exe"
 
     steps:
       - uses: actions/checkout@v4
@@ -51,26 +59,39 @@ jobs:
           VERSION="${{ github.ref_name }}"
           ARTIFACT="find-anything-${VERSION}-${{ matrix.artifact_name }}"
           BINDIR="target/${{ matrix.target }}/release"
+          EXT="${{ matrix.ext }}"
           BINARIES=(
-            find
-            find-scan
-            find-watch
-            find-server
-            find-extract-text
-            find-extract-pdf
-            find-extract-media
-            find-extract-archive
+            "find"
+            "find-scan"
+            "find-watch"
+            "find-server"
+            "find-extract-text"
+            "find-extract-pdf"
+            "find-extract-media"
+            "find-extract-archive"
+            "find-extract-html"
+            "find-extract-office"
+            "find-extract-epub"
           )
 
           mkdir -p "dist/${ARTIFACT}"
           for bin in "${BINARIES[@]}"; do
-            cp "${BINDIR}/${bin}" "dist/${ARTIFACT}/"
+            cp "${BINDIR}/${bin}${EXT}" "dist/${ARTIFACT}/"
           done
 
-          cd dist
-          tar -czf "${ARTIFACT}.tar.gz" "${ARTIFACT}/"
-          echo "ARTIFACT_PATH=dist/${ARTIFACT}.tar.gz" >> "$GITHUB_ENV"
-          echo "ARTIFACT_NAME=${ARTIFACT}.tar.gz" >> "$GITHUB_ENV"
+          # Windows: also include find-tray.exe; package as zip.
+          if [[ "$EXT" == ".exe" ]]; then
+            cp "${BINDIR}/find-tray${EXT}" "dist/${ARTIFACT}/" 2>/dev/null || true
+            cd dist
+            7z a "${ARTIFACT}.zip" "${ARTIFACT}/"
+            echo "ARTIFACT_PATH=dist/${ARTIFACT}.zip" >> "$GITHUB_ENV"
+            echo "ARTIFACT_NAME=${ARTIFACT}.zip" >> "$GITHUB_ENV"
+          else
+            cd dist
+            tar -czf "${ARTIFACT}.tar.gz" "${ARTIFACT}/"
+            echo "ARTIFACT_PATH=dist/${ARTIFACT}.tar.gz" >> "$GITHUB_ENV"
+            echo "ARTIFACT_NAME=${ARTIFACT}.tar.gz" >> "$GITHUB_ENV"
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -94,5 +115,7 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*.tar.gz
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
           generate_release_notes: true

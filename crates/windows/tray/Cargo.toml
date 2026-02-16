@@ -1,0 +1,25 @@
+[package]
+name = "find-tray-win"
+version = "0.2.1"
+edition = "2021"
+
+[[bin]]
+name = "find-tray"
+path = "src/main.rs"
+
+# find-tray is Windows-only; the stub main on non-Windows just prints an error.
+[target.'cfg(windows)'.dependencies]
+find-common = { path = "../../common" }
+find-windows-service = { path = "../service" }
+tray-icon = "0.21"
+winit = "0.30"
+windows-service = "0.8"
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
+toml = "0.8"
+image = { version = "0.25", features = ["ico"] }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+windows-sys = { version = "0.52", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }

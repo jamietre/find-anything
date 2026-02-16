@@ -1,0 +1,17 @@
+[package]
+name = "find-windows-service"
+version = "0.2.1"
+edition = "2021"
+
+[lib]
+name = "find_windows_service"
+path = "src/lib.rs"
+
+[target.'cfg(windows)'.dependencies]
+find-common = { path = "../../common" }
+windows-service = "0.8"
+winreg = "0.52"
+anyhow = { workspace = true }
+tokio = { workspace = true }
+toml = "0.8"
+tracing = { workspace = true }

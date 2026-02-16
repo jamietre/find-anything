@@ -95,6 +95,14 @@ This document tracks the development roadmap for find-anything, from completed f
 - **`find-extract-epub`** — Parses `META-INF/container.xml` → OPF → spine → XHTML text walk; indexes `[EPUB:title/creator/publisher/language]` metadata
 - **New `"document"` kind** — Added to `detect_kind_from_ext` for docx/xlsx/xls/xlsm/pptx/epub
 
+### ✅ Windows Support (v0.2.2)
+- **Windows build pipeline** — Native x86_64-pc-windows-msvc builds via GitHub Actions `windows-latest` runner; ZIP artifacts with all binaries
+- **`find-watch` Windows Service** — Self-installing via `windows-service` crate; `install`/`uninstall`/`service-run` subcommands; integrates with Windows Service Control Manager
+- **`find-tray` system tray app** — Windows-only GUI using `tray-icon` crate; polls service status and server API; provides Run Full Scan, Start/Stop Watcher, Open Config, and Quit actions
+- **PowerShell automation** — `install-windows.ps1` downloads latest release from GitHub, extracts to `%LOCALAPPDATA%`, creates config template, installs service; `uninstall-windows.ps1` removes service and cleans up
+- **Auto-start integration** — Tray app registered in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` during service installation
+- **Comprehensive documentation** — `docs/windows/README.md` with quick start, service management, troubleshooting, and Windows-specific differences
+
 ### ✅ Investigations
 - **Archive Index Compression** — FTS5 trigram index is inherently ~3x text size; current architecture is optimal. No changes needed.
 - **Audio Metadata Consolidation** — `audio-video-metadata` crate lacks rich music tags; current per-format extractors kept.
@@ -117,6 +125,10 @@ Beyond the release pipeline, the getting-started experience needs polish:
 
 ## Medium-term
 
+### Performance
+- allow passing multiple files to extractors to avoid loading plugin repeatedly when processeing long lists of files
+- what does current arch do in these situations? worth doing?
+
 ### Search Quality Improvements
 - Recency bias (recently modified files rank higher)
 - Result deduplication across sources
@@ -124,17 +136,13 @@ Beyond the release pipeline, the getting-started experience needs polish:
 - Boolean operators (AND, OR, NOT) in query syntax
 
 ### Web UI Phase 2
+- debounce searching while typing
+- improve search results updates to avoid clearing screen first (flip on new results content in another container and make old results invisible?)
 - Search suggestions / autocomplete
 - Recent searches dropdown
 - Command palette (Cmd+K style)
 - Search result export (JSON, CSV)
 - Advanced search filter UI
-
-### Windows Support
-- Windows Service wrapper for `find-watch`
-- Task Scheduler integration for periodic scans
-- MSI installer / WiX toolset
-- PowerShell setup scripts
 
 ---
 
@@ -146,8 +154,9 @@ operation; opt-in via `ocr = true` in config. Background processing with
 content-hash caching to avoid re-OCR.
 
 ### Multi-user & Authentication
-Per-user accounts, token rotation, role-based access control (read-only/admin),
+- Per-user accounts, token rotation, role-based access control (read-only/admin),
 audit logging.
+- Encryption of data archives (and index?)
 
 ### Advanced Integrations
 - Webhook notifications on new matches for saved searches
