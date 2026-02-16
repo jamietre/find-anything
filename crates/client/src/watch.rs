@@ -363,6 +363,7 @@ fn extractor_binary_for(path: &Path, extractor_dir: &Option<String>) -> String {
         | "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "m4v" | "flv" => {
             "find-extract-media"
         }
+        "html" | "htm" | "xhtml" => "find-extract-html",
         _ => "find-extract-text",
     };
 
