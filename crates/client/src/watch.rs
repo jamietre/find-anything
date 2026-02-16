@@ -365,6 +365,7 @@ fn extractor_binary_for(path: &Path, extractor_dir: &Option<String>) -> String {
         }
         "html" | "htm" | "xhtml" => "find-extract-html",
         "docx" | "xlsx" | "xls" | "xlsm" | "pptx" => "find-extract-office",
+        "epub" => "find-extract-epub",
         _ => "find-extract-text",
     };
 

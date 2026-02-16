@@ -81,6 +81,20 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Subprocess extraction** — Spawns appropriate `find-extract-*` binary per file type; resolves binary next to executable, then PATH
 - **Systemd unit files** — User-mode (`~/.config/systemd/user/`) and system-mode (`/etc/systemd/system/`) units with installation README
 
+### ✅ GitHub CI & Release Pipeline (v0.2.0)
+- **GitHub Actions CI** — `cargo test --workspace` + `cargo clippy -- -D warnings` + web type-check on every push/PR
+- **Binary release matrix** — Linux x86_64, Linux aarch64 (native ARM runner), macOS arm64, macOS x86_64 — builds all 8 binaries into platform tarballs
+- **GitHub Releases** — Automated release creation on `v*.*.*` tags via `softprops/action-gh-release`
+- **Install script** — `curl -fsSL .../install.sh | sh` auto-detects platform, fetches latest release, extracts to `~/.local/bin`
+- **Docker** — Multi-stage `find-server` image (rust:slim builder → debian:bookworm-slim runtime), `docker-compose.yml` with data volume
+- **`server.toml.example`** — Annotated config template for Docker users
+
+### ✅ Format Extractors: HTML, Office, EPUB (v0.2.1)
+- **`find-extract-html`** — Strips tags via `scraper` (html5ever); extracts `[HTML:title]`/`[HTML:description]` metadata, visible paragraph/heading/list text; skips nav/header/footer/script/style
+- **`find-extract-office`** — DOCX (zip+quick-xml, `<w:t>/<w:p>` paragraphs, `dc:title`/`dc:creator` metadata), XLSX/XLS/XLSM (calamine rows, sheet metadata), PPTX (zip+quick-xml, `<a:t>/<a:p>`, per-slide metadata)
+- **`find-extract-epub`** — Parses `META-INF/container.xml` → OPF → spine → XHTML text walk; indexes `[EPUB:title/creator/publisher/language]` metadata
+- **New `"document"` kind** — Added to `detect_kind_from_ext` for docx/xlsx/xls/xlsm/pptx/epub
+
 ### ✅ Investigations
 - **Archive Index Compression** — FTS5 trigram index is inherently ~3x text size; current architecture is optimal. No changes needed.
 - **Audio Metadata Consolidation** — `audio-video-metadata` crate lacks rich music tags; current per-format extractors kept.
@@ -89,62 +103,8 @@ This document tracks the development roadmap for find-anything, from completed f
 
 ## Near-term Priorities
 
-### 🔴 GitHub CI & Release Infrastructure
-**Status:** Not started — highest priority gate for quality and adoption
-
-A project people can't easily install won't get used. Before pushing for wider
-adoption, establish a solid release pipeline:
-
-- **GitHub Actions CI** — On every push/PR: `cargo test`, `cargo clippy -- -D warnings`, `cargo build --release`. Fail fast on regressions.
-- **Pre-built binary releases** — GitHub Releases workflow triggered on version tags. Build Linux (x86_64, aarch64) and macOS (x86_64, aarch64) binaries. Upload as release assets.
-- **Install script** — `curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh` that downloads the right binary for the current platform and drops it in `~/.local/bin` (or `/usr/local/bin` with sudo).
-- **Docker image** — `find-server` as a minimal Docker image (distroless or Alpine). `docker run -v data:/data find-server` just works.
-- **Docker Compose** — `docker-compose.yml` for running server + an initial scan container side-by-side.
-
-**Plans to create:** `017-ci-release-pipeline.md`
-
----
-
-### 🔴 Additional Format Support
-**Status:** Not started — high user value, builds on extractor architecture
-
-The extractor crate model (plan 015) makes adding formats straightforward. Add
-each as a new extractor binary + library crate following the established pattern.
-
-#### HTML (improved)
-**Current behavior:** HTML files are treated as text — tags and attributes are
-indexed verbatim alongside content, adding noise to results.
-
-**Target:** Strip all tags; index visible text only. Preserve `<title>`,
-`<meta name="description">`, `<h1>`–`<h6>` as structured metadata lines.
-Crate: `scraper` or `html5ever` (both pure Rust, no system deps).
-
-**Plan to create:** `018-html-extractor.md`
-
-#### Office Documents (DOCX, XLSX, PPTX)
-**High value** — most knowledge workers have large collections of Office files.
-All three formats are ZIP-based XML, so no native libs or system deps required.
-
-- **DOCX** — Extract `word/document.xml`; strip XML; index paragraphs as lines. Crate: `docx-rs` (read-only) or parse zip+xml directly.
-- **XLSX** — Extract sheet cell values (text + number cells). Crate: `calamine` (pure Rust, excellent).
-- **PPTX** — Extract slide text from `ppt/slides/slide*.xml`. Pure zip+xml.
-
-**Plan to create:** `019-office-document-extractor.md`
-
-#### EPUB
-**High value** for anyone with an ebook collection. EPUB is a ZIP of XHTML
-files; extracting text is the same problem as HTML, just wrapped.
-
-- Parse `content.opf` for spine order and metadata (title, author, publisher)
-- Extract text from each XHTML chapter
-- Index metadata as `[EPUB:title]` / `[EPUB:author]` lines
-
-**Plan to create:** `020-epub-extractor.md`
-
----
-
 ### 🟡 Installation & End-User Experience
-**Status:** Partially done (systemd units added in v0.1.9)
+**Status:** Partially done (systemd units, install script, Docker in v0.2.0)
 
 Beyond the release pipeline, the getting-started experience needs polish:
 
@@ -216,9 +176,9 @@ audit logging.
 - [x] Audio metadata (MP3, FLAC, M4A)
 - [x] Video metadata (MP4, MKV, WebM, etc.) — v0.1.4
 - [x] Markdown frontmatter extraction — v0.1.7
-- [ ] HTML — improved (strip tags, text-only) — **near-term**
-- [ ] DOCX, XLSX, PPTX — **near-term**
-- [ ] EPUB — **near-term**
+- [x] HTML — improved (strip tags, text-only) — v0.2.1
+- [x] DOCX, XLSX, PPTX — v0.2.1
+- [x] EPUB — v0.2.1
 - [ ] Code symbol indexing (functions, classes, imports)
 - [ ] Email (mbox, PST) indexing
 
@@ -237,7 +197,7 @@ audit logging.
 - [ ] Backup and restore utilities
 
 ### Developer Tools
-- [ ] Docker Compose — **near-term**
+- [x] Docker Compose — v0.2.0
 - [ ] CLI autocomplete (bash, zsh, fish)
 - [ ] Python / JavaScript client library
 - [ ] VS Code extension

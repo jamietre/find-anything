@@ -1,5 +1,6 @@
 mod archive;
 mod db;
+mod fuzzy;
 mod routes;
 mod worker;
 

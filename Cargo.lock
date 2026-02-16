@@ -711,6 +711,7 @@ dependencies = [
  "colored",
  "find-common",
  "find-extract-archive",
+ "find-extract-epub",
  "find-extract-html",
  "find-extract-media",
  "find-extract-office",
@@ -734,7 +735,6 @@ name = "find-common"
 version = "0.1.9"
 dependencies = [
  "anyhow",
- "nucleo-matcher",
  "serde",
  "serde_json",
  "tracing",
@@ -758,6 +758,18 @@ dependencies = [
  "tempfile",
  "tracing",
  "xz2",
+ "zip",
+]
+
+[[package]]
+name = "find-extract-epub"
+version = "0.1.9"
+dependencies = [
+ "anyhow",
+ "find-common",
+ "quick-xml 0.37.5",
+ "serde",
+ "serde_json",
  "zip",
 ]
 

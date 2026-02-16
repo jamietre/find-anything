@@ -85,6 +85,9 @@ cargo build --release
 | `find-extract-pdf` | PDF extractor | client (used by find-watch) |
 | `find-extract-media` | Image/audio/video metadata extractor | client (used by find-watch) |
 | `find-extract-archive` | ZIP/TAR/7Z extractor | client (used by find-watch) |
+| `find-extract-html` | HTML extractor | client (used by find-watch) |
+| `find-extract-office` | Office document extractor (DOCX/XLSX/PPTX) | client (used by find-watch) |
+| `find-extract-epub` | EPUB ebook extractor | client (used by find-watch) |
 
 The `find-extract-*` binaries are used by `find-watch` to extract file content
 in subprocesses. They must be co-located with `find-watch` or on PATH.
@@ -192,6 +195,9 @@ systemctl --user enable --now find-server find-watch
 |------|-----------------|
 | Text, source code, Markdown | Full content; Markdown YAML frontmatter as structured fields |
 | PDF | Full text content |
+| HTML (.html, .htm, .xhtml) | Visible text from headings/paragraphs; title and description as metadata |
+| Office (DOCX, XLSX, XLS, XLSM, PPTX) | Paragraphs, rows, slide text; document title/author as metadata |
+| EPUB | Full chapter text; title, creator, publisher, language as metadata |
 | Images (JPEG, PNG, TIFF, HEIC, RAW) | EXIF metadata (camera, GPS, dates) |
 | Audio (MP3, FLAC, M4A, OGG) | ID3/Vorbis/MP4 tags (title, artist, album) |
 | Video (MP4, MKV, WebM, AVI, MOV) | Format, resolution, duration |

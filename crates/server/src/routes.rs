@@ -10,13 +10,12 @@ use axum::{
 use serde::Deserialize;
 use tokio::task::spawn_blocking;
 
-use find_common::{
-    api::{
-        ContextBatchRequest, ContextBatchResponse, ContextBatchResult,
-        ContextResponse, FileResponse, SearchResponse, SearchResult, SourceInfo, TreeResponse,
-    },
-    fuzzy::FuzzyScorer,
+use find_common::api::{
+    ContextBatchRequest, ContextBatchResponse, ContextBatchResult,
+    ContextResponse, FileResponse, SearchResponse, SearchResult, SourceInfo, TreeResponse,
 };
+
+use crate::fuzzy::FuzzyScorer;
 
 use crate::{archive::ArchiveManager, db, AppState};
 
