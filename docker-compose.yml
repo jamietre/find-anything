@@ -1,0 +1,24 @@
+# find-anything server deployment
+#
+# Quick start:
+#   1. Copy server.toml.example to server.toml and fill in your token
+#   2. docker compose up -d
+#   3. Run find-scan locally: find-scan --config client.toml
+#
+# The server listens on http://localhost:8080.
+# Point find-scan and find-watch at that URL in their client.toml.
+
+services:
+  server:
+    build: .
+    image: find-anything-server:latest
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      # Persistent index storage
+      - ./data:/data
+      # Server config (see server.toml.example)
+      - ./server.toml:/etc/find-anything/server.toml:ro
+    restart: unless-stopped
+    environment:
+      RUST_LOG: find_server=info
