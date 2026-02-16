@@ -34,7 +34,10 @@
 	let results: SearchResult[] = [];
 	let totalResults = 0;
 	let searching = false;
+	let isTyping = false;
 	let searchError: string | null = null;
+
+	$: isSearchActive = isTyping || searching;
 
 	// File / directory detail state
 	let fileSource = '';
@@ -378,7 +381,7 @@
 				on:click={() => (showTree = !showTree)}
 			>⊞</button>
 			<div class="search-wrap">
-				<SearchBox {query} {mode} on:change={handleSearchChange} />
+				<SearchBox {query} {mode} {searching} bind:isTyping on:change={handleSearchChange} />
 			</div>
 			{#if sourceNames.length > 0}
 				<SourceSelector sources={sourceNames} selected={selectedSources} on:change={handleSourceChange} />
@@ -435,7 +438,7 @@
 		<div class="topbar">
 			<span class="logo">find-anything</span>
 			<div class="search-wrap">
-				<SearchBox {query} {mode} on:change={handleSearchChange} />
+				<SearchBox {query} {mode} {searching} bind:isTyping on:change={handleSearchChange} />
 			</div>
 			{#if sourceNames.length > 0}
 				<SourceSelector sources={sourceNames} selected={selectedSources} on:change={handleSourceChange} />
@@ -443,13 +446,11 @@
 			<button class="gear-btn" title="Settings" on:click={() => (showSettings = !showSettings)}>⚙</button>
 		</div>
 		<div class="content">
-			{#if searching}
-				<div class="status">Searching…</div>
-			{:else if searchError}
+			{#if searchError}
 				<div class="status error">{searchError}</div>
 			{:else if query.trim().length >= 3}
 				<div class="result-meta">{totalResults} result{totalResults !== 1 ? 's' : ''}</div>
-				<ResultList {results} on:open={openFile} />
+				<ResultList {results} searching={isSearchActive} on:open={openFile} />
 			{/if}
 		</div>
 	{/if}

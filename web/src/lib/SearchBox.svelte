@@ -3,6 +3,8 @@
 
 	export let query = '';
 	export let mode = 'fuzzy';
+	export let searching = false;
+	export let isTyping = false;
 
 	const dispatch = createEventDispatcher<{
 		change: { query: string; mode: string };
@@ -11,13 +13,16 @@
 	let debounceTimer: ReturnType<typeof setTimeout>;
 
 	function handleInput() {
+		isTyping = true;
 		clearTimeout(debounceTimer);
 		debounceTimer = setTimeout(() => {
+			isTyping = false;
 			dispatch('change', { query, mode });
-		}, 200);
+		}, 500);
 	}
 
 	function handleModeChange() {
+		isTyping = false;
 		dispatch('change', { query, mode });
 	}
 
@@ -26,6 +31,8 @@
 	}
 
 	let inputEl: HTMLInputElement;
+
+	$: showSpinner = isTyping || searching;
 </script>
 
 <div class="search-box">
@@ -44,6 +51,14 @@
 		spellcheck="false"
 		class="search-input"
 	/>
+	{#if showSpinner}
+		<div class="spinner" title="Searching...">
+			<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+				<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" opacity="0.25"/>
+				<path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+			</svg>
+		</div>
+	{/if}
 </div>
 
 <style>
@@ -81,5 +96,27 @@
 
 	.mode-select:hover {
 		color: var(--text);
+	}
+
+	.spinner {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 32px;
+		height: 32px;
+		margin-right: 4px;
+		flex-shrink: 0;
+	}
+
+	.spinner svg {
+		width: 16px;
+		height: 16px;
+		color: var(--accent);
+		animation: spin 0.8s linear infinite;
+	}
+
+	@keyframes spin {
+		from { transform: rotate(0deg); }
+		to { transform: rotate(360deg); }
 	}
 </style>
