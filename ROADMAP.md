@@ -48,270 +48,203 @@ This document tracks the development roadmap for find-anything, from completed f
 ### ✅ Archive Navigation & Path Refactoring (v0.1.3)
 - **Archive node highlighting** — Clicking nested archive members now correctly highlights the actual file, not the outermost archive
 - **Split click behavior** — Archive tree nodes: arrow toggles expansion, name opens/highlights node
-- **Improved fuzzy scoring** — Exact substring matches get massive score boost; searching "inner.zip" now correctly ranks files containing that string at top
-- **FilePath class refactor** — Unified path representation eliminates sync issues between split (path+archivePath) and composite (path::member) formats
-- **Consistent archive behavior** — Ctrl+P and clicking archive nodes both expand to one level and show contents
+- **Improved fuzzy scoring** — Exact substring matches get massive score boost
+- **FilePath class refactor** — Unified path representation eliminates sync issues between split and composite formats
+- **Archive members as first-class files** — Composite `archive.zip::member.txt` paths; each member has its own `file_id`, searchable by name, browsable in the tree
 
 ### ✅ Video Metadata Extraction (v0.1.4)
-- **Video metadata indexing** — Extract and index technical metadata from video files
-- **audio-video-metadata crate** — Lightweight dependency for format detection (no heavy ffmpeg binding)
-- **Metadata extracted:** Format type, resolution (width×height), duration (minutes:seconds)
-- **Supported formats:** MP4, M4V, MKV, WebM, OGV, OGG, AVI, MOV, WMV, FLV, MPG, MPEG, 3GP
-- **Metadata format:** `[VIDEO:key] value` (matching audio/image pattern)
-- **Kind detection:** Video files now return "video" from `detect_kind()`
+- **Video metadata indexing** — Format type, resolution, duration from MP4, MKV, WebM, AVI, MOV and more
 
-### ✅ Word Wrap Toggle (v0.1.5)
-- **Word wrap toggle button** — Toolbar button in FileViewer to toggle word wrapping on/off
-- **CSS switching** — Dynamically applies `white-space: pre-wrap` when enabled, `white-space: pre` when disabled
-- **Persistent preference** — Word wrap state saved to localStorage via user profile
-- **Syntax preservation** — Line numbers and syntax highlighting preserved when wrapped
-- **Default behavior** — Defaults to off (no wrap) to preserve current code viewing experience
+### ✅ Word Wrap Toggle & UX (v0.1.5)
+- **Word wrap toggle** — Toolbar button with localStorage persistence
+- **Source selector dropdown** — Replaced pill-based filter with compact, scalable dropdown
 
 ### ✅ Archive Subfolder Organization (v0.1.6)
-- **Thousands-based subfolders** — Archives organized as `sources/content/NNNN/` where NNNN = 4-digit zero-padded archive_num / 1000
-- **Scalable structure** — Each subfolder contains up to 1000 archives (e.g., `content/0000/` → archives 0-999, `content/0001/` → archives 1000-1999)
-- **High capacity** — Supports up to 9,999,000 archives (~99.99 TB compressed content)
-- **Automatic folder creation** — Subfolders created as needed when archives rotate
-- **Updated path resolution** — `archive_path_for_number()` calculates proper subfolder paths
-- **Subfolder scanning** — Metrics and archive discovery scan across all subfolders
-- **Breaking change** — Requires re-indexing; old flat archive structure not backward compatible
+- **Thousands-based subfolders** — `sources/content/NNNN/` structure; up to ~99.99 TB capacity
+- **Source selector** — Dropdown with checkboxes replaces pills; scales to many sources
 
-### ✅ Source Selector Dropdown (v0.1.6)
-- **Dropdown with checkboxes** — Replaced pill-based source filter with compact dropdown selector
-- **Scalable to many sources** — Dropdown scrolls and handles dozens of sources gracefully
-- **Clear filter state** — Shows "All sources", "2 of 5 sources", or single source name in button
-- **Visual indicator** — Badge shows number of selected sources when filtering is active
-- **Quick actions** — "All" and "None" buttons for fast selection/deselection
-- **Click-outside handling** — Dropdown closes when clicking outside for clean UX
+### ✅ Markdown Frontmatter Extraction (v0.1.7)
+- **YAML frontmatter** — Title, author, tags, and arbitrary fields indexed as `[FRONTMATTER:key] value`
+- **Graceful degradation** — Malformed or missing frontmatter doesn't prevent content indexing
+- **Nested structures** — Nested YAML objects serialized to searchable strings
+
+### ✅ Extractor Architecture Refactor (v0.1.8)
+- **Standalone extractor binaries** — `find-extract-text`, `find-extract-pdf`, `find-extract-media`, `find-extract-archive` as independent binaries with JSON output
+- **Shared library crates** — Each extractor is also a library crate consumed by `find-scan` directly
+- **Clean separation** — Extractor logic isolated from client logic; each binary can be tested independently
+
+### ✅ Incremental File Watcher (v0.1.9)
+- **`find-watch` daemon** — Monitors source paths with `notify` (inotify/FSEvents/ReadDirectoryChanges); pushes single-file updates via `POST /api/v1/bulk`
+- **Debounce loop** — Configurable debounce window (default 500ms) collapses rapid events before processing
+- **Event accumulation** — Create/Modify → Update; Remove → Delete; Update→Delete = Delete; Delete→Update = Update
+- **Rename handling** — Both sides of a rename handled correctly after debounce
+- **Subprocess extraction** — Spawns appropriate `find-extract-*` binary per file type; resolves binary next to executable, then PATH
+- **Systemd unit files** — User-mode (`~/.config/systemd/user/`) and system-mode (`/etc/systemd/system/`) units with installation README
 
 ### ✅ Investigations
-
-**Archive Index Compression** (2026-02-14)
-- Investigated FTS5 trigram index storage and compression options
-- Key finding: FTS5 index naturally ~3x original text size (inherent to trigram indexing)
-- Current architecture is optimal: contentless FTS5 + ZIP content storage
-- FTS5 already uses built-in page-level compression (not user-configurable)
-- Increasing ZIP compression level (6→9) would have minimal benefit (~5-10% reduction)
-- **Conclusion:** No changes needed - current implementation is well-balanced
-- See: `docs/investigations/001-archive-index-compression.md`
-
-**Audio Metadata Consolidation** (2026-02-14)
-- Investigated whether `audio-video-metadata` crate could replace current audio extractors
-- Current extractors: id3 (MP3), metaflac (FLAC), mp4ameta (M4A/MP4)
-- AudioMetadata struct only provides: format, duration, audio (single optional string)
-- Missing: title, artist, album, year, genre, comments (rich music tag data)
-- Different purpose: audio-video-metadata is for technical A/V metadata, not music library tags
-- **Conclusion:** Keep current audio extractors - they are purpose-built and complementary, not redundant
-- See: `docs/investigations/002-audio-metadata-consolidation.md`
+- **Archive Index Compression** — FTS5 trigram index is inherently ~3x text size; current architecture is optimal. No changes needed.
+- **Audio Metadata Consolidation** — `audio-video-metadata` crate lacks rich music tags; current per-format extractors kept.
 
 ---
 
-## Near-term (Next 3-6 months)
+## Near-term Priorities
 
-### Real-time File Watching
-**Status:** Scaffolded, needs implementation
+### 🔴 GitHub CI & Release Infrastructure
+**Status:** Not started — highest priority gate for quality and adoption
 
-- `find-watch` daemon for real-time incremental indexing
-- Platform-specific implementations:
-  - Linux: inotify
-  - macOS: FSEvents
-  - Windows: ReadDirectoryChangesW
-- Event debouncing (500ms) to handle editor save storms
-- Efficient event → API mapping (CREATE/MODIFY/DELETE/RENAME)
+A project people can't easily install won't get used. Before pushing for wider
+adoption, establish a solid release pipeline:
 
-**Plan:** Create `004-realtime-watch.md`
+- **GitHub Actions CI** — On every push/PR: `cargo test`, `cargo clippy -- -D warnings`, `cargo build --release`. Fail fast on regressions.
+- **Pre-built binary releases** — GitHub Releases workflow triggered on version tags. Build Linux (x86_64, aarch64) and macOS (x86_64, aarch64) binaries. Upload as release assets.
+- **Install script** — `curl -fsSL https://raw.githubusercontent.com/.../install.sh | sh` that downloads the right binary for the current platform and drops it in `~/.local/bin` (or `/usr/local/bin` with sudo).
+- **Docker image** — `find-server` as a minimal Docker image (distroless or Alpine). `docker run -v data:/data find-server` just works.
+- **Docker Compose** — `docker-compose.yml` for running server + an initial scan container side-by-side.
 
-### Systemd Unit Files
-**Status:** Not started
-
-- Ready-to-install `.service` and `.timer` files
-- Package in `deploy/systemd/` directory
-- Installation script with user/group setup
-- Logging configuration
-
-### Web UI Enhancements - Phase 1
-**Status:** In progress
-
-High-priority UI improvements:
-- Clickable resource URLs (uses base_url feature)
-- Keyboard shortcuts for navigation
-- Dark mode / theme switcher
-- Search history (localStorage)
-- File type icons and better result formatting
+**Plans to create:** `017-ci-release-pipeline.md`
 
 ---
 
-## Medium-term (6-12 months)
+### 🔴 Additional Format Support
+**Status:** Not started — high user value, builds on extractor architecture
 
-### Windows Native Client
-**Status:** Design phase
+The extractor crate model (plan 015) makes adding formats straightforward. Add
+each as a new extractor binary + library crate following the established pattern.
 
-Full Windows support with native tooling:
-- Windows Service wrapper for `find-scan` and `find-watch`
-- Task Scheduler integration for periodic scans
-- System tray icon with status indicator
-- MSI installer
-- PowerShell setup scripts
-- Windows-specific path handling
+#### HTML (improved)
+**Current behavior:** HTML files are treated as text — tags and attributes are
+indexed verbatim alongside content, adding noise to results.
 
-**Goal:** First-class Windows experience matching Linux/macOS
+**Target:** Strip all tags; index visible text only. Preserve `<title>`,
+`<meta name="description">`, `<h1>`–`<h6>` as structured metadata lines.
+Crate: `scraper` or `html5ever` (both pure Rust, no system deps).
 
-### Search Ranking Improvements
-**Status:** Research phase
+**Plan to create:** `018-html-extractor.md`
 
-Enhance result quality:
+#### Office Documents (DOCX, XLSX, PPTX)
+**High value** — most knowledge workers have large collections of Office files.
+All three formats are ZIP-based XML, so no native libs or system deps required.
+
+- **DOCX** — Extract `word/document.xml`; strip XML; index paragraphs as lines. Crate: `docx-rs` (read-only) or parse zip+xml directly.
+- **XLSX** — Extract sheet cell values (text + number cells). Crate: `calamine` (pure Rust, excellent).
+- **PPTX** — Extract slide text from `ppt/slides/slide*.xml`. Pure zip+xml.
+
+**Plan to create:** `019-office-document-extractor.md`
+
+#### EPUB
+**High value** for anyone with an ebook collection. EPUB is a ZIP of XHTML
+files; extracting text is the same problem as HTML, just wrapped.
+
+- Parse `content.opf` for spine order and metadata (title, author, publisher)
+- Extract text from each XHTML chapter
+- Index metadata as `[EPUB:title]` / `[EPUB:author]` lines
+
+**Plan to create:** `020-epub-extractor.md`
+
+---
+
+### 🟡 Installation & End-User Experience
+**Status:** Partially done (systemd units added in v0.1.9)
+
+Beyond the release pipeline, the getting-started experience needs polish:
+
+- **README quickstart** — Rewrite README with a 5-minute getting-started guide: install binary → write minimal config → run `find-scan` → run `find-watch` → open UI.
+- **Config validator** — `find-scan --check-config` that validates the TOML, checks server connectivity, and prints a human-readable summary of sources and settings.
+- **Scan progress output** — Show a progress bar or per-source summary during `find-scan` so users know it's working on large directories.
+- **`find-watch --status`** — Query the running watcher (via a unix socket or pidfile) for its current state: sources watched, events processed, last update.
+
+---
+
+## Medium-term
+
+### Search Quality Improvements
 - Recency bias (recently modified files rank higher)
-- Result deduplication across sources (same content hash)
-- Frequency scoring (commonly accessed files)
-- Custom ranking per file type (e.g., prioritize code over archives)
+- Result deduplication across sources
+- Advanced filters in UI (file type, date range, size)
+- Boolean operators (AND, OR, NOT) in query syntax
 
-### Web UI Enhancements - Phase 2
-**Status:** Backlog
-
-Advanced features:
-- Advanced search filters (file type, date range, size)
+### Web UI Phase 2
+- Search suggestions / autocomplete
+- Recent searches dropdown
+- Command palette (Cmd+K style)
 - Search result export (JSON, CSV)
-- Saved searches
-- Search query builder UI
-- Pagination or infinite scroll
-- Multi-select for batch operations
+- Advanced search filter UI
+
+### Windows Support
+- Windows Service wrapper for `find-watch`
+- Task Scheduler integration for periodic scans
+- MSI installer / WiX toolset
+- PowerShell setup scripts
 
 ---
 
-## Long-term (12+ months)
+## Long-term
 
 ### OCR Support
-**Status:** Post-MVP
-
-Optional OCR for images and scanned PDFs:
-- Opt-in via `ocr = true` in config
-- Requires `tesseract` in PATH
-- Images run through tesseract
-- Scanned PDFs (no embedded text) fall back to page-render + OCR
-- Background processing with concurrency limits
-- Content hash caching to avoid re-OCR
-
-**Considerations:**
-- Expensive operation (seconds per page)
-- Large disk space for cache
-- Quality vs performance trade-offs
+Optional OCR for images and scanned PDFs via `tesseract` in PATH. Expensive
+operation; opt-in via `ocr = true` in config. Background processing with
+content-hash caching to avoid re-OCR.
 
 ### Multi-user & Authentication
-**Status:** Design needed
-
-Move beyond single shared token:
-- Per-user accounts and authentication
-- Token rotation and expiry
-- Role-based access control (read-only, admin)
-- User-specific saved searches and preferences (cloud profile sync)
-- Audit logging
+Per-user accounts, token rotation, role-based access control (read-only/admin),
+audit logging.
 
 ### Advanced Integrations
-
-**Webhook notifications:**
-- POST to URL when new content matches saved pattern
-- Real-time alerts for monitoring
-
-**Index export:**
-- `find-server export --source <name> --format json`
-- Backup and migration support
-
-**Plugin system:**
-- Custom extractors for proprietary formats
-- User-defined processing pipelines
-- Language-specific analyzers
+- Webhook notifications on new matches for saved searches
+- Index export (`find-server export --source <name> --format json`)
+- VS Code extension
+- Plugin system for custom extractors
 
 ---
 
 ## Ideas & Future Enhancements
 
-These are less structured ideas that may evolve into formal features.
-
 ### Web UI Ideas
 - [x] Folder path browsing
-- [x] Sources visibility — Replaced pills with dropdown selector (v0.1.6)
-- [x] Wrap lines by default; but have an option in the settings menu to toggle this
-- [x] Show file metadata in detail view (create/edit time) — v0.1.6
+- [x] Sources visibility — dropdown selector (v0.1.6)
+- [x] Word wrap toggle (v0.1.5)
+- [x] File metadata in detail view (create/edit time)
 - [ ] Search suggestions / autocomplete
 - [ ] Recent searches dropdown
 - [ ] Command palette (Cmd+K style)
 - [ ] Regex helper / tester UI
 - [ ] Result grouping by file type or source
-- [ ] Timeline view for date-based results
-- [ ] Graph visualization of file relationships
-
-### Advanced URI Handling
-
-- [x] Base URL configuration (implemented)
-- [ ] Custom URI scheme (`find://source/path:line`)
-- [ ] Protocol handler for opening files in local editor
-- [ ] Deep linking from external tools (IDE, chat apps)
-- [x] Line number anchors (`#L42`)
-- [ ] Archive entry URLs (`archive.zip#!/entry.txt`)
-- [ ] Template-based URL construction
-
-### Performance & Scalability
-
-- [x] Archive subfolder organization — Completed in v0.1.6
-- [ ] Distributed indexing (multiple scan clients per source)
-- [ ] Database partitioning for large sources (>100GB)
-- [ ] Elasticsearch backend option (alternative to SQLite)
-- [ ] Read replicas for search load balancing
-- [x] Index compression strategies
-- [ ] Incremental FTS5 rebuilds
 
 ### Additional Content Types
-- [x] Video metadata (MP4, MKV duration, resolution, codecs) — completed v0.1.4
-  [ ] HTML optimization (don't index tags or atttributes, just actual text content)
-- [ ] Office documents (DOCX, XLSX, PPTX via external tools)
-- [ ] Markdown frontmatter extraction
+- [x] PDF text extraction
+- [x] Image EXIF metadata
+- [x] Audio metadata (MP3, FLAC, M4A)
+- [x] Video metadata (MP4, MKV, WebM, etc.) — v0.1.4
+- [x] Markdown frontmatter extraction — v0.1.7
+- [ ] HTML — improved (strip tags, text-only) — **near-term**
+- [ ] DOCX, XLSX, PPTX — **near-term**
+- [ ] EPUB — **near-term**
 - [ ] Code symbol indexing (functions, classes, imports)
 - [ ] Email (mbox, PST) indexing
-- [ ] Database dumps (SQL, JSON schemas)
 
-### Search Features
-
-- [ ] Fuzzy file path matching (like fuzzy finder)
-- [ ] Boolean operators (AND, OR, NOT)
-- [ ] Field-specific search (`path:src author:john`)
-- [ ] Proximity search (words within N words of each other)
-- [ ] Phonetic search
-- [ ] Language-specific analyzers (stemming, synonyms)
+### Performance & Scalability
+- [x] Archive subfolder organization (v0.1.6)
+- [x] FTS5 contentless index + ZIP content storage
+- [ ] Distributed indexing (multiple scan clients per source)
+- [ ] Database partitioning for large sources (>100GB)
+- [ ] Incremental FTS5 rebuilds
 
 ### Operations & Monitoring
-
-- [ ] Index statistics dashboard (size, file count, growth rate)
-- [ ] Health checks and alerting
-- [ ] Performance metrics (query latency percentiles)
+- [ ] Index statistics dashboard
+- [ ] Health check endpoint
 - [ ] Slow query logging
 - [ ] Database vacuuming automation
 - [ ] Backup and restore utilities
-- [ ] Source priority and quotas
 
 ### Developer Tools
-
-- [ ] GraphQL API (alternative to REST)
-- [ ] Python client library
-- [ ] JavaScript client library
-- [ ] VS Code extension
+- [ ] Docker Compose — **near-term**
 - [ ] CLI autocomplete (bash, zsh, fish)
-- [ ] Docker compose for easy deployment
+- [ ] Python / JavaScript client library
+- [ ] VS Code extension
 
-### Integration Ideas
-
-- [ ] Slack/Discord bot for search
-- [ ] Browser extension for web archiving
-- [ ] Git commit message indexing
-- [ ] Issue tracker integration (GitHub, Jira)
-- [ ] Calendar event indexing
-- [ ] Chat history indexing (Slack export, Discord)
-
-### Miscellaneous
-
-- [ ] Generate some sample data so we can spin up a server using no personal data, and take some screenshots for the readme
 ---
 
-## Contributing Ideas
+## Contributing
 
 Have an idea not listed here? Consider:
 1. **Quick wins** → Open an issue or PR
