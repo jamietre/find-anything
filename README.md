@@ -1,7 +1,7 @@
 # find-anything
 
 Distributed full-content file indexing and fuzzy search. Index one or more machines
-into a central server, then query everything from a single CLI.
+into a central server, then query everything from a single CLI or web UI.
 
 ```
 find "password strength"
@@ -13,10 +13,9 @@ find "password strength"
 
 ## How it works
 
-Source machines run a lightweight client (`find-scan`) that walks the filesystem,
-extracts text content, and submits it to a central server over HTTP. The server
-stores everything in SQLite with a trigram full-text index. A CLI tool (`find`) sends
-queries to the server and returns ranked results.
+A central **server** stores the index. Client machines run **`find-scan`** to do
+an initial index and **`find-watch`** to keep it current as files change. The
+**`find`** CLI and web UI query the server over HTTP.
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -30,212 +29,173 @@ queries to the server and returns ranked results.
           │                         │
    ┌──────▼──────┐           ┌──────▼──────┐
    │  Machine A  │           │  Machine B  │
-   │  find-scan  │           │  find-scan  │  scheduled (cron / systemd)
-   │  find-watch │           │  find-watch │  real-time (inotify / FSEvents)
+   │  find-scan  │           │  find-scan  │  initial index
+   │  find-watch │           │  find-watch │  real-time updates
    └─────────────┘           └─────────────┘
 ```
 
----
-
-## Current state
-
-### What works today
-
-| Component | Status | Notes |
-|-----------|--------|-------|
-| `find-server` | Working | axum REST API, SQLite FTS5 trigram index, bearer token auth |
-| `find-scan` | Working | incremental mtime-based scan, archive content indexing |
-| `find` CLI | Working | fuzzy / exact / regex modes, colored output |
-| `find-web` | Working | SvelteKit web UI with live search, syntax highlighting, file preview |
-| `find-watch` | Stub | compiles, not yet implemented |
-| Archive indexing | Working | zip, tar, tar.gz, tar.bz2, tar.xz, .gz, .bz2, .xz, 7z |
-| Multi-source search | Working | server queries all source DBs in parallel |
-| PDF extraction | Working | extracts text content from PDF files |
-| Image metadata | Working | EXIF tags from JPEG, TIFF, PNG, HEIF, RAW formats |
-| Audio metadata | Working | ID3, Vorbis, MP4 tags from MP3, FLAC, M4A files |
-
-### Search modes
-
-- **Fuzzy** (default) — splits query into words, each word must appear somewhere in
-  the line, results ranked by nucleo score. `find "pass strength"` finds
-  `"password strength"`.
-- **Exact** — literal substring match. `find "pass strength" --mode exact` finds
-  only lines containing that exact string.
-- **Regex** — `find "fn\s+\w+_handler" --mode regex`
+The server can run anywhere — on a home server, NAS, VPS, or your local machine.
+Client tools run on each machine whose files you want to index.
 
 ---
 
 ## Installation
 
-### Prerequisites
+### Option 1 — Install script (Linux & macOS)
 
-- Rust toolchain (`rustup.rs`)
-- (Optional, for web UI) Node.js 18+ - recommended via [mise](https://mise.jdx.dev)
+Downloads pre-built binaries for your platform from GitHub Releases:
 
-### Build
+```sh
+curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/main/install.sh | sh
+```
 
-```bash
+Installs to `~/.local/bin` by default. Override with `INSTALL_DIR=/usr/local/bin`.
+
+### Option 2 — Docker (server only)
+
+Run the server with Docker Compose. Clients still install natively via the
+install script above.
+
+```sh
+git clone https://github.com/jamietre/find-anything
+cd find-anything
+cp server.toml.example server.toml   # edit: set token and data_dir
+docker compose up -d
+```
+
+### Option 3 — Build from source
+
+```sh
 git clone https://github.com/jamietre/find-anything
 cd find-anything
 cargo build --release
 ```
 
-Binaries are produced in `target/release/`:
+---
 
-| Binary | Purpose |
-|--------|---------|
-| `find-server` | Central index server |
-| `find-scan` | Index a source machine |
-| `find` | Query the index |
-| `find-watch` | Real-time file watcher (planned) |
+## Binaries
+
+| Binary | Role | Runs on |
+|--------|------|---------|
+| `find-server` | Central index server | server machine |
+| `find-scan` | Initial filesystem indexer | each client machine |
+| `find-watch` | Real-time file watcher (incremental) | each client machine |
+| `find` | CLI search client | anywhere |
+| `find-extract-text` | Text/Markdown extractor | client (used by find-watch) |
+| `find-extract-pdf` | PDF extractor | client (used by find-watch) |
+| `find-extract-media` | Image/audio/video metadata extractor | client (used by find-watch) |
+| `find-extract-archive` | ZIP/TAR/7Z extractor | client (used by find-watch) |
+
+The `find-extract-*` binaries are used by `find-watch` to extract file content
+in subprocesses. They must be co-located with `find-watch` or on PATH.
 
 ---
 
 ## Quick start
 
-### 1. Configure and start the server
+### 1. Start the server
 
-```toml
-# server.toml
+**With Docker Compose:**
+```sh
+cp server.toml.example server.toml
+# Edit server.toml: set a strong token value
+docker compose up -d
+```
+
+**Or run directly:**
+```sh
+cat > server.toml <<EOF
 [server]
-bind     = "127.0.0.1:8765"
+bind     = "127.0.0.1:8080"
 data_dir = "/var/lib/find-anything"
 token    = "change-me"
+EOF
+
+find-server --config server.toml
 ```
 
-```bash
-./find-server server.toml
-```
-
-### 2. Configure and run a scan
+### 2. Create a client config
 
 ```toml
 # client.toml
 [server]
-url   = "http://127.0.0.1:8765"
+url   = "http://127.0.0.1:8080"
 token = "change-me"
 
-# Multiple sources can be defined
 [[sources]]
-name  = "code"
-paths = ["/home/user/code"]
-base_url = "file:///home/user/code"  # optional: for hyperlinkable results
-
-[[sources]]
-name  = "documents"
-paths = ["/home/user/Documents"]
+name  = "home"
+paths = ["/home/alice/documents", "/home/alice/projects"]
 
 [scan]
-exclude = [
-    "**/.git/**",
-    "**/node_modules/**",
-    "**/target/**",
-]
+exclude = ["**/.git/**", "**/node_modules/**", "**/target/**"]
 max_file_size_kb = 1024
 ```
 
-```bash
-./find-scan --config client.toml          # incremental
-./find-scan --config client.toml --full   # full rescan
+### 3. Run an initial scan
+
+```sh
+find-scan --config client.toml
 ```
 
-### 3. Query
+### 4. Start the file watcher
 
-```bash
-./find "some pattern"
-./find "some pattern" --mode exact
-./find "some pattern" --source my-machine --limit 20
+```sh
+find-watch --config client.toml
 ```
 
-### 4. Start the web UI (optional)
+`find-watch` keeps the index current as files are created, modified, or deleted.
+Run `find-scan` once first; `find-watch` does not do an initial scan on startup.
 
-The web UI provides a browser-based interface with live fuzzy search, syntax highlighting, and file preview.
+### 5. Search
 
-**Prerequisites:**
-- Node.js 18+ (managed via mise)
-- pnpm (managed via corepack)
+```sh
+find "some pattern"
+find "some pattern" --mode exact
+find "fn handler" --mode regex --source home --limit 20
+```
 
-**Setup with mise (recommended):**
+### 6. Web UI (optional)
 
-```bash
-# Install mise if not already installed: https://mise.jdx.dev
-mise trust        # trust the .mise.toml config
-mise install      # installs Node.js
-
-# Create .env file from example
+```sh
 cd web
-cp .env.example .env
-```
-
-**Setup without mise:**
-
-```bash
-# Enable corepack for pnpm
-corepack enable
-
-cd web
+cp .env.example .env          # edit: set FIND_SERVER_URL and FIND_TOKEN
 pnpm install
-
-# Create .env file from example
-cp .env.example .env
+pnpm dev                      # http://localhost:5173
 ```
-
-Edit `.env` to match your server configuration:
-
-```bash
-FIND_SERVER_URL=http://localhost:8765
-FIND_TOKEN=change-me  # must match server.toml token
-```
-
-**Development mode:**
-
-```bash
-pnpm dev
-```
-
-The web UI will be available at `http://localhost:5173`
-
-**Production build:**
-
-```bash
-pnpm build
-pnpm preview
-```
-
-The production server runs on `http://localhost:4173` by default.
 
 ---
 
-## Linux: automated scanning with systemd
+## Linux: running as a service
 
-**Nightly rescan** (`/etc/systemd/system/find-scan.timer` + `.service`):
+See [`docs/systemd/README.md`](docs/systemd/README.md) for ready-to-use systemd
+unit files and full installation instructions for both user-mode (personal
+workstation) and system-mode (multi-user server) setups.
 
-```ini
-# find-scan.service
-[Service]
-Type=oneshot
-ExecStart=/usr/local/bin/find-scan --config /etc/find-anything/client.toml
+Quick summary:
 
-# find-scan.timer
-[Timer]
-OnCalendar=*-*-* 02:00:00
-Persistent=true
-[Install]
-WantedBy=timers.target
+```sh
+# Copy unit files
+cp docs/systemd/user/find-server.service ~/.config/systemd/user/
+cp docs/systemd/user/find-watch.service  ~/.config/systemd/user/
+systemctl --user daemon-reload
+
+# Run initial scan, then enable the watcher
+find-scan --config ~/.config/find-anything/client.toml
+systemctl --user enable --now find-server find-watch
 ```
 
-```bash
-systemctl enable --now find-scan.timer
-```
+---
 
-**Real-time watcher** (`/etc/systemd/system/find-watch.service`):
+## Supported file types
 
-```ini
-[Service]
-Type=simple
-ExecStart=/usr/local/bin/find-watch --config /etc/find-anything/client.toml
-Restart=always
-```
+| Type | What's extracted |
+|------|-----------------|
+| Text, source code, Markdown | Full content; Markdown YAML frontmatter as structured fields |
+| PDF | Full text content |
+| Images (JPEG, PNG, TIFF, HEIC, RAW) | EXIF metadata (camera, GPS, dates) |
+| Audio (MP3, FLAC, M4A, OGG) | ID3/Vorbis/MP4 tags (title, artist, album) |
+| Video (MP4, MKV, WebM, AVI, MOV) | Format, resolution, duration |
+| Archives (ZIP, TAR, 7Z, GZ) | Recursive extraction of all member files |
 
 ---
 
@@ -245,47 +205,46 @@ Restart=always
 
 ```toml
 [server]
-bind     = "127.0.0.1:8765"   # address to listen on
-data_dir = "/var/lib/find-anything"
-token    = "your-token"
+bind     = "127.0.0.1:8080"         # address to listen on
+data_dir = "/var/lib/find-anything"  # index and archive storage
+token    = "your-token"              # bearer token for all API requests
 
 [search]
 default_limit       = 50
 max_limit           = 500
-fts_candidate_limit = 2000    # FTS5 rows passed to nucleo re-scorer
+fts_candidate_limit = 2000           # FTS5 rows passed to the re-scorer
 ```
 
 ### Client (`client.toml`)
 
 ```toml
 [server]
-url   = "http://host:8765"
+url   = "http://host:8080"
 token = "your-token"
 
-# Define multiple sources - each will be scanned and indexed separately
 [[sources]]
-name  = "unique-source-name"   # alphanumeric, hyphens, underscores
-paths = ["/path/to/index"]     # multiple paths per source
-base_url = "file:///path/to/index"  # optional: enables resource URLs in results
-
-[[sources]]
-name  = "another-source"
-paths = ["/another/path"]
-# base_url can use any protocol: file://, http://, https://, smb://
-# base_url = "https://github.com/owner/repo/blob/main"
+name     = "home"
+paths    = ["/home/alice/documents", "/home/alice/projects"]
+base_url = "file:///home/alice"      # optional: makes results hyperlinkable
 
 [scan]
-exclude          = ["**/.git/**", "**/node_modules/**"]
+exclude          = ["**/.git/**", "**/node_modules/**", "**/target/**"]
 max_file_size_kb = 1024
 follow_symlinks  = false
 include_hidden   = false
 
 [scan.archives]
-enabled = true
+enabled   = true
+max_depth = 10    # max nesting depth (guards against zip bombs)
+
+[watch]
+debounce_ms   = 500               # ms of silence before processing events
+extractor_dir = "/usr/local/bin"  # optional; auto-detected if omitted
 ```
 
 ---
 
 ## Roadmap
 
-See [ROADMAP.md](ROADMAP.md) for the full development roadmap, including completed features, planned work, and future ideas.
+See [ROADMAP.md](ROADMAP.md) for the full development roadmap, including
+completed features, planned work, and future ideas.
