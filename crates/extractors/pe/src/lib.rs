@@ -1,0 +1,144 @@
+use std::fs;
+use std::path::Path;
+
+use find_common::api::IndexLine;
+
+/// Extract version information from PE files (EXE, DLL, etc.).
+///
+/// Supports:
+/// - Windows executables (.exe, .dll, .sys, .scr, .cpl, .ocx)
+/// - Version info resources (product, version, company, copyright, etc.)
+///
+/// # Arguments
+/// * `path` - Path to the PE file
+/// * `max_size_kb` - Maximum file size in KB (files larger than this are skipped)
+///
+/// # Returns
+/// Vector of IndexLine objects with metadata at line_number=0
+pub fn extract(path: &Path, max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+    // Check file size
+    let metadata = fs::metadata(path)?;
+    let size_kb = metadata.len() / 1024;
+    if size_kb > max_size_kb as u64 {
+        return Ok(vec![]);
+    }
+
+    // Read the file
+    let data = fs::read(path)?;
+
+    // Parse as PE file
+    let version_info = extract_version_info(&data)?;
+
+    if version_info.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Return as single IndexLine at line 0
+    Ok(vec![IndexLine {
+        line_number: 0,
+        content: version_info,
+        archive_path: None,
+    }])
+}
+
+/// Check if a file is a PE executable based on extension.
+pub fn accepts(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        let ext = ext.to_lowercase();
+        matches!(
+            ext.as_str(),
+            "exe" | "dll" | "sys" | "scr" | "cpl" | "ocx" | "drv" | "efi"
+        )
+    } else {
+        false
+    }
+}
+
+/// Extract version information from PE file data.
+fn extract_version_info(data: &[u8]) -> anyhow::Result<String> {
+    // Try parsing as PE64 first, then PE32
+    let info = try_parse_pe64(data)
+        .or_else(|_| try_parse_pe32(data))
+        .unwrap_or_default();
+
+    Ok(info)
+}
+
+fn try_parse_pe64(data: &[u8]) -> Result<String, anyhow::Error> {
+    use pelite::pe64::PeFile;
+
+    let pe = PeFile::from_bytes(data)?;
+    extract_from_resources_64(&pe)
+}
+
+fn try_parse_pe32(data: &[u8]) -> Result<String, anyhow::Error> {
+    use pelite::pe32::PeFile;
+
+    let pe = PeFile::from_bytes(data)?;
+    extract_from_resources_32(&pe)
+}
+
+fn extract_from_resources_64(pe: &pelite::pe64::PeFile) -> Result<String, anyhow::Error> {
+    use pelite::pe64::Pe;
+
+    let resources = pe.resources()?;
+    let version_info = resources.version_info()?;
+
+    Ok(format_version_info(&version_info))
+}
+
+fn extract_from_resources_32(pe: &pelite::pe32::PeFile) -> Result<String, anyhow::Error> {
+    use pelite::pe32::Pe;
+
+    let resources = pe.resources()?;
+    let version_info = resources.version_info()?;
+
+    Ok(format_version_info(&version_info))
+}
+
+fn format_version_info<'a>(version_info: &pelite::resources::version_info::VersionInfo<'a>) -> String {
+    let mut lines = Vec::new();
+
+    // Extract fixed file info (version numbers)
+    if let Some(fixed) = version_info.fixed() {
+        let file_ver = fixed.dwFileVersion;
+        let product_ver = fixed.dwProductVersion;
+
+        lines.push(format!(
+            "FileVersion: {}.{}.{}.{}",
+            file_ver.Major, file_ver.Minor, file_ver.Patch, file_ver.Build
+        ));
+
+        lines.push(format!(
+            "ProductVersion: {}.{}.{}.{}",
+            product_ver.Major, product_ver.Minor, product_ver.Patch, product_ver.Build
+        ));
+    }
+
+    // Extract string file info (named fields)
+    // Common version info keys
+    let keys = [
+        "ProductName",
+        "FileDescription",
+        "CompanyName",
+        "LegalCopyright",
+        "OriginalFilename",
+        "InternalName",
+        "LegalTrademarks",
+        "Comments",
+        "PrivateBuild",
+        "SpecialBuild",
+    ];
+
+    // Try to get strings for any available language
+    let langs = version_info.translation();
+    if let Some(lang) = langs.first() {
+        version_info.strings(*lang, |key, value| {
+            if keys.contains(&key) && !value.trim().is_empty() {
+                lines.push(format!("{}: {}", key, value.trim()));
+            }
+        });
+    }
+
+    lines.join("\n")
+}

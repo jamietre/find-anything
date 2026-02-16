@@ -48,6 +48,10 @@ pub fn extract(path: &Path, max_size_kb: u64, max_archive_depth: usize) -> Resul
         return find_extract_epub::extract(path, max_size_kb_usize);
     }
 
+    if find_extract_pe::accepts(path) {
+        return find_extract_pe::extract(path, max_size_kb_usize);
+    }
+
     // Text extractor is last (most permissive, will accept many files)
     if find_extract_text::accepts(path) {
         return find_extract_text::extract(path, max_size_kb_usize);
@@ -64,6 +68,9 @@ pub fn detect_kind(path: &Path) -> &'static str {
     }
     if find_extract_pdf::accepts(path) {
         return "pdf";
+    }
+    if find_extract_pe::accepts(path) {
+        return "executable";
     }
     if find_extract_media::accepts(path) {
         // Determine if it's image, audio, or video

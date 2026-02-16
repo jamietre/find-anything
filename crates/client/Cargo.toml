@@ -24,6 +24,7 @@ find-extract-archive = { path = "../extractors/archive" }
 find-extract-html    = { path = "../extractors/html" }
 find-extract-office  = { path = "../extractors/office" }
 find-extract-epub    = { path = "../extractors/epub" }
+find-extract-pe      = { path = "../extractors/pe" }
 anyhow      = { workspace = true }
 clap        = { workspace = true }
 serde       = { workspace = true }

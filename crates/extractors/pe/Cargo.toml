@@ -1,0 +1,21 @@
+[package]
+name = "find-extract-pe"
+version = "0.2.2"
+edition = "2021"
+
+[lib]
+name = "find_extract_pe"
+path = "src/lib.rs"
+
+[[bin]]
+name = "find-extract-pe"
+path = "src/main.rs"
+
+[dependencies]
+find-common = { path = "../../common" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# PE file parsing
+pelite = "0.10"
