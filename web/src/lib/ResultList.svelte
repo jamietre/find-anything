@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createEventDispatcher, tick } from 'svelte';
+	import { createEventDispatcher } from 'svelte';
 	import type { SearchResult } from '$lib/api';
 	import SearchResultItem from '$lib/SearchResult.svelte';
 
@@ -11,44 +11,20 @@
 
 	const dispatch = createEventDispatcher<{ open: SearchResult; loadmore: void }>();
 
-	let displayedResults: SearchResult[] = [];
-	let incomingResults: SearchResult[] = [];
-	let showCurrent = true;
-
 	$: hasMore = results.length < totalResults;
 	$: remainingCount = totalResults - results.length;
 
 	function handleLoadMore() {
 		dispatch('loadmore');
 	}
-
-	$: {
-		// When results change, prepare incoming results and flip visibility
-		if (results !== displayedResults) {
-			incomingResults = results;
-			tick().then(() => {
-				// After incoming results are rendered (but hidden), flip visibility
-				showCurrent = !showCurrent;
-				displayedResults = results;
-			});
-		}
-	}
 </script>
 
 <div class="result-list" class:searching>
-	<div class="result-container" class:visible={showCurrent} class:hidden={!showCurrent}>
-		{#each displayedResults as result (result.source + result.path + (result.archive_path ?? '') + result.line_number)}
+	<div class="result-container">
+		{#each results as result (result.source + result.path + (result.archive_path ?? '') + result.line_number)}
 			<SearchResultItem {result} on:open={(e) => dispatch('open', e.detail)} />
 		{/each}
-		{#if displayedResults.length === 0}
-			<p class="empty">No results.</p>
-		{/if}
-	</div>
-	<div class="result-container" class:visible={!showCurrent} class:hidden={showCurrent}>
-		{#each incomingResults as result (result.source + result.path + (result.archive_path ?? '') + result.line_number)}
-			<SearchResultItem {result} on:open={(e) => dispatch('open', e.detail)} />
-		{/each}
-		{#if incomingResults.length === 0}
+		{#if results.length === 0 && !searching}
 			<p class="empty">No results.</p>
 		{/if}
 	</div>
@@ -83,36 +59,19 @@
 <style>
 	.result-list {
 		padding: 12px 0;
-		display: grid;
-		grid-template-columns: minmax(0, 1fr);
 		overflow-x: hidden;
 		width: 100%;
 		max-width: 100%;
 	}
 
 	.result-container {
-		grid-column: 1;
-		grid-row: 1;
-		transition: opacity 0.15s ease-in-out;
 		min-width: 0;
 		max-width: 100%;
+		transition: opacity 0.2s ease-in-out;
 	}
 
-	.result-container.visible {
-		opacity: 1;
-		z-index: 1;
-	}
-
-	.result-container.hidden {
-		opacity: 0;
-		z-index: 0;
-		pointer-events: none;
-	}
-
-	.result-list.searching .result-container.visible {
-		filter: blur(2px);
-		opacity: 0.6;
-		transition: opacity 0.15s ease-in-out, filter 0.15s ease-in-out;
+	.result-list.searching .result-container {
+		opacity: 0.5;
 	}
 
 	.empty {

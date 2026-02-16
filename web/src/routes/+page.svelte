@@ -277,13 +277,16 @@
 			if (push) view = 'results';
 		} catch (e) {
 			searchError = String(e);
+			// Clear results on error to avoid showing stale data
+			if (!append) {
+				results = [];
+				totalResults = 0;
+			}
 			if (push) view = 'results';
 		} finally {
-			if (append) {
-				isLoadingMore = false;
-			} else {
-				searching = false;
-			}
+			// Always clear loading states to prevent UI getting stuck
+			isLoadingMore = false;
+			searching = false;
 		}
 	}
 
@@ -487,15 +490,17 @@
 						{totalResults.toLocaleString()} result{totalResults !== 1 ? 's' : ''}
 					{/if}
 				</div>
-				<ResultList
-					{results}
-					{totalResults}
-					{nextBatchSize}
-					{isLoadingMore}
-					searching={isSearchActive}
-					on:open={openFile}
-					on:loadmore={loadMore}
-				/>
+				{#key mode}
+					<ResultList
+						{results}
+						{totalResults}
+						{nextBatchSize}
+						{isLoadingMore}
+						searching={isSearchActive}
+						on:open={openFile}
+						on:loadmore={loadMore}
+					/>
+				{/key}
 			{/if}
 		</div>
 	{/if}
