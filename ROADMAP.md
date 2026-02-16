@@ -199,6 +199,7 @@ audit logging.
 - [ ] Incremental FTS5 rebuilds
 
 ### Operations & Monitoring
+- [ ] Track stats on time to index each file, and report on them 
 - [ ] Index statistics dashboard
 - [ ] Health check endpoint
 - [ ] Slow query logging

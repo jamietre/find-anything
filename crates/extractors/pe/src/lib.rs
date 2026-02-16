@@ -29,14 +29,24 @@ pub fn extract(path: &Path, max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>
     // Parse as PE file
     let version_info = extract_version_info(&data)?;
 
-    if version_info.is_empty() {
-        return Ok(vec![]);
-    }
+    // Always include the filename in the content so the file is searchable by name
+    let filename = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+
+    let content = if version_info.is_empty() {
+        // No metadata, just index the filename
+        filename.to_string()
+    } else {
+        // Prepend filename to metadata so both are searchable
+        format!("{}\n{}", filename, version_info)
+    };
 
     // Return as single IndexLine at line 0
     Ok(vec![IndexLine {
         line_number: 0,
-        content: version_info,
+        content,
         archive_path: None,
     }])
 }
