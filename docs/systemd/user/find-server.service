@@ -1,0 +1,13 @@
+[Unit]
+Description=find-anything search server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/find-server --config %h/.config/find-anything/server.toml
+Restart=on-failure
+RestartSec=5s
+Environment=RUST_LOG=find_server=info
+
+[Install]
+WantedBy=default.target

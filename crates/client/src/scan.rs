@@ -8,13 +8,13 @@ use tracing::{info, warn};
 use walkdir::WalkDir;
 
 use find_common::{
-    api::{BulkRequest, IndexFile, IndexLine},
+    api::IndexFile,
     config::ScanConfig,
 };
 
-use crate::extract;
-
 use crate::api::ApiClient;
+use crate::batch::{build_index_files, submit_batch};
+use crate::extract;
 
 const BATCH_SIZE: usize = 200;
 const BATCH_BYTES: usize = 8 * 1024 * 1024; // 8 MB
@@ -128,88 +128,6 @@ pub async fn run_scan(
     Ok(())
 }
 
-/// Convert extracted lines for one filesystem file into one or more IndexFiles.
-///
-/// For non-archive files: one IndexFile with path = rel_path.
-/// For archive files: one IndexFile per distinct archive member (archive_path on the lines),
-/// each with a composite path "rel_path::member_path". The outer archive file itself also
-/// gets its own IndexFile so it's searchable by name.
-fn build_index_files(
-    rel_path: String,
-    mtime: i64,
-    size: i64,
-    kind: String,
-    lines: Vec<IndexLine>,
-) -> Vec<IndexFile> {
-    let has_archive_members = lines.iter().any(|l| l.archive_path.is_some());
-
-    if !has_archive_members {
-        // Non-archive (or archive with no extractable text members): single IndexFile.
-        let mut all_lines = lines;
-        // Always index the relative path so the file is findable by name.
-        all_lines.push(IndexLine {
-            archive_path: None,
-            line_number: 0,
-            content: rel_path.clone(),
-        });
-        return vec![IndexFile { path: rel_path, mtime, size, kind, lines: all_lines }];
-    }
-
-    // Group by archive_path.
-    let mut member_groups: HashMap<String, Vec<IndexLine>> = HashMap::new();
-    let mut outer_extra: Vec<IndexLine> = Vec::new();
-
-    for line in lines {
-        match line.archive_path.clone() {
-            None => outer_extra.push(line),
-            Some(member) => member_groups.entry(member).or_default().push(line),
-        }
-    }
-
-    let mut result = Vec::new();
-
-    // Outer file: searchable by path name.
-    let mut outer_lines = outer_extra;
-    outer_lines.push(IndexLine {
-        archive_path: None,
-        line_number: 0,
-        content: rel_path.clone(),
-    });
-    result.push(IndexFile {
-        path: rel_path.clone(),
-        mtime,
-        size,
-        kind: kind.clone(),
-        lines: outer_lines,
-    });
-
-    // One IndexFile per archive member, with composite path "zip::member".
-    for (member, mut content_lines) in member_groups {
-        let composite_path = format!("{}::{}", rel_path, member);
-        // Strip archive_path from individual lines (redundant now that path is composite).
-        for l in &mut content_lines {
-            l.archive_path = None;
-        }
-        // Add a line_number=0 entry so the member is findable by name.
-        content_lines.push(IndexLine {
-            archive_path: None,
-            line_number: 0,
-            content: composite_path.clone(),
-        });
-        // Detect the member's actual kind from its filename, not the outer archive's kind.
-        let member_kind = extract::detect_kind(std::path::Path::new(&member)).to_string();
-        result.push(IndexFile {
-            path: composite_path,
-            mtime,
-            size,
-            kind: member_kind,
-            lines: content_lines,
-        });
-    }
-
-    result
-}
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn build_globset(patterns: &[String]) -> Result<GlobSet> {
@@ -294,25 +212,3 @@ fn size_of(path: &Path) -> Option<i64> {
     path.metadata().ok().map(|m| m.len() as i64)
 }
 
-
-async fn submit_batch(
-    api: &ApiClient,
-    source_name: &str,
-    base_url: Option<&str>,
-    batch: &mut Vec<IndexFile>,
-    delete_paths: Vec<String>,
-    scan_timestamp: Option<i64>,
-) -> Result<()> {
-    let files = std::mem::take(batch);
-    if !files.is_empty() {
-        info!("submitting batch of {} files", files.len());
-    }
-    api.bulk(&BulkRequest {
-        source: source_name.to_string(),
-        files,
-        delete_paths,
-        base_url: base_url.map(|s| s.to_string()),
-        scan_timestamp,
-    })
-    .await
-}

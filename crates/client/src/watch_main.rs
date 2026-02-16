@@ -1,3 +1,5 @@
+mod api;
+mod batch;
 mod watch;
 
 use anyhow::{Context, Result};

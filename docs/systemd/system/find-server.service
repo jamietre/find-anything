@@ -1,0 +1,21 @@
+[Unit]
+Description=find-anything search server
+After=network.target
+Documentation=https://github.com/yourname/find-anything
+
+[Service]
+Type=simple
+User=find-anything
+Group=find-anything
+ExecStart=/usr/local/bin/find-server --config /etc/find-anything/server.toml
+Restart=on-failure
+RestartSec=5s
+Environment=RUST_LOG=find_server=info
+StateDirectory=find-anything
+RuntimeDirectory=find-anything
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/find-anything
+
+[Install]
+WantedBy=multi-user.target

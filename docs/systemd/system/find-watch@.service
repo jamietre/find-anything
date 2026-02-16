@@ -1,0 +1,16 @@
+[Unit]
+Description=find-anything file watcher for %i
+After=network.target find-server.service
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/local/bin/find-watch --config /etc/find-anything/client.toml
+Restart=on-failure
+RestartSec=5s
+Environment=RUST_LOG=find_watch=info
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

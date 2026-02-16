@@ -1,0 +1,17 @@
+[Unit]
+Description=find-anything file watcher
+After=network.target
+# Optional: depend on local server unit if running server as user too
+# Wants=find-server.service
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/find-watch --config %h/.config/find-anything/client.toml
+Restart=on-failure
+RestartSec=5s
+Environment=RUST_LOG=find_watch=info
+# Extractor binaries must be co-located with find-watch or on PATH
+Environment=PATH=/usr/local/bin:%h/.local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target

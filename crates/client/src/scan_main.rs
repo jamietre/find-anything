@@ -1,4 +1,5 @@
 mod api;
+mod batch;
 mod extract;
 mod scan;
 

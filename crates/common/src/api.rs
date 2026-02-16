@@ -1,5 +1,74 @@
 use serde::{Deserialize, Serialize};
 
+/// Classify a file by its extension alone — no extractor lib deps.
+/// Used by `find-watch` (subprocess mode) and `batch.rs` for archive member kinds.
+pub fn detect_kind_from_ext(ext: &str) -> &'static str {
+    match ext.to_lowercase().as_str() {
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "tbz2" | "txz" | "7z" => "archive",
+        "pdf" => "pdf",
+        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "ico" | "webp" | "heic"
+        | "tiff" | "tif" | "raw" | "cr2" | "nef" | "arw" => "image",
+        "mp3" | "flac" | "ogg" | "m4a" | "aac" | "wav" | "wma" | "opus" => "audio",
+        "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "m4v" | "flv" => "video",
+        _ => "text",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_kind_archives() {
+        for ext in &["zip", "tar", "gz", "bz2", "xz", "tgz", "tbz2", "txz", "7z"] {
+            assert_eq!(detect_kind_from_ext(ext), "archive", "ext={ext}");
+        }
+    }
+
+    #[test]
+    fn test_detect_kind_pdf() {
+        assert_eq!(detect_kind_from_ext("pdf"), "pdf");
+    }
+
+    #[test]
+    fn test_detect_kind_images() {
+        for ext in &["jpg", "jpeg", "png", "gif", "bmp", "ico", "webp", "heic",
+                     "tiff", "tif", "raw", "cr2", "nef", "arw"] {
+            assert_eq!(detect_kind_from_ext(ext), "image", "ext={ext}");
+        }
+    }
+
+    #[test]
+    fn test_detect_kind_audio() {
+        for ext in &["mp3", "flac", "ogg", "m4a", "aac", "wav", "wma", "opus"] {
+            assert_eq!(detect_kind_from_ext(ext), "audio", "ext={ext}");
+        }
+    }
+
+    #[test]
+    fn test_detect_kind_video() {
+        for ext in &["mp4", "mkv", "avi", "mov", "wmv", "webm", "m4v", "flv"] {
+            assert_eq!(detect_kind_from_ext(ext), "video", "ext={ext}");
+        }
+    }
+
+    #[test]
+    fn test_detect_kind_text_fallback() {
+        for ext in &["rs", "py", "toml", "md", "txt", "json", "", "unknown"] {
+            assert_eq!(detect_kind_from_ext(ext), "text", "ext={ext}");
+        }
+    }
+
+    #[test]
+    fn test_detect_kind_case_insensitive() {
+        assert_eq!(detect_kind_from_ext("PDF"), "pdf");
+        assert_eq!(detect_kind_from_ext("ZIP"), "archive");
+        assert_eq!(detect_kind_from_ext("JPG"), "image");
+        assert_eq!(detect_kind_from_ext("MP3"), "audio");
+        assert_eq!(detect_kind_from_ext("MP4"), "video");
+    }
+}
+
 /// GET /api/v1/sources response entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceInfo {
