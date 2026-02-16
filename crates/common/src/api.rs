@@ -10,6 +10,7 @@ pub fn detect_kind_from_ext(ext: &str) -> &'static str {
         | "tiff" | "tif" | "raw" | "cr2" | "nef" | "arw" => "image",
         "mp3" | "flac" | "ogg" | "m4a" | "aac" | "wav" | "wma" | "opus" => "audio",
         "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "m4v" | "flv" => "video",
+        "docx" | "xlsx" | "xls" | "xlsm" | "pptx" | "epub" => "document",
         _ => "text",
     }
 }
@@ -60,12 +61,20 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_kind_documents() {
+        for ext in &["docx", "xlsx", "xls", "xlsm", "pptx", "epub"] {
+            assert_eq!(detect_kind_from_ext(ext), "document", "ext={ext}");
+        }
+    }
+
+    #[test]
     fn test_detect_kind_case_insensitive() {
         assert_eq!(detect_kind_from_ext("PDF"), "pdf");
         assert_eq!(detect_kind_from_ext("ZIP"), "archive");
         assert_eq!(detect_kind_from_ext("JPG"), "image");
         assert_eq!(detect_kind_from_ext("MP3"), "audio");
         assert_eq!(detect_kind_from_ext("MP4"), "video");
+        assert_eq!(detect_kind_from_ext("DOCX"), "document");
     }
 }
 

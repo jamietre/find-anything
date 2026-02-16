@@ -40,6 +40,10 @@ pub fn extract(path: &Path, max_size_kb: u64, max_archive_depth: usize) -> Resul
         return find_extract_html::extract(path, max_size_kb_usize);
     }
 
+    if find_extract_office::accepts(path) {
+        return find_extract_office::extract(path, max_size_kb_usize);
+    }
+
     // Text extractor is last (most permissive, will accept many files)
     if find_extract_text::accepts(path) {
         return find_extract_text::extract(path, max_size_kb_usize);

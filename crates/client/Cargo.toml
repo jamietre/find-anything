@@ -22,6 +22,7 @@ find-extract-pdf = { path = "../extractors/pdf" }
 find-extract-media = { path = "../extractors/media" }
 find-extract-archive = { path = "../extractors/archive" }
 find-extract-html    = { path = "../extractors/html" }
+find-extract-office  = { path = "../extractors/office" }
 anyhow      = { workspace = true }
 clap        = { workspace = true }
 serde       = { workspace = true }

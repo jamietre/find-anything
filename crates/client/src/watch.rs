@@ -364,6 +364,7 @@ fn extractor_binary_for(path: &Path, extractor_dir: &Option<String>) -> String {
             "find-extract-media"
         }
         "html" | "htm" | "xhtml" => "find-extract-html",
+        "docx" | "xlsx" | "xls" | "xlsm" | "pptx" => "find-extract-office",
         _ => "find-extract-text",
     };
 

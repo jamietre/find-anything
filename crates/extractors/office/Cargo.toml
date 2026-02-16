@@ -1,0 +1,22 @@
+[package]
+name = "find-extract-office"
+version = "0.1.9"
+edition = "2021"
+
+[lib]
+name = "find_extract_office"
+path = "src/lib.rs"
+
+[[bin]]
+name = "find-extract-office"
+path = "src/main.rs"
+
+[dependencies]
+find-common = { path = "../../common" }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+zip = "2"
+quick-xml = "0.37"
+calamine = "0.26"
