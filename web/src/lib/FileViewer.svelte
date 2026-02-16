@@ -9,6 +9,7 @@
 		toggleLine
 	} from '$lib/lineSelection';
 	import { profile } from '$lib/profile';
+	import { marked } from 'marked';
 
 	export let source: string;
 	export let path: string;
@@ -24,12 +25,28 @@
 	let lineOffsets: number[] = [];
 	let mtime: number | null = null;
 	let size: number | null = null;
+	let rawContent = '';
+
+	// Detect if file is markdown
+	$: isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
 
 	// Word wrap preference (default: false for code, true for text files)
 	$: wordWrap = $profile.wordWrap ?? false;
 
+	// Markdown format preference
+	$: markdownFormat = $profile.markdownFormat ?? false;
+
+	// Render markdown to HTML
+	$: renderedMarkdown = markdownFormat && isMarkdown
+		? marked.parse(rawContent, { gfm: true, breaks: true })
+		: '';
+
 	function toggleWordWrap() {
 		$profile.wordWrap = !wordWrap;
+	}
+
+	function toggleMarkdownFormat() {
+		$profile.markdownFormat = !markdownFormat;
 	}
 
 	function formatSize(bytes: number | null): string {
@@ -51,6 +68,7 @@
 			const data = await getFile(source, path, archivePath ?? undefined);
 			const contents = data.lines.map((l) => l.content);
 			lineOffsets = data.lines.map((l) => l.line_number);
+			rawContent = contents.join('\n');
 			highlightedCode = highlightFile(contents, path);
 			mtime = data.mtime;
 			size = data.size;
@@ -101,6 +119,11 @@
 			<button class="toolbar-btn" on:click={toggleWordWrap} title="Toggle word wrap">
 				{wordWrap ? '⊟' : '⊞'} Wrap
 			</button>
+			{#if isMarkdown}
+				<button class="toolbar-btn" on:click={toggleMarkdownFormat} title="Toggle markdown formatting">
+					📝 {markdownFormat ? 'Raw' : 'Format'}
+				</button>
+			{/if}
 			<div class="metadata">
 				{#if size !== null}
 					<span class="meta-item" title="File size">{formatSize(size)}</span>
@@ -111,25 +134,31 @@
 			</div>
 		</div>
 		<div class="code-container">
-			<table class="code-table" cellspacing="0" cellpadding="0">
-				<tbody>
-					{#each codeLines as line, i}
-						{@const lineNum = lineOffsets[i] ?? i + 1}
-						<!-- svelte-ignore a11y-click-events-have-key-events -->
-						<!-- svelte-ignore a11y-no-static-element-interactions -->
-						<tr
-							id="line-{lineNum}"
-							class="code-row"
-							class:target={highlightedSet.has(lineNum)}
-							on:click={(e) => handleLineClick(lineNum, e)}
-						>
-							<td class="td-ln">{lineNum}</td>
-							<td class="td-arrow">{lineNum === arrowLine ? '▶' : ''}</td>
-							<td class="td-code" class:wrap={wordWrap}><code>{@html line}</code></td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
+			{#if markdownFormat && isMarkdown}
+				<div class="markdown-content">
+					{@html renderedMarkdown}
+				</div>
+			{:else}
+				<table class="code-table" cellspacing="0" cellpadding="0">
+					<tbody>
+						{#each codeLines as line, i}
+							{@const lineNum = lineOffsets[i] ?? i + 1}
+							<!-- svelte-ignore a11y-click-events-have-key-events -->
+							<!-- svelte-ignore a11y-no-static-element-interactions -->
+							<tr
+								id="line-{lineNum}"
+								class="code-row"
+								class:target={highlightedSet.has(lineNum)}
+								on:click={(e) => handleLineClick(lineNum, e)}
+							>
+								<td class="td-ln">{lineNum}</td>
+								<td class="td-arrow">{lineNum === arrowLine ? '▶' : ''}</td>
+								<td class="td-code" class:wrap={wordWrap}><code>{@html line}</code></td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			{/if}
 		</div>
 	{/if}
 </div>
@@ -248,5 +277,146 @@
 
 	.toolbar-btn:active {
 		transform: translateY(1px);
+	}
+
+	/* Markdown rendering styles */
+	.markdown-content {
+		padding: 32px 48px;
+		max-width: 900px;
+		margin: 0 auto;
+		color: var(--text);
+		line-height: 1.7;
+	}
+
+	.markdown-content h1,
+	.markdown-content h2,
+	.markdown-content h3 {
+		border-bottom: 1px solid var(--border);
+		padding-bottom: 0.4em;
+		margin-top: 32px;
+		margin-bottom: 20px;
+		font-weight: 600;
+	}
+
+	.markdown-content h1 {
+		font-size: 2em;
+		margin-top: 0;
+	}
+
+	.markdown-content h2 {
+		font-size: 1.5em;
+	}
+
+	.markdown-content h3 {
+		font-size: 1.25em;
+	}
+
+	.markdown-content h4 {
+		font-size: 1.1em;
+		font-weight: 600;
+		margin-top: 24px;
+		margin-bottom: 16px;
+	}
+
+	.markdown-content h5,
+	.markdown-content h6 {
+		font-size: 1em;
+		font-weight: 600;
+		margin-top: 20px;
+		margin-bottom: 12px;
+	}
+
+	.markdown-content a {
+		color: var(--accent);
+		text-decoration: none;
+	}
+
+	.markdown-content a:hover {
+		text-decoration: underline;
+	}
+
+	.markdown-content code {
+		background: var(--bg-secondary);
+		padding: 0.2em 0.4em;
+		border-radius: 3px;
+		font-family: var(--font-mono);
+		font-size: 0.9em;
+	}
+
+	.markdown-content pre {
+		background: var(--bg-secondary);
+		padding: 16px;
+		border-radius: 6px;
+		overflow-x: auto;
+		margin: 20px 0;
+		line-height: 1.5;
+	}
+
+	.markdown-content pre code {
+		background: none;
+		padding: 0;
+	}
+
+	.markdown-content blockquote {
+		border-left: 4px solid var(--accent);
+		padding: 8px 0 8px 20px;
+		margin: 24px 0;
+		color: var(--text-muted);
+	}
+
+	.markdown-content table {
+		border-collapse: collapse;
+		width: 100%;
+		margin: 24px 0;
+	}
+
+	.markdown-content th,
+	.markdown-content td {
+		border: 1px solid var(--border);
+		padding: 8px 12px;
+		text-align: left;
+	}
+
+	.markdown-content th {
+		background: var(--bg-secondary);
+		font-weight: 600;
+	}
+
+	.markdown-content tr:nth-child(even) {
+		background: var(--bg-hover);
+	}
+
+	.markdown-content img {
+		max-width: 100%;
+		height: auto;
+	}
+
+	.markdown-content ul,
+	.markdown-content ol {
+		padding-left: 2em;
+		margin: 16px 0;
+	}
+
+	.markdown-content li {
+		margin: 6px 0;
+		line-height: 1.6;
+	}
+
+	.markdown-content li > p {
+		margin: 4px 0;
+	}
+
+	.markdown-content p {
+		margin: 16px 0;
+	}
+
+	.markdown-content p:first-child {
+		margin-top: 0;
+	}
+
+	.markdown-content hr {
+		border: none;
+		border-top: 1px solid var(--border);
+		margin: 32px 0;
 	}
 </style>
