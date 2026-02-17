@@ -103,6 +103,12 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Auto-start integration** — Tray app registered in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` during service installation
 - **Comprehensive documentation** — `docs/windows/README.md` with quick start, service management, troubleshooting, and Windows-specific differences
 
+### ✅ Search UX & Virtual Scroll (v0.2.3)
+- **Debounced search with live feedback** — 500ms debounce; spinner appears immediately on keystroke; old results stay visible (blurred) while new search is in-flight; no results-flash on transition
+- **Virtual/infinite scroll** — `@tanstack/svelte-virtual` renders only visible result rows; DOM stays lean regardless of total count; scroll position preserved across item-count changes
+- **Infinite load on scroll** — Auto-fetches next 50 results (append mode) when user scrolls near the bottom; no "Load More" button required; loader sentinel row with spinner shown at end
+- **Dynamic height measurement** — `ResizeObserver` per virtual row re-measures when context lines lazy-expand; layout stays correct after height changes
+
 ### ✅ Investigations
 - **Archive Index Compression** — FTS5 trigram index is inherently ~3x text size; current architecture is optimal. No changes needed.
 - **Audio Metadata Consolidation** — `audio-video-metadata` crate lacks rich music tags; current per-format extractors kept.
@@ -178,6 +184,7 @@ audit logging.
 - [ ] Command palette (Cmd+K style)
 - [ ] Regex helper / tester UI
 - [ ] Result grouping by file type or source
+- [ ] Show images inlne when possible if remote-url works
 
 ### Additional Content Types
 - [x] PDF text extraction
@@ -188,6 +195,7 @@ audit logging.
 - [x] HTML — improved (strip tags, text-only) — v0.2.1
 - [x] DOCX, XLSX, PPTX — v0.2.1
 - [x] EPUB — v0.2.1
+- [ ] Image AI analysis
 - [ ] Code symbol indexing (functions, classes, imports)
 - [ ] Email (mbox, PST) indexing
 

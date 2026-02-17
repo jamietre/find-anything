@@ -39,8 +39,7 @@
 	let searchError: string | null = null;
 
 	$: isSearchActive = isTyping || searching;
-	$: canLoadMore = results.length < totalResults;
-	$: nextBatchSize = canLoadMore ? Math.min(500, totalResults - results.length) : 0;
+	let searchId = 0;
 
 	// File / directory detail state
 	let fileSource = '';
@@ -234,59 +233,49 @@
 
 	// ── Search ──────────────────────────────────────────────────────────────────
 
-	async function doSearch(
-		q: string,
-		m: string,
-		srcs: string[],
-		push = true,
-		append = false
-	) {
+	async function doSearch(q: string, m: string, srcs: string[], push = true) {
 		if (q.trim().length < 3) {
 			results = [];
 			totalResults = 0;
 			searchError = null;
 			return;
 		}
-
-		if (append) {
-			isLoadingMore = true;
-		} else {
-			searching = true;
-		}
-
+		searching = true;
 		searchError = null;
+		searchId += 1;
 		if (push) pushState();
 		try {
-			// Use offset-based pagination for "Load More"
-			// Initial search: offset=0, limit=50
-			// Load more: offset=current results length, limit=min(500, remaining)
-			const offset = append ? results.length : 0;
-			const limit = append ? Math.min(500, totalResults - results.length) : 50;
-
-			const resp = await search({ q, mode: m, sources: srcs, limit, offset });
-
-			if (append) {
-				// Append new results to existing ones
-				results = [...results, ...resp.results];
-			} else {
-				// Replace results for new search
-				results = resp.results;
-			}
+			const resp = await search({ q, mode: m, sources: srcs, limit: 50, offset: 0 });
+			results = resp.results;
 			totalResults = resp.total;
-			// Only switch to results view on interactive searches, not state restoration.
 			if (push) view = 'results';
 		} catch (e) {
 			searchError = String(e);
-			// Clear results on error to avoid showing stale data
-			if (!append) {
-				results = [];
-				totalResults = 0;
-			}
+			results = [];
+			totalResults = 0;
 			if (push) view = 'results';
 		} finally {
-			// Always clear loading states to prevent UI getting stuck
-			isLoadingMore = false;
 			searching = false;
+		}
+	}
+
+	async function loadMore() {
+		if (isLoadingMore || results.length >= totalResults) return;
+		isLoadingMore = true;
+		try {
+			const resp = await search({
+				q: query,
+				mode,
+				sources: selectedSources,
+				limit: 50,
+				offset: results.length,
+			});
+			results = [...results, ...resp.results];
+			totalResults = resp.total;
+		} catch (e) {
+			// silently ignore — user can scroll again to retry
+		} finally {
+			isLoadingMore = false;
 		}
 	}
 
@@ -299,10 +288,6 @@
 	function handleSourceChange(e: CustomEvent<string[]>) {
 		selectedSources = e.detail;
 		if (query.trim()) doSearch(query, mode, selectedSources);
-	}
-
-	function loadMore() {
-		doSearch(query, mode, selectedSources, false, true);
 	}
 
 	// ── File viewer ─────────────────────────────────────────────────────────────
@@ -484,17 +469,12 @@
 				<div class="status error">{searchError}</div>
 			{:else if query.trim().length >= 3}
 				<div class="result-meta">
-					{#if results.length < totalResults}
-						Showing {results.length.toLocaleString()} of {totalResults.toLocaleString()} results
-					{:else}
-						{totalResults.toLocaleString()} result{totalResults !== 1 ? 's' : ''}
-					{/if}
+					{totalResults.toLocaleString()} result{totalResults !== 1 ? 's' : ''}
 				</div>
-				{#key mode}
+				{#key searchId}
 					<ResultList
 						{results}
 						{totalResults}
-						{nextBatchSize}
 						{isLoadingMore}
 						searching={isSearchActive}
 						on:open={openFile}
@@ -558,8 +538,10 @@
 	/* ── Content area ───────────────────────────────────────────────────────── */
 	.content {
 		flex: 1;
-		overflow-y: auto;
-		overflow-x: hidden;
+		min-height: 0;
+		display: flex;
+		flex-direction: column;
+		overflow: hidden;
 		padding: 0 16px;
 		width: 100%;
 	}
