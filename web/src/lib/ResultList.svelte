@@ -29,10 +29,11 @@
 
 	$: virtualItems = $virtualizer.getVirtualItems();
 
-	// Trigger infinite load when the last visible item is within 3 of the end
+	// Preemptively load more when within 10 items of the last loaded result,
+	// so the next batch arrives before the user scrolls to the end.
 	$: {
 		const last = virtualItems[virtualItems.length - 1];
-		if (last && last.index >= results.length - 3 && hasMore && !isLoadingMore) {
+		if (last && last.index >= results.length - 10 && hasMore && !isLoadingMore) {
 			dispatch('loadmore');
 		}
 	}

@@ -267,7 +267,7 @@
 				q: query,
 				mode,
 				sources: selectedSources,
-				limit: 50,
+				limit: 20,
 				offset: results.length,
 			});
 			results = [...results, ...resp.results];
