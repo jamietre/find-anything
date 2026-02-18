@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createEventDispatcher, onMount } from 'svelte';
-	import type { ContextLine, SearchResult } from '$lib/api';
+	import type { SearchResult } from '$lib/api';
 	import { getContext as fetchContext } from '$lib/api';
 	import { highlightLine } from '$lib/highlight';
 
@@ -8,41 +8,44 @@
 
 	const dispatch = createEventDispatcher<{ open: SearchResult }>();
 
-	let containerEl: HTMLElement;
-	let contextLines: ContextLine[] = [];
+	let contextStart = 0;
+	let contextMatchIndex: number | null = null;
+	let contextLines: string[] = [];
 	let contextLoaded = false;
-
-	$: displayLines =
-		contextLines.length > 0
-			? contextLines
-			: [{ line_number: result.line_number, content: result.snippet }];
+	let el: HTMLElement;
 
 	onMount(() => {
 		const observer = new IntersectionObserver(
 			(entries) => {
-				if (entries[0].isIntersecting && !contextLoaded) {
-					contextLoaded = true;
-					fetchContext(
-						result.source,
-						result.path,
-						result.line_number,
-						3,
-						result.archive_path ?? undefined
-					)
-						.then((resp) => {
-							contextLines = resp.lines;
-						})
-						.catch(() => {
-							// silently fall back to snippet
-						});
+				if (entries[0].isIntersecting) {
 					observer.disconnect();
+					loadContext();
 				}
 			},
 			{ rootMargin: '200px' }
 		);
-		observer.observe(containerEl);
+		observer.observe(el);
 		return () => observer.disconnect();
 	});
+
+	async function loadContext() {
+		try {
+			const resp = await fetchContext(
+				result.source,
+				result.path,
+				result.line_number,
+				2,
+				result.archive_path ?? undefined
+			);
+			contextStart = resp.start;
+			contextMatchIndex = resp.match_index;
+			contextLines = resp.lines;
+		} catch {
+			// silently fall back to snippet
+		} finally {
+			contextLoaded = true;
+		}
+	}
 
 	function openFile() {
 		dispatch('open', result);
@@ -57,7 +60,7 @@
 	}
 </script>
 
-<article class="result" bind:this={containerEl}>
+<article class="result" bind:this={el}>
 	<!-- svelte-ignore a11y-no-static-element-interactions -->
 	<div
 		class="result-header"
@@ -73,13 +76,29 @@
 	</div>
 
 	<div class="context-lines">
-		{#each displayLines as line}
-			<div class="line" class:match={line.line_number === result.line_number}>
-				<span class="ln">{line.line_number}</span>
-				<span class="arrow">{line.line_number === result.line_number ? '▶' : ' '}</span>
-				<code class="lc">{@html highlightLine(line.content, result.path)}</code>
+		{#if contextLines.length > 0}
+			{#each contextLines as content, i}
+				{@const lineNum = contextStart + i}
+				{@const isMatch = i === contextMatchIndex}
+				<div class="line" class:match={isMatch}>
+					<span class="ln">{lineNum}</span>
+					<span class="arrow">{isMatch ? '▶' : ' '}</span>
+					<code class="lc">{@html highlightLine(content, result.path)}</code>
+				</div>
+			{/each}
+		{:else if contextLoaded}
+			<div class="line match">
+				<span class="ln">{result.line_number}</span>
+				<span class="arrow">▶</span>
+				<code class="lc">{@html highlightLine(result.snippet, result.path)}</code>
 			</div>
-		{/each}
+		{:else}
+			<div class="placeholder">
+				<span class="ln">{result.line_number}</span>
+				<span class="arrow">▶</span>
+				<span class="placeholder-bar"></span>
+			</div>
+		{/if}
 	</div>
 </article>
 
@@ -136,7 +155,6 @@
 
 	.context-lines {
 		background: var(--bg);
-		overflow: hidden;
 	}
 
 	.line {
@@ -182,5 +200,22 @@
 		text-overflow: ellipsis;
 		flex: 1;
 		min-width: 0;
+	}
+
+	.placeholder {
+		display: flex;
+		align-items: baseline;
+		padding: 1px 0;
+		border-left: 2px solid var(--match-border);
+		background: var(--match-line-bg);
+	}
+
+	.placeholder-bar {
+		flex: 1;
+		height: 10px;
+		margin: 3px 12px 3px 4px;
+		border-radius: 3px;
+		background: var(--border);
+		opacity: 0.5;
 	}
 </style>

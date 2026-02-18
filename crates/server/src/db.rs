@@ -208,18 +208,14 @@ pub struct CandidateRow {
 }
 
 /// FTS5 trigram pre-filter.  Returns up to `limit` candidate rows.
-pub fn fts_candidates(
-    conn: &Connection,
-    archive_mgr: &ArchiveManager,
-    query: &str,
-    limit: usize,
-    phrase: bool,
-) -> Result<Vec<CandidateRow>> {
-    let fts_query = if phrase {
+/// Build an FTS5 match expression from a raw query string.
+/// Returns None if the query produces no matchable terms.
+fn build_fts_query(query: &str, phrase: bool) -> Option<String> {
+    if phrase {
         if query.len() < 3 {
-            return Ok(vec![]);
+            return None;
         }
-        format!("\"{}\"", query.replace('"', "\"\""))
+        Some(format!("\"{}\"", query.replace('"', "\"\"")))
     } else {
         let terms: Vec<String> = query
             .split_whitespace()
@@ -227,9 +223,35 @@ pub fn fts_candidates(
             .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
             .collect();
         if terms.is_empty() {
-            return Ok(vec![]);
+            return None;
         }
-        terms.join(" AND ")
+        Some(terms.join(" AND "))
+    }
+}
+
+/// Fast FTS5-only count, capped at `limit`. No ZIP reads, no JOINs.
+/// Used to compute the approximate total result count efficiently.
+pub fn fts_count(conn: &Connection, query: &str, limit: usize, phrase: bool) -> Result<usize> {
+    let Some(fts_query) = build_fts_query(query, phrase) else {
+        return Ok(0);
+    };
+    let count: i64 = conn.query_row(
+        "SELECT count(*) FROM (SELECT 1 FROM lines_fts WHERE lines_fts MATCH ?1 LIMIT ?2)",
+        params![fts_query, limit as i64],
+        |row| row.get(0),
+    )?;
+    Ok(count as usize)
+}
+
+pub fn fts_candidates(
+    conn: &Connection,
+    archive_mgr: &ArchiveManager,
+    query: &str,
+    limit: usize,
+    phrase: bool,
+) -> Result<Vec<CandidateRow>> {
+    let Some(fts_query) = build_fts_query(query, phrase) else {
+        return Ok(vec![]);
     };
 
     struct RawRow {
@@ -346,7 +368,6 @@ pub fn get_context(
 
     match kind.as_str() {
         "image" | "audio" => get_metadata_context(conn, archive_mgr, file_path),
-        "pdf" => get_pdf_context(conn, archive_mgr, file_path, center, window),
         _ => get_line_context(conn, archive_mgr, file_path, center, window),
     }
 }
@@ -386,133 +407,6 @@ fn get_metadata_context(
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     Ok(resolve_content(archive_mgr, rows))
-}
-
-fn get_pdf_context(
-    conn: &Connection,
-    archive_mgr: &ArchiveManager,
-    file_path: &str,
-    center: usize,
-    window: usize,
-) -> Result<Vec<ContextLine>> {
-    let window_chars = window * 80;
-
-    let mut before = get_lines_before_with_limit(conn, archive_mgr, file_path, center, window_chars)?;
-    let matched = get_line_exact(conn, archive_mgr, file_path, center)?;
-    let after = get_lines_after_with_limit(conn, archive_mgr, file_path, center, window_chars)?;
-
-    before.extend(matched);
-    before.extend(after);
-    Ok(before)
-}
-
-fn get_line_exact(
-    conn: &Connection,
-    archive_mgr: &ArchiveManager,
-    file_path: &str,
-    line_number: usize,
-) -> Result<Vec<ContextLine>> {
-    let mut stmt = conn.prepare(
-        "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
-         FROM lines l
-         JOIN files f ON f.id = l.file_id
-         WHERE f.path = ?1
-           AND l.line_number = ?2",
-    )?;
-
-    let rows: Vec<(usize, String, String, usize)> = stmt
-        .query_map(params![file_path, line_number as i64], |row| {
-            Ok((
-                row.get::<_, i64>(0)? as usize,
-                row.get(1)?,
-                row.get(2)?,
-                row.get::<_, i64>(3)? as usize,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    Ok(resolve_content(archive_mgr, rows))
-}
-
-fn get_lines_before_with_limit(
-    conn: &Connection,
-    archive_mgr: &ArchiveManager,
-    file_path: &str,
-    center: usize,
-    max_chars: usize,
-) -> Result<Vec<ContextLine>> {
-    let mut stmt = conn.prepare(
-        "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
-         FROM lines l
-         JOIN files f ON f.id = l.file_id
-         WHERE f.path = ?1
-           AND l.line_number < ?2
-         ORDER BY l.line_number DESC",
-    )?;
-
-    let all_raw: Vec<(usize, String, String, usize)> = stmt
-        .query_map(params![file_path, center as i64], |row| {
-            Ok((
-                row.get::<_, i64>(0)? as usize,
-                row.get(1)?,
-                row.get(2)?,
-                row.get::<_, i64>(3)? as usize,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    let resolved = resolve_content(archive_mgr, all_raw);
-    let mut lines = Vec::new();
-    let mut char_count = 0;
-    for line in resolved {
-        char_count += line.content.len();
-        if char_count > max_chars && !lines.is_empty() {
-            break;
-        }
-        lines.push(line);
-    }
-    lines.reverse();
-    Ok(lines)
-}
-
-fn get_lines_after_with_limit(
-    conn: &Connection,
-    archive_mgr: &ArchiveManager,
-    file_path: &str,
-    center: usize,
-    max_chars: usize,
-) -> Result<Vec<ContextLine>> {
-    let mut stmt = conn.prepare(
-        "SELECT l.line_number, l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
-         FROM lines l
-         JOIN files f ON f.id = l.file_id
-         WHERE f.path = ?1
-           AND l.line_number > ?2
-         ORDER BY l.line_number",
-    )?;
-
-    let all_raw: Vec<(usize, String, String, usize)> = stmt
-        .query_map(params![file_path, center as i64], |row| {
-            Ok((
-                row.get::<_, i64>(0)? as usize,
-                row.get(1)?,
-                row.get(2)?,
-                row.get::<_, i64>(3)? as usize,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    let resolved = resolve_content(archive_mgr, all_raw);
-    let mut lines = Vec::new();
-    let mut char_count = 0;
-    for line in resolved {
-        char_count += line.content.len();
-        if char_count > max_chars && !lines.is_empty() {
-            break;
-        }
-        lines.push(line);
-    }
-    Ok(lines)
 }
 
 fn get_line_context(

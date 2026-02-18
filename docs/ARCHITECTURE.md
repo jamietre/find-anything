@@ -203,6 +203,74 @@ Only immediate children are returned; the UI lazy-loads subdirectories on expand
 
 ---
 
+## Server Routes
+
+The server's HTTP handlers live in `crates/server/src/routes/`, split by concern:
+
+| File | Endpoints |
+|------|-----------|
+| `routes/mod.rs` | Shared helpers (`check_auth`, `source_db_path`, `compact_lines`); `GET /api/v1/metrics` |
+| `routes/search.rs` | `GET /api/v1/search` — fuzzy / exact / regex modes, multi-source parallel query |
+| `routes/context.rs` | `GET /api/v1/context`, `POST /api/v1/context-batch` |
+| `routes/file.rs` | `GET /api/v1/file`, `GET /api/v1/files` |
+| `routes/tree.rs` | `GET /api/v1/sources`, `GET /api/v1/tree` |
+| `routes/bulk.rs` | `POST /api/v1/bulk` — writes gzip to inbox, returns 202 immediately |
+
+`check_auth` and `source_db_path` are `pub(super)` so only submodules can call them.
+
+---
+
+## Web UI Structure
+
+The SvelteKit frontend (`web/src/`) follows a coordinator + view component pattern:
+
+```
+routes/+page.svelte     — thin coordinator: owns all state, no layout code
+lib/
+  appState.ts           — pure functions: buildUrl(), restoreFromParams(), AppState type
+  SearchView.svelte     — search topbar + ResultList + error display
+  FileView.svelte       — file topbar + sidebar (DirectoryTree) + viewer panel
+  ResultList.svelte     — scrollable result list with scroll-triggered pagination
+  SearchResult.svelte   — single result card with context lines
+  FileViewer.svelte     — full file display (text, markdown, binary, image, PDF)
+  api.ts                — typed fetch wrappers for all server endpoints
+```
+
+**State management**: All mutable state (query, results, file path, view mode, etc.) lives
+in `+page.svelte`. Child components receive props and emit typed Svelte events upward.
+
+**Pagination**: `ResultList` fires a `loadmore` event when the user scrolls within 400 px
+of the bottom. The page coordinator fetches the next batch (offset = current length) and
+appends it to the result array. No virtual DOM recycling — plain `{#each}` is adequate for
+the batch sizes used (50 initial, 20 per load-more).
+
+**Context lines**: `SearchResult` fetches context on `onMount` via `GET /api/v1/context`
+with `window=2` (2 lines before and after the match = 5 lines total). Falls back silently
+to the `snippet` field if the request fails.
+
+**URL / history**: `buildUrl` encodes `q`, `mode`, `source[]`, `path`, and `panelMode`
+into query params. `restoreFromParams` reconstructs `AppState` from `URLSearchParams`.
+`history.pushState` / `replaceState` are called directly in `+page.svelte`.
+
+---
+
+## Snippet Retrieval
+
+The `snippet` field in search results is **not stored in SQLite**. It is read live from
+ZIP archives at query time:
+
+1. FTS5 trigram index matches the query → returns `rowid`s (no text stored, `content=''`)
+2. Join to `lines` table → gets `(chunk_archive, chunk_name, line_offset_in_chunk)`
+3. Read chunk text from ZIP → index into lines by offset → that string is the snippet
+
+A per-request `HashMap` cache avoids re-reading the same chunk for multiple results.
+
+**Implication**: For files with very long lines (e.g., PDFs with no line breaks), the
+snippet can be very large because there is no truncation in the pipeline. The full line
+content is returned verbatim in the JSON response.
+
+---
+
 ## Key Files
 
 | File | Purpose |
@@ -218,10 +286,13 @@ Only immediate children are returned; the UI lazy-loads subdirectories on expand
 | `crates/server/src/worker.rs` | Inbox polling loop + BulkRequest processing |
 | `crates/server/src/archive.rs` | ZIP archive management + chunk_lines() |
 | `crates/server/src/db.rs` | All SQLite operations |
-| `crates/server/src/routes.rs` | HTTP route handlers |
+| `crates/server/src/routes/` | HTTP route handlers (see Server Routes above) |
 | `crates/server/src/schema_v2.sql` | DB schema |
 | `web/src/lib/api.ts` | TypeScript API client |
-| `web/src/routes/+page.svelte` | Main page — view state machine |
+| `web/src/lib/appState.ts` | URL serialisation + AppState type |
+| `web/src/routes/+page.svelte` | Main page — coordinator, owns all state |
+| `web/src/lib/SearchView.svelte` | Search topbar + result list |
+| `web/src/lib/FileView.svelte` | File topbar + sidebar + viewer panel |
 
 ---
 
@@ -230,7 +301,8 @@ Only immediate children are returned; the UI lazy-loads subdirectories on expand
 - **`line_number = 0`** is always the file's relative path, indexed so every file is
   findable by name even if content extraction yields nothing.
 - **FTS5 index is contentless** (`content=''`); content lives only in ZIPs. FTS5 is
-  populated manually by the worker at insert time.
+  populated manually by the worker at insert time. The `lines` table stores only
+  `(chunk_archive, chunk_name, line_offset_in_chunk)` — no content column in SQLite.
 - **`archive_path` on `IndexLine`** is deprecated (schema v3) — composite paths in
   `files.path` replaced it. For backward compatibility, API endpoints still accept an
   `archive_path` query param.

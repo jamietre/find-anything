@@ -160,8 +160,15 @@ pub struct ContextLine {
 /// GET /api/v1/context response.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ContextResponse {
-    pub lines: Vec<ContextLine>,
-    pub file_kind: String,
+    /// Line number of the first element in `lines`. Client computes each
+    /// line's number as `start + index` (approximate — gaps exist in sparse
+    /// files like PDFs where empty lines are not stored).
+    pub start: usize,
+    /// Index within `lines` of the matched line, or null if the center line
+    /// was not found in the returned window (e.g. it fell in a gap).
+    pub match_index: Option<usize>,
+    pub lines: Vec<String>,
+    pub kind: String,
 }
 
 /// GET /api/v1/file response.
@@ -231,8 +238,10 @@ pub struct ContextBatchResult {
     pub source: String,
     pub path: String,
     pub line: usize,
-    pub lines: Vec<ContextLine>,
-    pub file_kind: String,
+    pub start: usize,
+    pub match_index: Option<usize>,
+    pub lines: Vec<String>,
+    pub kind: String,
 }
 
 /// POST /api/v1/context-batch response.

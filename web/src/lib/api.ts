@@ -34,8 +34,11 @@ export interface FileResponse {
 }
 
 export interface ContextResponse {
-	lines: ContextLine[];
-	file_kind: string;
+	start: number;
+	/** Index within lines[] of the matched line; null if center fell in a gap. */
+	match_index: number | null;
+	lines: string[];
+	kind: string;
 }
 
 export interface DirEntry {
@@ -141,8 +144,10 @@ export interface ContextBatchResult {
 	source: string;
 	path: string;
 	line: number;
-	lines: ContextLine[];
-	file_kind: string;
+	start: number;
+	match_index: number | null;
+	lines: string[];
+	kind: string;
 }
 
 export interface ContextBatchResponse {
