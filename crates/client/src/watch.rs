@@ -308,6 +308,7 @@ async fn extract_via_subprocess(abs_path: &Path, config: &ClientConfig) -> Vec<I
     let binary = extractor_binary_for(abs_path, &config.watch.extractor_dir);
     let max_size_kb = config.scan.max_file_size_kb.to_string();
     let max_depth = config.scan.archives.max_depth.to_string();
+    let max_line_length = config.scan.max_line_length.to_string();
 
     let ext = abs_path
         .extension()
@@ -318,11 +319,16 @@ async fn extract_via_subprocess(abs_path: &Path, config: &ClientConfig) -> Vec<I
         ext.as_str(),
         "zip" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "tbz2" | "txz" | "7z"
     );
+    let is_pdf = ext == "pdf";
 
     let mut cmd = tokio::process::Command::new(&binary);
     cmd.arg(abs_path).arg(&max_size_kb);
     if is_archive {
-        cmd.arg(&max_depth);
+        // find-extract-archive: <path> [max-size-kb] [max-depth] [max-line-length]
+        cmd.arg(&max_depth).arg(&max_line_length);
+    } else if is_pdf {
+        // find-extract-pdf: <path> [max-size-kb] [max-line-length]
+        cmd.arg(&max_line_length);
     }
 
     match cmd.output().await {
