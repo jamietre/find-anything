@@ -193,6 +193,28 @@ subdirectories on expand.
 
 ## Project Conventions
 
+### Rust: Configuration objects over threaded parameters
+
+When a function needs to pass configuration to downstream callers, prefer a
+config struct over threading individual parameters:
+
+- **Threshold:** As soon as you would thread **more than one parameter** through
+  a call chain, introduce a config struct instead.
+- **Pattern:** Define the struct in `find-common` (so all crates can share it),
+  derive `Copy`, and pass `&ConfigStruct` by reference.
+- **Example:** `ExtractorConfig` in `crates/common/src/config.rs` bundles
+  `max_size_kb`, `max_depth`, and `max_line_length` — used by `find-extract-pdf`,
+  `find-extract-archive`, and `find-client`.
+- **Constructor:** Provide a `from_scan(scan: &ScanConfig) -> Self` method (or
+  equivalent) so call sites build the struct once from the top-level config and
+  pass it down, rather than unpacking fields at every level.
+
+This keeps function signatures stable when new settings are added: only the
+struct definition and its construction site change, not every function in the
+call chain.
+
+---
+
 ### Versioning
 
 This project follows semantic versioning (MAJOR.MINOR.PATCH):
