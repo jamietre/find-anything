@@ -103,11 +103,15 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Auto-start integration** — Tray app registered in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` during service installation
 - **Comprehensive documentation** — `docs/windows/README.md` with quick start, service management, troubleshooting, and Windows-specific differences
 
-### ✅ Search UX & Virtual Scroll (v0.2.3)
-- **Debounced search with live feedback** — 500ms debounce; spinner appears immediately on keystroke; old results stay visible (blurred) while new search is in-flight; no results-flash on transition
-- **Virtual/infinite scroll** — `@tanstack/svelte-virtual` renders only visible result rows; DOM stays lean regardless of total count; scroll position preserved across item-count changes
-- **Infinite load on scroll** — Auto-fetches next 50 results (append mode) when user scrolls near the bottom; no "Load More" button required; loader sentinel row with spinner shown at end
-- **Dynamic height measurement** — `ResizeObserver` per virtual row re-measures when context lines lazy-expand; layout stays correct after height changes
+### ✅ Search UX, Infinite Scroll & Frontend Refactor (v0.2.3)
+- **Debounced search with live feedback** — 500ms debounce; old results stay visible and blurred while new search is in-flight; no flash on transition
+- **Infinite scroll** — Window scroll listener preemptively loads next 50 results when within 600px of bottom; paginated batches deduplicated by `source:path:line_number` to handle overlapping pages
+- **Lazy context loading** — `IntersectionObserver` per result card fetches context only when it scrolls into view; placeholder shown until loaded; avoids burst of N requests on page load
+- **Page-scroll architecture** — Natural page scroll (no inner scroll container); sticky topbar; `ResultList` is a pure display component
+- **Markdown rendering in file viewer** — `marked` renders `.md` files as HTML with a toolbar toggle between rendered and raw views
+- **Command palette** — Ctrl+P opens a file-search palette across all indexed sources
+- **Frontend component refactor** — Extracted `SearchView`, `FileView`, `appState` modules; coordinator pattern with all state in `+page.svelte`
+- **Context API refactored** — `ContextResponse` returns `{start, match_index, lines[], kind}`; server routes split into `routes/` submodule (search, context, file, tree, bulk)
 
 ### ✅ Investigations
 - **Archive Index Compression** — FTS5 trigram index is inherently ~3x text size; current architecture is optimal. No changes needed.
@@ -139,14 +143,11 @@ Beyond the release pipeline, the getting-started experience needs polish:
 - Recency bias (recently modified files rank higher)
 - Result deduplication across sources
 - Advanced filters in UI (file type, date range, size)
-- Boolean operators (AND, OR, NOT) in query syntax
+- Boolean operators (AND, OR, NOT) in query syntax "advanced search"
 
 ### Web UI Phase 2
-- debounce searching while typing
-- improve search results updates to avoid clearing screen first (flip on new results content in another container and make old results invisible?)
 - Search suggestions / autocomplete
 - Recent searches dropdown
-- Command palette (Cmd+K style)
 - Search result export (JSON, CSV)
 - Advanced search filter UI
 
@@ -181,7 +182,7 @@ audit logging.
 - [x] File metadata in detail view (create/edit time)
 - [ ] Search suggestions / autocomplete
 - [ ] Recent searches dropdown
-- [ ] Command palette (Cmd+K style)
+- [x] Command palette (Ctrl+P) — v0.2.3
 - [ ] Regex helper / tester UI
 - [ ] Result grouping by file type or source
 - [ ] Show images inlne when possible if remote-url works

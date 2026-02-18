@@ -211,7 +211,7 @@ The server's HTTP handlers live in `crates/server/src/routes/`, split by concern
 |------|-----------|
 | `routes/mod.rs` | Shared helpers (`check_auth`, `source_db_path`, `compact_lines`); `GET /api/v1/metrics` |
 | `routes/search.rs` | `GET /api/v1/search` — fuzzy / exact / regex modes, multi-source parallel query |
-| `routes/context.rs` | `GET /api/v1/context`, `POST /api/v1/context-batch` |
+| `routes/context.rs` | `GET /api/v1/context`, `POST /api/v1/context-batch`; returns `{start, match_index, lines[], kind}` |
 | `routes/file.rs` | `GET /api/v1/file`, `GET /api/v1/files` |
 | `routes/tree.rs` | `GET /api/v1/sources`, `GET /api/v1/tree` |
 | `routes/bulk.rs` | `POST /api/v1/bulk` — writes gzip to inbox, returns 202 immediately |
@@ -230,8 +230,8 @@ lib/
   appState.ts           — pure functions: buildUrl(), restoreFromParams(), AppState type
   SearchView.svelte     — search topbar + ResultList + error display
   FileView.svelte       — file topbar + sidebar (DirectoryTree) + viewer panel
-  ResultList.svelte     — scrollable result list with scroll-triggered pagination
-  SearchResult.svelte   — single result card with context lines
+  ResultList.svelte     — pure display component; renders result cards, no scroll logic
+  SearchResult.svelte   — single result card with lazy-loaded context lines
   FileViewer.svelte     — full file display (text, markdown, binary, image, PDF)
   api.ts                — typed fetch wrappers for all server endpoints
 ```
@@ -239,14 +239,21 @@ lib/
 **State management**: All mutable state (query, results, file path, view mode, etc.) lives
 in `+page.svelte`. Child components receive props and emit typed Svelte events upward.
 
-**Pagination**: `ResultList` fires a `loadmore` event when the user scrolls within 400 px
-of the bottom. The page coordinator fetches the next batch (offset = current length) and
-appends it to the result array. No virtual DOM recycling — plain `{#each}` is adequate for
-the batch sizes used (50 initial, 20 per load-more).
+**Page scroll architecture**: The page scrolls naturally (no inner scroll container in
+`ResultList`). The search topbar is `position: sticky; top: 0`. A `window` scroll listener
+in `+page.svelte` calls `triggerLoad()` when within 600 px of the bottom.
 
-**Context lines**: `SearchResult` fetches context on `onMount` via `GET /api/v1/context`
-with `window=2` (2 lines before and after the match = 5 lines total). Falls back silently
-to the `snippet` field if the request fails.
+**Pagination**: `+page.svelte` fetches the next batch (limit 50, offset = current length)
+and deduplicates by `source:path:line_number` before appending — the search API can return
+overlapping results across page boundaries. A new search resets `results` and scrolls to
+top. No virtual DOM recycling — plain `{#each}` with dedup is adequate for these batch sizes.
+
+**Context lines**: `SearchResult` fetches context lazily via `IntersectionObserver` — only
+when the card scrolls into view — to avoid a burst of N requests on initial load. A
+placeholder bar is shown until loaded. Falls back silently to the `snippet` field if the
+request fails or returns empty lines. The `ContextResponse` returns `{start, match_index,
+lines: string[], kind}` where `start` is the first line number and `match_index` locates
+the matched line within the window (null if the match falls in a sparse gap).
 
 **URL / history**: `buildUrl` encodes `q`, `mode`, `source[]`, `path`, and `panelMode`
 into query params. `restoreFromParams` reconstructs `AppState` from `URLSearchParams`.
