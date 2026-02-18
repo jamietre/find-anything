@@ -215,6 +215,25 @@ call chain.
 
 ---
 
+### Commits
+
+**Do not automatically commit changes.** Always wait for explicit user instruction before running `git commit`. Complete the implementation and verify it works first; the user will ask to commit when ready.
+
+---
+
+### Search result keys (prevent duplicate-key regressions)
+
+The keyed `{#each}` in `ResultList.svelte` uses:
+```
+`${source}:${path}:${archive_path ?? ''}:${line_number}`
+```
+
+**All four fields are required.** `archive_path` distinguishes members of the same archive (e.g. `outer.zip::a.txt` vs `outer.zip::b.txt` both map `path = outer.zip`). If any new discriminating field is added to `SearchResult`, add it to this key too.
+
+The server also deduplicates results by the same four-tuple in `routes/search.rs` before returning — this is the canonical guard. The client key is a second line of defence for correct DOM reconciliation.
+
+---
+
 ### Versioning
 
 This project follows semantic versioning (MAJOR.MINOR.PATCH):

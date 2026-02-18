@@ -3,6 +3,7 @@
 	import type { SearchResult } from '$lib/api';
 	import { getContext as fetchContext } from '$lib/api';
 	import { highlightLine } from '$lib/highlight';
+	import { contextWindow } from '$lib/settingsStore';
 
 	export let result: SearchResult;
 
@@ -46,7 +47,7 @@
 				result.source,
 				result.path,
 				result.line_number,
-				2,
+				$contextWindow,
 				result.archive_path ?? undefined
 			);
 			contextStart = resp.start;
@@ -105,10 +106,10 @@
 				<code class="lc">{@html highlightLine(result.snippet, result.path)}</code>
 			</div>
 		{:else}
-			{#each Array(5) as _, i}
-				<div class="placeholder" class:match={i === 2}>
-					<span class="ln">{i === 2 ? result.line_number : ''}</span>
-					<span class="arrow">{i === 2 ? '▶' : ' '}</span>
+			{#each Array(2 * $contextWindow + 1) as _, i}
+				<div class="placeholder" class:match={i === $contextWindow}>
+					<span class="ln">{i === $contextWindow ? result.line_number : ''}</span>
+					<span class="arrow">{i === $contextWindow ? '▶' : ' '}</span>
 					<span class="placeholder-bar"></span>
 				</div>
 			{/each}

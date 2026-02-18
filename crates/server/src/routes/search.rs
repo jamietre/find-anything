@@ -252,7 +252,18 @@ pub async fn search(
     }
 
     all_results.sort_by(|a, b| b.score.cmp(&a.score));
-    let results: Vec<_> = all_results.into_iter().skip(offset).take(limit).collect();
+
+    // Deduplicate by (source, path, archive_path, line_number), keeping the
+    // highest-scoring occurrence (first after sort). Duplicates arise when FTS5
+    // returns multiple rows for the same logical match (e.g. two members of the
+    // same archive that share a line number after composite-path splitting).
+    let mut seen = std::collections::HashSet::new();
+    let unique: Vec<_> = all_results
+        .into_iter()
+        .filter(|r| seen.insert((r.source.clone(), r.path.clone(), r.archive_path.clone(), r.line_number)))
+        .collect();
+
+    let results: Vec<_> = unique.into_iter().skip(offset).take(limit).collect();
 
     Json(SearchResponse { results, total }).into_response()
 }

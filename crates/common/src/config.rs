@@ -46,7 +46,7 @@ pub struct ScanConfig {
 
     /// Maximum line length (in characters) for PDF text extraction.
     /// Lines longer than this are split at word boundaries so that context
-    /// retrieval (which fetches ±2 lines) returns meaningful snippets.
+    /// retrieval returns meaningful snippets.
     /// Set to 0 to disable wrapping. Default: 120.
     #[serde(default = "default_max_line_length")]
     pub max_line_length: usize,
@@ -198,6 +198,10 @@ pub struct SearchSettings {
     pub max_limit: usize,
     #[serde(default = "default_fts_candidate_limit")]
     pub fts_candidate_limit: usize,
+    /// Number of lines shown before and after each match in search result cards.
+    /// Total lines displayed = 2 × context_window + 1. Default: 1 (3 lines total).
+    #[serde(default = "default_context_window")]
+    pub context_window: usize,
 }
 
 impl Default for SearchSettings {
@@ -206,6 +210,7 @@ impl Default for SearchSettings {
             default_limit: default_search_limit(),
             max_limit: default_max_limit(),
             fts_candidate_limit: default_fts_candidate_limit(),
+            context_window: default_context_window(),
         }
     }
 }
@@ -213,6 +218,7 @@ impl Default for SearchSettings {
 fn default_search_limit() -> usize { 50 }
 fn default_max_limit() -> usize { 500 }
 fn default_fts_candidate_limit() -> usize { 2000 }
+fn default_context_window() -> usize { 1 }
 
 #[cfg(test)]
 mod tests {

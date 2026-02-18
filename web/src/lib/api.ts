@@ -182,3 +182,13 @@ export async function getContext(
 	if (!resp.ok) throw new Error(`getContext: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
+
+export interface AppSettings {
+	context_window: number;
+}
+
+export async function getSettings(): Promise<AppSettings> {
+	const resp = await fetch('/api/v1/settings');
+	if (!resp.ok) throw new Error(`getSettings: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}

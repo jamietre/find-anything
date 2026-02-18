@@ -13,7 +13,7 @@
 	{#if results.length === 0 && !searching}
 		<p class="empty">No results.</p>
 	{:else}
-		{#each results as result (`${result.source}:${result.path}:${result.line_number}`)}
+		{#each results as result (`${result.source}:${result.path}:${result.archive_path ?? ''}:${result.line_number}`)}
 			<div class="result-pad">
 				<SearchResultItem {result} on:open={(e) => dispatch('open', e.detail)} />
 			</div>

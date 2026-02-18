@@ -26,11 +26,9 @@ pub struct ContextParams {
     /// Legacy: combined with `path` into a composite path if provided.
     pub archive_path: Option<String>,
     pub line: usize,
-    #[serde(default = "default_window")]
-    pub window: usize,
+    /// If omitted, the server's configured `search.context_window` is used.
+    pub window: Option<usize>,
 }
-
-fn default_window() -> usize { 5 }
 
 pub async fn get_context(
     State(state): State<Arc<AppState>>,
@@ -49,6 +47,7 @@ pub async fn get_context(
         _ => params.path.clone(),
     };
 
+    let window = params.window.unwrap_or(state.config.search.context_window);
     let data_dir = state.data_dir.clone();
     match spawn_blocking(move || {
         let conn = db::open(&db_path)?;
@@ -64,7 +63,7 @@ pub async fn get_context(
             &archive_mgr,
             &full_path,
             params.line,
-            params.window,
+            window,
         )?;
         let (start, match_index, lines) = compact_lines(raw, params.line);
         Ok::<_, anyhow::Error>(ContextResponse { start, match_index, lines, kind })

@@ -133,16 +133,15 @@ fn extract_markdown_with_frontmatter(content: &str) -> Vec<IndexLine> {
         }
     }
 
-    // Index the content (either full content if no frontmatter, or content after frontmatter)
+    // Index the content (either full content if no frontmatter, or content after frontmatter).
+    // Empty lines are stored with empty content so line numbers stay dense and context
+    // retrieval (BETWEEN lo AND hi) reliably finds neighbours around any match.
     for (i, line) in parsed.content.lines().enumerate() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
-            lines.push(IndexLine {
-                archive_path: None,
-                line_number: i + 1,
-                content: trimmed.to_string(),
-            });
-        }
+        lines.push(IndexLine {
+            archive_path: None,
+            line_number: i + 1,
+            content: line.trim().to_string(),
+        });
     }
 
     lines

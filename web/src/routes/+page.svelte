@@ -4,8 +4,9 @@
 	import FileView from '$lib/FileView.svelte';
 	import CommandPalette from '$lib/CommandPalette.svelte';
 	import Settings from '$lib/Settings.svelte';
-	import { search, listSources } from '$lib/api';
+	import { search, listSources, getSettings } from '$lib/api';
 	import type { SearchResult, SourceInfo } from '$lib/api';
+	import { contextWindow } from '$lib/settingsStore';
 	import { formatHash } from '$lib/lineSelection';
 	import type { LineSelection } from '$lib/lineSelection';
 	import { FilePath } from '$lib/filePath';
@@ -72,6 +73,7 @@
 	onMount(() => {
 		(async () => {
 			try { sources = await listSources(); } catch { /* silent */ }
+			try { const s = await getSettings(); contextWindow.set(s.context_window); } catch { /* silent */ }
 
 			const params = new URLSearchParams(location.search);
 			if (params.has('q') || params.has('path')) {

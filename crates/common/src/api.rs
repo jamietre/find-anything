@@ -249,3 +249,11 @@ pub struct ContextBatchResult {
 pub struct ContextBatchResponse {
     pub results: Vec<ContextBatchResult>,
 }
+
+/// GET /api/v1/settings response — display configuration for the web UI.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AppSettingsResponse {
+    /// Lines shown before and after each match in search result cards.
+    /// Total lines = 2 × context_window + 1.
+    pub context_window: usize,
+}

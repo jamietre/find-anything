@@ -9,6 +9,9 @@ pub use context::{context_batch, get_context};
 pub use file::{get_file, list_files};
 pub use search::search;
 pub use tree::{list_dir, list_sources};
+pub use self::settings::get_settings;
+
+mod settings;
 
 use std::sync::Arc;
 
