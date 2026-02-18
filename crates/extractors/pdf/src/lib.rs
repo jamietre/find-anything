@@ -1,20 +1,13 @@
 use std::path::Path;
 use find_common::api::IndexLine;
+use find_common::config::ExtractorConfig;
 
 /// Extract text content from PDF files.
 ///
 /// Uses pdf-extract library. Handles malformed PDFs gracefully by catching panics.
-///
-/// # Arguments
-/// * `path` - Path to the PDF file
-/// * `max_size_kb` - Maximum file size in KB (currently unused)
-/// * `max_line_length` - Wrap lines longer than this many chars at word boundaries (0 = no wrap)
-///
-/// # Returns
-/// Vector of IndexLine objects with sequential line numbers and wrapped lines
-pub fn extract(path: &Path, max_size_kb: usize, max_line_length: usize) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     let bytes = std::fs::read(path)?;
-    extract_from_bytes(&bytes, &path.display().to_string(), max_size_kb, max_line_length)
+    extract_from_bytes(&bytes, &path.display().to_string(), cfg)
 }
 
 /// Extract text content from PDF bytes.
@@ -25,10 +18,10 @@ pub fn extract(path: &Path, max_size_kb: usize, max_line_length: usize) -> anyho
 /// are skipped entirely so there are no gaps in the line number sequence. This
 /// ensures that context retrieval (±2 lines) always returns the expected window.
 ///
-/// Lines longer than `max_line_length` characters are split at word boundaries
+/// Lines longer than `cfg.max_line_length` characters are split at word boundaries
 /// into multiple indexed lines, which makes long PDF paragraphs searchable and
 /// provides meaningful surrounding context.
-pub fn extract_from_bytes(bytes: &[u8], name: &str, _max_size_kb: usize, max_line_length: usize) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     // pdf-extract can panic on malformed PDFs; catch_unwind turns that into
     // a recoverable error so the scan can continue with other files.
     //
@@ -67,8 +60,8 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, _max_size_kb: usize, max_lin
             continue;
         }
 
-        let chunks = if max_line_length > 0 && trimmed.chars().count() > max_line_length {
-            wrap_at_words(trimmed, max_line_length)
+        let chunks = if cfg.max_line_length > 0 && trimmed.chars().count() > cfg.max_line_length {
+            wrap_at_words(trimmed, cfg.max_line_length)
         } else {
             vec![trimmed.to_string()]
         };

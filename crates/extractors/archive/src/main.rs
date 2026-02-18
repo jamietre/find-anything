@@ -1,11 +1,12 @@
 use std::path::Path;
 use std::process;
+use find_common::config::ExtractorConfig;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: find-extract-archive <file-path> [max-size-kb] [max-depth]");
+        eprintln!("Usage: find-extract-archive <file-path> [max-size-kb] [max-depth] [max-line-length]");
         eprintln!();
         eprintln!("Extracts content from archive files and outputs JSON.");
         eprintln!();
@@ -25,23 +26,13 @@ fn main() {
     }
 
     let path = Path::new(&args[1]);
-    let max_size_kb = if args.len() > 2 {
-        args[2].parse().unwrap_or(10240)
-    } else {
-        10240 // 10 MB default
-    };
-    let max_depth = if args.len() > 3 {
-        args[3].parse().unwrap_or(10)
-    } else {
-        10
-    };
-    let max_line_length = if args.len() > 4 {
-        args[4].parse().unwrap_or(120)
-    } else {
-        120
+    let cfg = ExtractorConfig {
+        max_size_kb: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10240),
+        max_depth: args.get(3).and_then(|s| s.parse().ok()).unwrap_or(10),
+        max_line_length: args.get(4).and_then(|s| s.parse().ok()).unwrap_or(120),
     };
 
-    match find_extract_archive::extract(path, max_size_kb, max_depth, max_line_length) {
+    match find_extract_archive::extract(path, &cfg) {
         Ok(lines) => {
             match serde_json::to_string_pretty(&lines) {
                 Ok(json) => {

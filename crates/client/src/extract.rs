@@ -1,61 +1,54 @@
 use std::path::Path;
 use find_common::api::IndexLine;
+use find_common::config::ExtractorConfig;
 use anyhow::Result;
 
 /// Dispatch to the appropriate extractor based on file type.
 ///
 /// This replaces the old find_common::extract module with the new
 /// standalone extractor crates.
-///
-/// # Arguments
-/// * `path` - Path to the file
-/// * `max_size_kb` - Maximum file size in KB
-/// * `max_archive_depth` - Maximum archive nesting depth
-/// * `max_line_length` - Max line length for PDF extraction (0 = no wrap)
-pub fn extract(path: &Path, max_size_kb: u64, max_archive_depth: usize, max_line_length: usize) -> Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
     // Skip files that exceed the size limit
     if let Ok(meta) = std::fs::metadata(path) {
-        if meta.len() > max_size_kb * 1024 {
+        if meta.len() > cfg.max_size_kb as u64 * 1024 {
             return Ok(vec![]);
         }
     }
 
-    let max_size_kb_usize = max_size_kb as usize;
-
     // Dispatch to extractors in priority order
     // Archives first (before text, since ZIPs would otherwise be detected as binary)
     if find_extract_archive::accepts(path) {
-        return find_extract_archive::extract(path, max_size_kb_usize, max_archive_depth, max_line_length);
+        return find_extract_archive::extract(path, cfg);
     }
 
     if find_extract_pdf::accepts(path) {
-        return find_extract_pdf::extract(path, max_size_kb_usize, max_line_length);
+        return find_extract_pdf::extract(path, cfg);
     }
 
     if find_extract_media::accepts(path) {
-        return find_extract_media::extract(path, max_size_kb_usize);
+        return find_extract_media::extract(path, cfg.max_size_kb);
     }
 
     // HTML before text (text's accepts() matches .html via extension list)
     if find_extract_html::accepts(path) {
-        return find_extract_html::extract(path, max_size_kb_usize);
+        return find_extract_html::extract(path, cfg.max_size_kb);
     }
 
     if find_extract_office::accepts(path) {
-        return find_extract_office::extract(path, max_size_kb_usize);
+        return find_extract_office::extract(path, cfg.max_size_kb);
     }
 
     if find_extract_epub::accepts(path) {
-        return find_extract_epub::extract(path, max_size_kb_usize);
+        return find_extract_epub::extract(path, cfg.max_size_kb);
     }
 
     if find_extract_pe::accepts(path) {
-        return find_extract_pe::extract(path, max_size_kb_usize);
+        return find_extract_pe::extract(path, cfg.max_size_kb);
     }
 
     // Text extractor is last (most permissive, will accept many files)
     if find_extract_text::accepts(path) {
-        return find_extract_text::extract(path, max_size_kb_usize);
+        return find_extract_text::extract(path, cfg.max_size_kb);
     }
 
     // No extractor matched

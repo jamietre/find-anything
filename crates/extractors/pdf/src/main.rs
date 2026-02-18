@@ -1,29 +1,25 @@
 use std::path::Path;
 use std::process;
+use find_common::config::ExtractorConfig;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 {
-        eprintln!("Usage: find-extract-pdf <file-path>");
+        eprintln!("Usage: find-extract-pdf <file-path> [max-size-kb] [max-line-length]");
         eprintln!();
         eprintln!("Extracts text content from PDF files and outputs JSON.");
         process::exit(1);
     }
 
     let path = Path::new(&args[1]);
-    let max_size_kb = if args.len() > 2 {
-        args[2].parse().unwrap_or(102400)
-    } else {
-        102400 // 100 MB default for PDFs
-    };
-    let max_line_length = if args.len() > 3 {
-        args[3].parse().unwrap_or(120)
-    } else {
-        120
+    let cfg = ExtractorConfig {
+        max_size_kb: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(102400),
+        max_depth: 10,
+        max_line_length: args.get(3).and_then(|s| s.parse().ok()).unwrap_or(120),
     };
 
-    match find_extract_pdf::extract(path, max_size_kb, max_line_length) {
+    match find_extract_pdf::extract(path, &cfg) {
         Ok(lines) => {
             match serde_json::to_string_pretty(&lines) {
                 Ok(json) => {

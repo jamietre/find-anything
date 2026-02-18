@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use find_common::{
     api::IndexFile,
-    config::ScanConfig,
+    config::{ExtractorConfig, ScanConfig},
 };
 
 use crate::api::ApiClient;
@@ -81,8 +81,7 @@ pub async fn run_scan(
     let mut batch: Vec<IndexFile> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_bytes: usize = 0;
 
-    let max_archive_depth = scan.archives.max_depth;
-    let max_line_length = scan.max_line_length;
+    let cfg = ExtractorConfig::from_scan(scan);
 
     for abs_path in &to_index {
         let rel_path = relative_path(abs_path, paths);
@@ -90,7 +89,7 @@ pub async fn run_scan(
         let size = size_of(abs_path).unwrap_or(0);
         let kind = extract::detect_kind(abs_path).to_string();
 
-        let lines = match extract::extract(abs_path, scan.max_file_size_kb, max_archive_depth, max_line_length) {
+        let lines = match extract::extract(abs_path, &cfg) {
             Ok(l) => l,
             Err(e) => {
                 warn!("extract {}: {e}", abs_path.display());

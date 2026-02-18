@@ -144,6 +144,33 @@ fn default_true() -> bool {
     true
 }
 
+/// Configuration passed to extractor functions.
+///
+/// Bundles all per-extraction settings into one struct so that adding new
+/// options in the future only requires updating this struct and its
+/// construction site — not every function signature in the call chain.
+#[derive(Debug, Clone, Copy)]
+pub struct ExtractorConfig {
+    /// Maximum file/member size in KB; content extraction is skipped above this.
+    pub max_size_kb: usize,
+    /// Maximum archive nesting depth; prevents zip-bomb recursion.
+    pub max_depth: usize,
+    /// Maximum line length in characters for PDF extraction.
+    /// Long lines are wrapped at word boundaries. 0 = no wrapping.
+    pub max_line_length: usize,
+}
+
+impl ExtractorConfig {
+    /// Build an `ExtractorConfig` from the scan section of the client config.
+    pub fn from_scan(scan: &ScanConfig) -> Self {
+        Self {
+            max_size_kb: scan.max_file_size_kb as usize,
+            max_depth: scan.archives.max_depth,
+            max_line_length: scan.max_line_length,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerAppConfig {
     pub server: ServerAppSettings,
