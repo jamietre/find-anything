@@ -8,18 +8,27 @@ use find_common::api::IndexLine;
 /// # Arguments
 /// * `path` - Path to the PDF file
 /// * `max_size_kb` - Maximum file size in KB (currently unused)
+/// * `max_line_length` - Wrap lines longer than this many chars at word boundaries (0 = no wrap)
 ///
 /// # Returns
-/// Vector of IndexLine objects, one per non-empty line
-pub fn extract(path: &Path, max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+/// Vector of IndexLine objects with sequential line numbers and wrapped lines
+pub fn extract(path: &Path, max_size_kb: usize, max_line_length: usize) -> anyhow::Result<Vec<IndexLine>> {
     let bytes = std::fs::read(path)?;
-    extract_from_bytes(&bytes, &path.display().to_string(), max_size_kb)
+    extract_from_bytes(&bytes, &path.display().to_string(), max_size_kb, max_line_length)
 }
 
 /// Extract text content from PDF bytes.
 ///
 /// Used by the archive extractor to process PDF members without writing to disk.
-pub fn extract_from_bytes(bytes: &[u8], name: &str, _max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+///
+/// Lines are numbered sequentially (1, 2, 3, ...) — empty lines in the raw text
+/// are skipped entirely so there are no gaps in the line number sequence. This
+/// ensures that context retrieval (±2 lines) always returns the expected window.
+///
+/// Lines longer than `max_line_length` characters are split at word boundaries
+/// into multiple indexed lines, which makes long PDF paragraphs searchable and
+/// provides meaningful surrounding context.
+pub fn extract_from_bytes(bytes: &[u8], name: &str, _max_size_kb: usize, max_line_length: usize) -> anyhow::Result<Vec<IndexLine>> {
     // pdf-extract can panic on malformed PDFs; catch_unwind turns that into
     // a recoverable error so the scan can continue with other files.
     //
@@ -50,17 +59,61 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, _max_size_kb: usize) -> anyh
     };
 
     let mut lines = Vec::new();
-    for (idx, line) in text.lines().enumerate() {
-        let trimmed = line.trim();
-        if !trimmed.is_empty() {
+    let mut line_num: usize = 0;
+
+    for raw_line in text.lines() {
+        let trimmed = raw_line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let chunks = if max_line_length > 0 && trimmed.chars().count() > max_line_length {
+            wrap_at_words(trimmed, max_line_length)
+        } else {
+            vec![trimmed.to_string()]
+        };
+
+        for chunk in chunks {
+            line_num += 1;
             lines.push(IndexLine {
                 archive_path: None,
-                line_number: idx + 1,
-                content: trimmed.to_string(),
+                line_number: line_num,
+                content: chunk,
             });
         }
     }
     Ok(lines)
+}
+
+/// Split `s` at word boundaries into chunks of at most `max_len` characters each.
+///
+/// Uses whitespace as word boundaries. A single word longer than `max_len` chars
+/// is kept as-is (no hard break mid-word). Preserves all non-whitespace content.
+fn wrap_at_words(s: &str, max_len: usize) -> Vec<String> {
+    let mut result = Vec::new();
+    let mut current = String::new();
+    let mut current_len: usize = 0;
+
+    for word in s.split_whitespace() {
+        let word_len = word.chars().count();
+        if current_len == 0 {
+            // First word on this chunk — always include even if over limit
+            current.push_str(word);
+            current_len = word_len;
+        } else if current_len + 1 + word_len <= max_len {
+            current.push(' ');
+            current.push_str(word);
+            current_len += 1 + word_len;
+        } else {
+            result.push(current.clone());
+            current = word.to_string();
+            current_len = word_len;
+        }
+    }
+    if !current.is_empty() {
+        result.push(current);
+    }
+    result
 }
 
 /// Check if a file is a PDF based on extension.

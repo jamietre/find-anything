@@ -43,6 +43,13 @@ pub struct ScanConfig {
 
     #[serde(default)]
     pub archives: ArchiveConfig,
+
+    /// Maximum line length (in characters) for PDF text extraction.
+    /// Lines longer than this are split at word boundaries so that context
+    /// retrieval (which fetches ±2 lines) returns meaningful snippets.
+    /// Set to 0 to disable wrapping. Default: 120.
+    #[serde(default = "default_max_line_length")]
+    pub max_line_length: usize,
 }
 
 impl Default for ScanConfig {
@@ -54,6 +61,7 @@ impl Default for ScanConfig {
             include_hidden: false,
             ocr: false,
             archives: ArchiveConfig::default(),
+            max_line_length: default_max_line_length(),
         }
     }
 }
@@ -126,6 +134,10 @@ fn default_excludes() -> Vec<String> {
 
 fn default_max_file_size_kb() -> u64 {
     1024
+}
+
+fn default_max_line_length() -> usize {
+    120
 }
 
 fn default_true() -> bool {

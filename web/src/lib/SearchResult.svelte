@@ -15,17 +15,29 @@
 	let el: HTMLElement;
 
 	onMount(() => {
+		let timer: ReturnType<typeof setTimeout> | null = null;
+
 		const observer = new IntersectionObserver(
 			(entries) => {
 				if (entries[0].isIntersecting) {
-					observer.disconnect();
-					loadContext();
+					timer = setTimeout(() => {
+						observer.disconnect();
+						loadContext();
+					}, 1000);
+				} else {
+					if (timer !== null) {
+						clearTimeout(timer);
+						timer = null;
+					}
 				}
 			},
 			{ rootMargin: '200px' }
 		);
 		observer.observe(el);
-		return () => observer.disconnect();
+		return () => {
+			observer.disconnect();
+			if (timer !== null) clearTimeout(timer);
+		};
 	});
 
 	async function loadContext() {
@@ -93,11 +105,13 @@
 				<code class="lc">{@html highlightLine(result.snippet, result.path)}</code>
 			</div>
 		{:else}
-			<div class="placeholder">
-				<span class="ln">{result.line_number}</span>
-				<span class="arrow">▶</span>
-				<span class="placeholder-bar"></span>
-			</div>
+			{#each Array(5) as _, i}
+				<div class="placeholder" class:match={i === 2}>
+					<span class="ln">{i === 2 ? result.line_number : ''}</span>
+					<span class="arrow">{i === 2 ? '▶' : ' '}</span>
+					<span class="placeholder-bar"></span>
+				</div>
+			{/each}
 		{/if}
 	</div>
 </article>
@@ -206,8 +220,12 @@
 		display: flex;
 		align-items: baseline;
 		padding: 1px 0;
-		border-left: 2px solid var(--match-border);
+		border-left: 2px solid transparent;
+	}
+
+	.placeholder.match {
 		background: var(--match-line-bg);
+		border-left-color: var(--match-border);
 	}
 
 	.placeholder-bar {

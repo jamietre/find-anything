@@ -21,10 +21,10 @@ use find_common::api::IndexLine;
 ///
 /// Returns IndexLine objects with archive_path set to the member path within the archive.
 /// For nested archives, archive_path uses `::` as a separator (e.g. "inner.zip::file.txt").
-pub fn extract(path: &Path, max_size_kb: usize, max_depth: usize) -> Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, max_size_kb: usize, max_depth: usize, max_line_length: usize) -> Result<Vec<IndexLine>> {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let kind = detect_kind_from_name(name).context("not a recognized archive")?;
-    extract_archive_file(path, &kind, max_size_kb, max_depth)
+    extract_archive_file(path, &kind, max_size_kb, max_depth, max_line_length)
 }
 
 /// Check if a file is an archive based on extension.
@@ -83,21 +83,22 @@ fn extract_archive_file(
     kind: &ArchiveKind,
     max_size_kb: usize,
     max_depth: usize,
+    max_line_length: usize,
 ) -> Result<Vec<IndexLine>> {
     match kind {
-        ArchiveKind::Zip      => extract_zip_file(path, max_size_kb, max_depth),
-        ArchiveKind::TarGz    => extract_tar(tar::Archive::new(GzDecoder::new(File::open(path)?)), max_size_kb, max_depth),
-        ArchiveKind::TarBz2   => extract_tar(tar::Archive::new(BzDecoder::new(File::open(path)?)), max_size_kb, max_depth),
-        ArchiveKind::TarXz    => extract_tar(tar::Archive::new(XzDecoder::new(File::open(path)?)), max_size_kb, max_depth),
-        ArchiveKind::Tar      => extract_tar(tar::Archive::new(File::open(path)?), max_size_kb, max_depth),
+        ArchiveKind::Zip      => extract_zip_file(path, max_size_kb, max_depth, max_line_length),
+        ArchiveKind::TarGz    => extract_tar(tar::Archive::new(GzDecoder::new(File::open(path)?)), max_size_kb, max_depth, max_line_length),
+        ArchiveKind::TarBz2   => extract_tar(tar::Archive::new(BzDecoder::new(File::open(path)?)), max_size_kb, max_depth, max_line_length),
+        ArchiveKind::TarXz    => extract_tar(tar::Archive::new(XzDecoder::new(File::open(path)?)), max_size_kb, max_depth, max_line_length),
+        ArchiveKind::Tar      => extract_tar(tar::Archive::new(File::open(path)?), max_size_kb, max_depth, max_line_length),
         ArchiveKind::Gz       => extract_single_compressed(GzDecoder::new(File::open(path)?), path),
         ArchiveKind::Bz2      => extract_single_compressed(BzDecoder::new(File::open(path)?), path),
         ArchiveKind::Xz       => extract_single_compressed(XzDecoder::new(File::open(path)?), path),
-        ArchiveKind::SevenZip => extract_7z(path, max_size_kb, max_depth),
+        ArchiveKind::SevenZip => extract_7z(path, max_size_kb, max_depth, max_line_length),
     }
 }
 
-fn extract_zip_file(path: &Path, max_size_kb: usize, max_depth: usize) -> Result<Vec<IndexLine>> {
+fn extract_zip_file(path: &Path, max_size_kb: usize, max_depth: usize, max_line_length: usize) -> Result<Vec<IndexLine>> {
     let file = File::open(path)?;
     let mut archive = zip::ZipArchive::new(file).context("opening zip")?;
     let mut lines = Vec::new();
@@ -110,12 +111,12 @@ fn extract_zip_file(path: &Path, max_size_kb: usize, max_depth: usize) -> Result
         let name = entry.name().to_string();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
-        lines.extend(extract_member_bytes(bytes, &name, max_size_kb, 1, max_depth));
+        lines.extend(extract_member_bytes(bytes, &name, max_size_kb, 1, max_depth, max_line_length));
     }
     Ok(lines)
 }
 
-fn extract_tar<R: Read>(mut archive: tar::Archive<R>, max_size_kb: usize, max_depth: usize) -> Result<Vec<IndexLine>> {
+fn extract_tar<R: Read>(mut archive: tar::Archive<R>, max_size_kb: usize, max_depth: usize, max_line_length: usize) -> Result<Vec<IndexLine>> {
     let mut lines = Vec::new();
     for entry_result in archive.entries().context("reading tar entries")? {
         let mut entry = entry_result.context("reading tar entry")?;
@@ -128,12 +129,12 @@ fn extract_tar<R: Read>(mut archive: tar::Archive<R>, max_size_kb: usize, max_de
             .unwrap_or_default();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
-        lines.extend(extract_member_bytes(bytes, &name, max_size_kb, 1, max_depth));
+        lines.extend(extract_member_bytes(bytes, &name, max_size_kb, 1, max_depth, max_line_length));
     }
     Ok(lines)
 }
 
-fn extract_7z(path: &Path, max_size_kb: usize, max_depth: usize) -> Result<Vec<IndexLine>> {
+fn extract_7z(path: &Path, max_size_kb: usize, max_depth: usize, max_line_length: usize) -> Result<Vec<IndexLine>> {
     let mut lines = Vec::new();
     let mut sz = sevenz_rust::SevenZReader::open(path, sevenz_rust::Password::empty())?;
 
@@ -144,7 +145,7 @@ fn extract_7z(path: &Path, max_size_kb: usize, max_depth: usize) -> Result<Vec<I
         let name = entry.name().to_string();
         let mut bytes = Vec::new();
         let _ = reader.read_to_end(&mut bytes);
-        lines.extend(extract_member_bytes(bytes, &name, max_size_kb, 1, max_depth));
+        lines.extend(extract_member_bytes(bytes, &name, max_size_kb, 1, max_depth, max_line_length));
         Ok(true)
     })?;
 
@@ -163,8 +164,8 @@ fn extract_single_compressed<R: Read>(mut reader: R, path: &Path) -> Result<Vec<
     let mut bytes = Vec::new();
     reader.read_to_end(&mut bytes)?;
 
-    // Treat as a single text member
-    let lines = extract_member_bytes(bytes, &inner_name, usize::MAX, 1, 1);
+    // Treat as a single text member (no PDF wrapping needed for bare compressed files)
+    let lines = extract_member_bytes(bytes, &inner_name, usize::MAX, 1, 1, 0);
     Ok(lines)
 }
 
@@ -183,12 +184,14 @@ fn extract_single_compressed<R: Read>(mut reader: R, path: &Path) -> Result<Vec<
 /// * `max_size_kb` - Skip content extraction if member exceeds this size
 /// * `depth` - Current nesting depth (1 = direct member of outer archive)
 /// * `max_depth` - Maximum allowed nesting depth
+/// * `max_line_length` - Passed to PDF extractor for line wrapping (0 = no wrap)
 fn extract_member_bytes(
     bytes: Vec<u8>,
     entry_name: &str,
     max_size_kb: usize,
     depth: usize,
     max_depth: usize,
+    max_line_length: usize,
 ) -> Vec<IndexLine> {
     // Always index the filename so the member is discoverable by name.
     let mut lines = vec![IndexLine {
@@ -247,7 +250,7 @@ fn extract_member_bytes(
 
             // Multi-file archive: extract recursively, prefix all member paths.
             _ => {
-                match extract_archive_from_bytes(&bytes, &kind, max_size_kb, depth + 1, max_depth) {
+                match extract_archive_from_bytes(&bytes, &kind, max_size_kb, depth + 1, max_depth, max_line_length) {
                     Ok(inner_lines) => {
                         let prefixed = inner_lines.into_iter().map(|mut l| {
                             let inner = l.archive_path.as_deref().unwrap_or("");
@@ -269,7 +272,7 @@ fn extract_member_bytes(
 
     // ── PDF ───────────────────────────────────────────────────────────────────
     if find_extract_pdf::accepts(member_path) {
-        match find_extract_pdf::extract_from_bytes(&bytes, entry_name, max_size_kb) {
+        match find_extract_pdf::extract_from_bytes(&bytes, entry_name, max_size_kb, max_line_length) {
             Ok(pdf_lines) => {
                 let with_path = pdf_lines.into_iter().map(|mut l| {
                     l.archive_path = Some(entry_name.to_string());
@@ -321,6 +324,7 @@ fn extract_archive_from_bytes(
     max_size_kb: usize,
     depth: usize,
     max_depth: usize,
+    max_line_length: usize,
 ) -> Result<Vec<IndexLine>> {
     match kind {
         ArchiveKind::Zip => {
@@ -334,14 +338,14 @@ fn extract_archive_from_bytes(
                 let name = entry.name().to_string();
                 let mut entry_bytes = Vec::new();
                 entry.read_to_end(&mut entry_bytes)?;
-                lines.extend(extract_member_bytes(entry_bytes, &name, max_size_kb, depth, max_depth));
+                lines.extend(extract_member_bytes(entry_bytes, &name, max_size_kb, depth, max_depth, max_line_length));
             }
             Ok(lines)
         }
-        ArchiveKind::TarGz  => extract_tar_from_bytes(tar::Archive::new(GzDecoder::new(Cursor::new(bytes))), max_size_kb, depth, max_depth),
-        ArchiveKind::TarBz2 => extract_tar_from_bytes(tar::Archive::new(BzDecoder::new(Cursor::new(bytes))), max_size_kb, depth, max_depth),
-        ArchiveKind::TarXz  => extract_tar_from_bytes(tar::Archive::new(XzDecoder::new(Cursor::new(bytes))), max_size_kb, depth, max_depth),
-        ArchiveKind::Tar    => extract_tar_from_bytes(tar::Archive::new(Cursor::new(bytes)), max_size_kb, depth, max_depth),
+        ArchiveKind::TarGz  => extract_tar_from_bytes(tar::Archive::new(GzDecoder::new(Cursor::new(bytes))), max_size_kb, depth, max_depth, max_line_length),
+        ArchiveKind::TarBz2 => extract_tar_from_bytes(tar::Archive::new(BzDecoder::new(Cursor::new(bytes))), max_size_kb, depth, max_depth, max_line_length),
+        ArchiveKind::TarXz  => extract_tar_from_bytes(tar::Archive::new(XzDecoder::new(Cursor::new(bytes))), max_size_kb, depth, max_depth, max_line_length),
+        ArchiveKind::Tar    => extract_tar_from_bytes(tar::Archive::new(Cursor::new(bytes)), max_size_kb, depth, max_depth, max_line_length),
         // 7z from in-memory bytes is not supported by sevenz-rust; index filename only.
         ArchiveKind::SevenZip => Ok(vec![]),
         // Single-file compressed nested archives handled in extract_member_bytes.
@@ -354,6 +358,7 @@ fn extract_tar_from_bytes<R: Read>(
     max_size_kb: usize,
     depth: usize,
     max_depth: usize,
+    max_line_length: usize,
 ) -> Result<Vec<IndexLine>> {
     let mut lines = Vec::new();
     for entry_result in archive.entries()? {
@@ -367,7 +372,7 @@ fn extract_tar_from_bytes<R: Read>(
             .unwrap_or_default();
         let mut bytes = Vec::new();
         entry.read_to_end(&mut bytes)?;
-        lines.extend(extract_member_bytes(bytes, &name, max_size_kb, depth, max_depth));
+        lines.extend(extract_member_bytes(bytes, &name, max_size_kb, depth, max_depth, max_line_length));
     }
     Ok(lines)
 }
