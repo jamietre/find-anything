@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::process;
+use find_common::config::ExtractorConfig;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -17,13 +18,13 @@ fn main() {
     }
 
     let path = Path::new(&args[1]);
-    let max_size_kb = if args.len() > 2 {
-        args[2].parse().unwrap_or(102400)
-    } else {
-        102400 // 100 MB default for media
+    let cfg = ExtractorConfig {
+        max_size_kb: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(102400),
+        max_depth: 10,
+        max_line_length: 120,
     };
 
-    match find_extract_media::extract(path, max_size_kb) {
+    match find_extract_media::extract(path, &cfg) {
         Ok(lines) => {
             match serde_json::to_string_pretty(&lines) {
                 Ok(json) => {

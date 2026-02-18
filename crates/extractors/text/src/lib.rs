@@ -2,6 +2,7 @@ use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use find_common::api::IndexLine;
+use find_common::config::ExtractorConfig;
 use gray_matter::{engine::YAML, Matter, Pod};
 
 /// Extract text content from a file.
@@ -18,7 +19,7 @@ use gray_matter::{engine::YAML, Matter, Pod};
 ///
 /// # Returns
 /// Vector of IndexLine objects, one per non-empty line
-pub fn extract(path: &Path, _max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     // Check if this is a Markdown file that might have frontmatter
     let is_markdown = path
         .extension()

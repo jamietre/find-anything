@@ -26,29 +26,29 @@ pub fn extract(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
     }
 
     if find_extract_media::accepts(path) {
-        return find_extract_media::extract(path, cfg.max_size_kb);
+        return find_extract_media::extract(path, cfg);
     }
 
     // HTML before text (text's accepts() matches .html via extension list)
     if find_extract_html::accepts(path) {
-        return find_extract_html::extract(path, cfg.max_size_kb);
+        return find_extract_html::extract(path, cfg);
     }
 
     if find_extract_office::accepts(path) {
-        return find_extract_office::extract(path, cfg.max_size_kb);
+        return find_extract_office::extract(path, cfg);
     }
 
     if find_extract_epub::accepts(path) {
-        return find_extract_epub::extract(path, cfg.max_size_kb);
+        return find_extract_epub::extract(path, cfg);
     }
 
     if find_extract_pe::accepts(path) {
-        return find_extract_pe::extract(path, cfg.max_size_kb);
+        return find_extract_pe::extract(path, cfg);
     }
 
     // Text extractor is last (most permissive, will accept many files)
     if find_extract_text::accepts(path) {
-        return find_extract_text::extract(path, cfg.max_size_kb);
+        return find_extract_text::extract(path, cfg);
     }
 
     // No extractor matched

@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use find_common::api::IndexLine;
+use find_common::config::ExtractorConfig;
 
 /// Extract version information from PE files (EXE, DLL, etc.).
 ///
@@ -15,11 +16,11 @@ use find_common::api::IndexLine;
 ///
 /// # Returns
 /// Vector of IndexLine objects with metadata at line_number=0
-pub fn extract(path: &Path, max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     // Check file size
     let metadata = fs::metadata(path)?;
     let size_kb = metadata.len() / 1024;
-    if size_kb > max_size_kb as u64 {
+    if size_kb > cfg.max_size_kb as u64 {
         return Ok(vec![]);
     }
 

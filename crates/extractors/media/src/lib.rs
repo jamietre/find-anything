@@ -3,6 +3,7 @@ use std::io::BufReader;
 use std::path::Path;
 
 use find_common::api::IndexLine;
+use find_common::config::ExtractorConfig;
 use audio_video_metadata::{get_format_from_file, Metadata};
 use id3::TagLike;
 
@@ -19,7 +20,7 @@ use id3::TagLike;
 ///
 /// # Returns
 /// Vector of IndexLine objects with metadata at line_number=0
-pub fn extract(path: &Path, _max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())

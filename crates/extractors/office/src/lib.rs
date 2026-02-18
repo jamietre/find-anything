@@ -2,6 +2,7 @@ use std::io::Read;
 use std::path::Path;
 
 use find_common::api::IndexLine;
+use find_common::config::ExtractorConfig;
 use quick_xml::events::Event;
 
 /// Accept Office document formats.
@@ -21,7 +22,7 @@ pub fn accepts(path: &Path) -> bool {
 /// - DOCX: paragraphs from word/document.xml + metadata from docProps/core.xml
 /// - XLSX/XLS/XLSM: rows from all sheets (via calamine)
 /// - PPTX: text runs from each slide, grouped by paragraph
-pub fn extract(path: &Path, _max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     let ext = path
         .extension()
         .and_then(|e| e.to_str())

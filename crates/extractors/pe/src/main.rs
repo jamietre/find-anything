@@ -1,7 +1,14 @@
 use std::io::{self, BufRead};
 use std::path::Path;
+use find_common::config::ExtractorConfig;
 
 fn main() -> anyhow::Result<()> {
+    let cfg = ExtractorConfig {
+        max_size_kb: 100 * 1024,
+        max_depth: 10,
+        max_line_length: 120,
+    };
+
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let path_str = line?;
@@ -11,7 +18,7 @@ fn main() -> anyhow::Result<()> {
             continue;
         }
 
-        match find_extract_pe::extract(path, 100 * 1024) {
+        match find_extract_pe::extract(path, &cfg) {
             Ok(lines) => {
                 for index_line in lines {
                     println!("{}", serde_json::to_string(&index_line)?);

@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use find_common::api::IndexLine;
+use find_common::config::ExtractorConfig;
 use scraper::{ElementRef, Html, Selector};
 
 /// Accept .html, .htm, .xhtml files.
@@ -24,9 +25,9 @@ pub fn accepts(path: &Path) -> bool {
 /// Content lines (line_number ≥ 1): visible text from block-level elements
 /// (h1–h6, p, li, td, th, pre, blockquote, figcaption), skipping elements
 /// inside nav/header/footer/script/style.
-pub fn extract(path: &Path, max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     let bytes = std::fs::read(path)?;
-    if bytes.len() > max_size_kb * 1024 {
+    if bytes.len() > cfg.max_size_kb * 1024 {
         return Ok(vec![]);
     }
     let src = String::from_utf8_lossy(&bytes);

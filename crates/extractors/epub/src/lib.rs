@@ -3,6 +3,7 @@ use std::io::Read;
 use std::path::Path;
 
 use find_common::api::IndexLine;
+use find_common::config::ExtractorConfig;
 use quick_xml::events::Event;
 
 /// Accept .epub files.
@@ -21,7 +22,7 @@ pub fn accepts(path: &Path) -> bool {
 ///   3. Each spine XHTML file → paragraphs via text-node walk
 ///
 /// Metadata lines use line_number = 0; content lines start at 1.
-pub fn extract(path: &Path, _max_size_kb: usize) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     let file = std::fs::File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)?;
 

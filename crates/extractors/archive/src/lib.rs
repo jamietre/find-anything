@@ -279,7 +279,7 @@ fn extract_member_bytes(
 
     // ── Media (image / audio / video) ─────────────────────────────────────────
     if find_extract_media::accepts(member_path) {
-        match extract_media_from_bytes(&bytes, entry_name, cfg.max_size_kb) {
+        match extract_media_from_bytes(&bytes, entry_name, cfg) {
             Ok(media_lines) => {
                 let with_path = media_lines.into_iter().map(|mut l| {
                     l.archive_path = Some(entry_name.to_string());
@@ -374,7 +374,7 @@ fn extract_tar_from_bytes<R: Read>(
 fn extract_media_from_bytes(
     bytes: &[u8],
     entry_name: &str,
-    max_size_kb: usize,
+    cfg: &ExtractorConfig,
 ) -> Result<Vec<IndexLine>> {
     use std::io::Write;
 
@@ -389,5 +389,5 @@ fn extract_media_from_bytes(
     tmp.write_all(bytes)?;
     tmp.flush()?;
 
-    find_extract_media::extract(tmp.path(), max_size_kb)
+    find_extract_media::extract(tmp.path(), cfg)
 }
