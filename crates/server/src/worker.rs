@@ -112,6 +112,7 @@ fn process_request(data_dir: &Path, request_path: &Path) -> Result<()> {
     // 3. Metadata
     if let Some(ts) = request.scan_timestamp {
         db::update_last_scan(&conn, ts)?;
+        db::append_scan_history(&conn, ts)?;
     }
     if let Some(base_url) = &request.base_url {
         db::update_base_url(&conn, Some(base_url))?;
@@ -198,15 +199,24 @@ fn process_file(
         chunk_ref_map.insert(chunk.chunk_number, chunk_ref.clone());
     }
 
-    // Upsert file record
+    // Upsert file record. indexed_at is set on first insert and not overwritten on conflict.
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
     conn.execute(
-        "INSERT INTO files (path, mtime, size, kind)
-         VALUES (?1, ?2, ?3, ?4)
+        "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
          ON CONFLICT(path) DO UPDATE SET
-           mtime = excluded.mtime,
-           size  = excluded.size,
-           kind  = excluded.kind",
-        rusqlite::params![file.path, file.mtime, file.size, file.kind],
+           mtime      = excluded.mtime,
+           size       = excluded.size,
+           kind       = excluded.kind,
+           extract_ms = excluded.extract_ms",
+        rusqlite::params![
+            file.path, file.mtime, file.size, file.kind,
+            now_secs,
+            file.extract_ms.map(|ms| ms as i64),
+        ],
     )?;
 
     let file_id: i64 = conn.query_row(

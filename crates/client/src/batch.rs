@@ -34,7 +34,7 @@ pub fn build_index_files(
             line_number: 0,
             content: rel_path.clone(),
         });
-        return vec![IndexFile { path: rel_path, mtime, size, kind, lines: all_lines }];
+        return vec![IndexFile { path: rel_path, mtime, size, kind, lines: all_lines, extract_ms: None }];
     }
 
     // Group by archive_path.
@@ -63,6 +63,7 @@ pub fn build_index_files(
         size,
         kind: kind.clone(),
         lines: outer_lines,
+        extract_ms: None,
     });
 
     // One IndexFile per archive member, with composite path "zip::member".
@@ -90,6 +91,7 @@ pub fn build_index_files(
             size,
             kind: member_kind,
             lines: content_lines,
+            extract_ms: None,
         });
     }
 

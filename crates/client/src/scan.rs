@@ -89,6 +89,7 @@ pub async fn run_scan(
         let size = size_of(abs_path).unwrap_or(0);
         let kind = extract::detect_kind(abs_path).to_string();
 
+        let t0 = std::time::Instant::now();
         let lines = match extract::extract(abs_path, &cfg) {
             Ok(l) => l,
             Err(e) => {
@@ -96,10 +97,15 @@ pub async fn run_scan(
                 vec![]
             }
         };
+        let extract_ms = t0.elapsed().as_millis() as u64;
 
         // Group lines by archive_path. For non-archive files all archive_paths are None.
         // For archive files, each distinct archive_path becomes a separate IndexFile.
-        let index_files = build_index_files(rel_path, mtime, size, kind, lines);
+        let mut index_files = build_index_files(rel_path, mtime, size, kind, lines);
+        // Set extract_ms on the outer file only; archive members get None.
+        if let Some(f) = index_files.first_mut() {
+            f.extract_ms = Some(extract_ms);
+        }
 
         for file in index_files {
             let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();

@@ -5,8 +5,9 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
+use serde_json;
 
-use find_common::api::{ContextLine, DirEntry, FileRecord, IndexFile};
+use find_common::api::{ContextLine, DirEntry, FileRecord, IndexFile, KindStats, ScanHistoryPoint};
 
 use crate::archive::{ArchiveManager, ChunkRef};
 
@@ -17,7 +18,28 @@ pub fn open(db_path: &Path) -> Result<Connection> {
         .with_context(|| format!("opening {}", db_path.display()))?;
     conn.execute_batch(include_str!("schema_v2.sql"))
         .context("initialising schema")?;
+    migrate_v3(&conn).context("v3 migration")?;
     Ok(conn)
+}
+
+fn migrate_v3(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= 3 {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE files ADD COLUMN indexed_at INTEGER;
+         ALTER TABLE files ADD COLUMN extract_ms INTEGER;
+         CREATE TABLE IF NOT EXISTS scan_history (
+             id          INTEGER PRIMARY KEY AUTOINCREMENT,
+             scanned_at  INTEGER NOT NULL,
+             total_files INTEGER NOT NULL,
+             total_size  INTEGER NOT NULL,
+             by_kind     TEXT    NOT NULL
+         );
+         PRAGMA user_version = 3;",
+    )?;
+    Ok(())
 }
 
 // ── File listing (for deletion detection) ────────────────────────────────────
@@ -578,6 +600,69 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
     let mut entries = dirs;
     entries.extend(files);
     Ok(entries)
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+/// Returns (total_files, total_size, by_kind) aggregated from the files table.
+pub fn get_stats(conn: &Connection) -> Result<(usize, i64, HashMap<String, KindStats>)> {
+    let mut stmt = conn.prepare(
+        "SELECT kind, COUNT(*), COALESCE(SUM(size), 0), AVG(CAST(extract_ms AS REAL))
+         FROM files GROUP BY kind",
+    )?;
+
+    let rows: Vec<(String, i64, i64, Option<f64>)> = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+
+    let mut total_files = 0usize;
+    let mut total_size = 0i64;
+    let mut by_kind = HashMap::new();
+
+    for (kind, count, size, avg_ms) in rows {
+        total_files += count as usize;
+        total_size += size;
+        by_kind.insert(kind, KindStats { count: count as usize, size, avg_extract_ms: avg_ms });
+    }
+
+    Ok((total_files, total_size, by_kind))
+}
+
+/// Snapshot the current totals into the scan_history table.
+pub fn append_scan_history(conn: &Connection, scanned_at: i64) -> Result<()> {
+    let (total_files, total_size, by_kind) = get_stats(conn)?;
+    let by_kind_json = serde_json::to_string(&by_kind).context("serialising by_kind")?;
+    conn.execute(
+        "INSERT INTO scan_history (scanned_at, total_files, total_size, by_kind)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![scanned_at, total_files as i64, total_size, by_kind_json],
+    )?;
+    Ok(())
+}
+
+/// Return up to `limit` scan history points, oldest first.
+pub fn get_scan_history(conn: &Connection, limit: usize) -> Result<Vec<ScanHistoryPoint>> {
+    let mut stmt = conn.prepare(
+        "SELECT scanned_at, total_files, total_size
+         FROM scan_history ORDER BY scanned_at ASC LIMIT ?1",
+    )?;
+    let rows = stmt
+        .query_map(params![limit as i64], |row| {
+            Ok(ScanHistoryPoint {
+                scanned_at:  row.get(0)?,
+                total_files: row.get::<_, i64>(1)? as usize,
+                total_size:  row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
 }
 
 /// Produce the upper-bound key for a prefix range scan by incrementing the last byte.

@@ -192,3 +192,39 @@ export async function getSettings(): Promise<AppSettings> {
 	if (!resp.ok) throw new Error(`getSettings: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
+export interface KindStats {
+	count: number;
+	size: number;
+	avg_extract_ms: number | null;
+}
+
+export interface ScanHistoryPoint {
+	scanned_at: number;
+	total_files: number;
+	total_size: number;
+}
+
+export interface SourceStats {
+	name: string;
+	last_scan: number | null;
+	total_files: number;
+	total_size: number;
+	by_kind: Record<string, KindStats>;
+	history: ScanHistoryPoint[];
+}
+
+export interface StatsResponse {
+	sources: SourceStats[];
+	inbox_pending: number;
+	failed_requests: number;
+	total_archives: number;
+}
+
+export async function getStats(): Promise<StatsResponse> {
+	const resp = await fetch('/api/v1/stats');
+	if (!resp.ok) throw new Error(`getStats: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}

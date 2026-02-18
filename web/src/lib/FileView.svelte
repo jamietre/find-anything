@@ -28,6 +28,7 @@
 		search: { query: string; mode: string };
 		sourceChange: string[];
 		gear: void;
+		dashboard: void;
 		treeToggle: void;
 		openFileFromTree: { source: string; path: string; kind: string; archivePath?: string; showAsDirectory?: boolean };
 		openDirFile: { source: string; path: string; kind: string; archivePath?: string };
@@ -93,6 +94,14 @@
 			on:change={(e) => dispatch('sourceChange', e.detail)}
 		/>
 	{/if}
+	<button class="gear-btn" title="Dashboard" on:click={() => dispatch('dashboard')}>
+		<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+			<rect x="1" y="1" width="6" height="6" rx="1"/>
+			<rect x="9" y="1" width="6" height="6" rx="1"/>
+			<rect x="1" y="9" width="6" height="6" rx="1"/>
+			<rect x="9" y="9" width="6" height="6" rx="1"/>
+		</svg>
+	</button>
 	<button class="gear-btn" title="Settings" on:click={() => dispatch('gear')}>⚙</button>
 </div>
 

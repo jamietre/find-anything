@@ -221,7 +221,7 @@ call chain.
 
 ---
 
-### Search result keys (prevent duplicate-key regressions)
+### Search result keys and load-more dedup (prevent duplicate-key regressions)
 
 The keyed `{#each}` in `ResultList.svelte` uses:
 ```
@@ -230,7 +230,9 @@ The keyed `{#each}` in `ResultList.svelte` uses:
 
 **All four fields are required.** `archive_path` distinguishes members of the same archive (e.g. `outer.zip::a.txt` vs `outer.zip::b.txt` both map `path = outer.zip`). If any new discriminating field is added to `SearchResult`, add it to this key too.
 
-The server also deduplicates results by the same four-tuple in `routes/search.rs` before returning — this is the canonical guard. The client key is a second line of defence for correct DOM reconciliation.
+**Client-side dedup is mandatory in `triggerLoad` and must not be removed.** The server deduplicates within a single request, but cross-request duplicates occur in the load-more path. Each page request expands `scoring_limit = offset + limit + 200`, so the server processes more FTS5 candidates per page. This re-ranks the candidate set — an item at position 45 on page 0 can shift to position 69 on page 1. The same `(source, path, archive_path, line_number)` tuple will then appear in both pages. Duplicate keys in the keyed `{#each}` throw a runtime error and prevent DOM updates, which keeps the load-more sentinel in place and causes an infinite request loop. The fix for a duplicate-key regression is always to restore the dedup filter in `triggerLoad`, not to remove it.
+
+**`loadOffset` must advance by `resp.results.length`, not `fresh.length`.** If dedup removes some items from a page, `results.length` grows by less than what the server returned. Using `results.length` as the server offset would re-request the same range, stalling pagination. `loadOffset` tracks the server cursor independently of how many client-visible items were added.
 
 ---
 

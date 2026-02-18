@@ -106,6 +106,10 @@ pub struct IndexFile {
     /// "text" | "pdf" | "archive" | "image" | "audio"
     pub kind: String,
     pub lines: Vec<IndexLine>,
+    /// Milliseconds taken to extract content for this file, measured by the client.
+    /// Set on the outer file; None for inner archive members.
+    #[serde(default)]
+    pub extract_ms: Option<u64>,
 }
 
 /// POST /api/v1/bulk request body.
@@ -256,4 +260,42 @@ pub struct AppSettingsResponse {
     /// Lines shown before and after each match in search result cards.
     /// Total lines = 2 × context_window + 1.
     pub context_window: usize,
+}
+
+// ── Stats types ───────────────────────────────────────────────────────────────
+
+/// Per-kind breakdown entry in `SourceStats`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KindStats {
+    pub count: usize,
+    pub size: i64,
+    pub avg_extract_ms: Option<f64>,
+}
+
+/// One point in the scan history time series.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScanHistoryPoint {
+    pub scanned_at: i64,
+    pub total_files: usize,
+    pub total_size: i64,
+}
+
+/// Stats for one source, returned by `GET /api/v1/stats`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceStats {
+    pub name: String,
+    pub last_scan: Option<i64>,
+    pub total_files: usize,
+    pub total_size: i64,
+    pub by_kind: std::collections::HashMap<String, KindStats>,
+    pub history: Vec<ScanHistoryPoint>,
+}
+
+/// `GET /api/v1/stats` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatsResponse {
+    pub sources: Vec<SourceStats>,
+    pub inbox_pending: usize,
+    pub failed_requests: usize,
+    pub total_archives: usize,
 }

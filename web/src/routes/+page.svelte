@@ -1,9 +1,10 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, tick } from 'svelte';
 	import SearchView from '$lib/SearchView.svelte';
 	import FileView from '$lib/FileView.svelte';
 	import CommandPalette from '$lib/CommandPalette.svelte';
 	import Settings from '$lib/Settings.svelte';
+	import Dashboard from '$lib/Dashboard.svelte';
 	import { search, listSources, getSettings } from '$lib/api';
 	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { contextWindow } from '$lib/settingsStore';
@@ -37,6 +38,7 @@
 	let showTree = false;
 	let showPalette = false;
 	let showSettings = false;
+	let showDashboard = false;
 
 	// ── History ─────────────────────────────────────────────────────────────────
 
@@ -96,15 +98,10 @@
 			}
 		}
 
-		function checkScroll() {
-			if (loadingMore || view !== 'results') return;
-			if (results.length >= totalResults || query.trim().length < 3) return;
-			const gap = document.documentElement.scrollHeight - window.scrollY - window.innerHeight;
-			if (gap < 600) triggerLoad();
-		}
-
 		window.addEventListener('popstate', handlePopState);
 		window.addEventListener('keydown', handleKeydown, { capture: true });
+		// Scroll events as a secondary trigger: when the window is scrollable
+		// and the user scrolls near the sentinel, load more results.
 		window.addEventListener('scroll', checkScroll, { passive: true });
 		return () => {
 			window.removeEventListener('popstate', handlePopState);
@@ -113,16 +110,73 @@
 		};
 	});
 
+	// ── Load more ───────────────────────────────────────────────────────────────
+
+	let loadingMore = false;
+	let noMoreResults = false;
+	// Tracks server cursor independently of results.length. Client dedup can
+	// reduce how many items are added per page; using results.length as the
+	// offset would then re-request the same range and stall pagination.
+	let loadOffset = 0;
+	let sentinel: HTMLElement | null = null;
+
+	// getBoundingClientRect() forces a synchronous layout reflow and returns
+	// position relative to the viewport — reliable regardless of scroll container
+	// or CSS layout (unlike scrollHeight - scrollY - innerHeight which breaks when
+	// html/body have height:100%).
+	function isNearBottom(): boolean {
+		if (!sentinel) return false;
+		return sentinel.getBoundingClientRect().top < window.innerHeight + 600;
+	}
+
+	function checkScroll() {
+		if (loadingMore || noMoreResults || view !== 'results' || query.trim().length < 3) return;
+		if (isNearBottom()) triggerLoad();
+	}
+
+	async function triggerLoad() {
+		if (loadingMore || noMoreResults || query.trim().length < 3) return;
+		loadingMore = true;
+		try {
+			const resp = await search({ q: query, mode, sources: selectedSources, limit: 50, offset: loadOffset });
+			if (resp.results.length === 0) {
+				noMoreResults = true;
+			} else {
+				// IMPORTANT: client-side dedup must not be removed. The server
+				// deduplicates within each request, but cross-page duplicates occur
+				// because scoring_limit grows with each page (offset + limit + 200),
+				// causing the server to re-rank candidates. An item at position 45 on
+				// page 0 can shift to position 69 on page 1 and appear in both.
+				// Duplicate keys in the keyed {#each} throw a runtime error and prevent
+				// DOM updates, which keeps the sentinel pinned and causes an infinite
+				// request loop. See CLAUDE.md §"Search result keys and load-more dedup".
+				const seen = new Set(results.map(r => `${r.source}:${r.path}:${r.archive_path ?? ''}:${r.line_number}`));
+				const fresh = resp.results.filter(r => !seen.has(`${r.source}:${r.path}:${r.archive_path ?? ''}:${r.line_number}`));
+				results = [...results, ...fresh];
+				totalResults = resp.total;
+				// Advance by full server response, not fresh.length — see loadOffset comment above.
+				loadOffset += resp.results.length;
+			}
+			await tick();
+		} catch { /* silent */ }
+		loadingMore = false;
+		// getBoundingClientRect() forces layout, so this is accurate after tick().
+		// If sentinel is still near the bottom, keep filling the viewport.
+		if (isNearBottom()) triggerLoad();
+	}
+
 	// ── Search ──────────────────────────────────────────────────────────────────
 
 	async function doSearch(q: string, m: string, srcs: string[], push = true) {
 		if (q.trim().length < 3) {
-			results = []; totalResults = 0; searchError = null;
+			results = []; totalResults = 0; noMoreResults = false; loadOffset = 0; searchError = null;
 			return;
 		}
 		searching = true;
 		searchError = null;
 		searchId += 1;
+		noMoreResults = false;
+		loadOffset = 0;
 		if (push) {
 			pushState();
 			window.scrollTo(0, 0);
@@ -131,30 +185,19 @@
 			const resp = await search({ q, mode: m, sources: srcs, limit: 50, offset: 0 });
 			results = resp.results;
 			totalResults = resp.total;
+			loadOffset = resp.results.length; // server cursor starts after page 0
+			if (resp.results.length === 0) noMoreResults = true;
 			if (push) view = 'results';
 		} catch (e) {
 			searchError = String(e);
-			results = []; totalResults = 0;
+			results = []; totalResults = 0; noMoreResults = true; loadOffset = 0;
 			if (push) view = 'results';
 		} finally {
 			searching = false;
 		}
-	}
-
-	// ── Load more ───────────────────────────────────────────────────────────────
-	let loadingMore = false;
-
-	async function triggerLoad() {
-		if (loadingMore || results.length >= totalResults || query.trim().length < 3) return;
-		loadingMore = true;
-		try {
-			const resp = await search({ q: query, mode, sources: selectedSources, limit: 50, offset: results.length });
-			const seen = new Set(results.map(r => `${r.source}:${r.path}:${r.line_number}`));
-			const fresh = resp.results.filter(r => !seen.has(`${r.source}:${r.path}:${r.line_number}`));
-			results = [...results, ...fresh];
-			totalResults = resp.total;
-		} catch { /* silent */ }
-		loadingMore = false;
+		// Auto-fill viewport if the first page doesn't reach the scroll threshold.
+		await tick();
+		if (isNearBottom()) triggerLoad();
 	}
 
 	// ── Search event handlers ────────────────────────────────────────────────────
@@ -267,6 +310,7 @@
 			on:search={handleSearch}
 			on:sourceChange={handleSourceChange}
 			on:gear={() => (showSettings = !showSettings)}
+			on:dashboard={() => (showDashboard = !showDashboard)}
 			on:treeToggle={handleTreeToggle}
 			on:openFileFromTree={handleOpenFileFromTree}
 			on:openDirFile={handleOpenDirFile}
@@ -288,7 +332,9 @@
 			on:sourceChange={handleSourceChange}
 			on:open={openFile}
 			on:gear={() => (showSettings = !showSettings)}
+			on:dashboard={() => (showDashboard = !showDashboard)}
 		/>
+		<div bind:this={sentinel}></div>
 		{#if loadingMore}
 			<div class="load-row">
 				<div class="spinner">
@@ -314,6 +360,11 @@
 	open={showSettings}
 	{sources}
 	on:close={() => (showSettings = false)}
+/>
+
+<Dashboard
+	open={showDashboard}
+	on:close={() => (showDashboard = false)}
 />
 
 <style>

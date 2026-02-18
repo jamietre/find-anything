@@ -66,6 +66,7 @@ async fn main() -> Result<()> {
         .route("/api/v1/context-batch",  post(routes::context_batch))
         .route("/api/v1/settings",       get(routes::get_settings))
         .route("/api/v1/metrics",        get(routes::get_metrics))
+        .route("/api/v1/stats",          get(routes::get_stats))
         .route("/api/v1/tree",           get(routes::list_dir))
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state);

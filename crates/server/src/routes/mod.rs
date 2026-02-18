@@ -2,12 +2,14 @@ mod bulk;
 mod context;
 mod file;
 mod search;
+mod stats;
 mod tree;
 
 pub use bulk::bulk;
 pub use context::{context_batch, get_context};
 pub use file::{get_file, list_files};
 pub use search::search;
+pub use stats::get_stats;
 pub use tree::{list_dir, list_sources};
 pub use self::settings::get_settings;
 
