@@ -82,11 +82,8 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
 
         if got_event {
             // Drain any immediately-available events (non-blocking).
-            loop {
-                match rx.try_recv() {
-                    Ok(ev) => accumulate(&mut pending, ev),
-                    Err(_) => break,
-                }
+            while let Ok(ev) = rx.try_recv() {
+                accumulate(&mut pending, ev);
             }
             // Reset debounce window: go back to the top of the loop.
             // The pending block will now wait debounce_ms again.
@@ -162,13 +159,13 @@ fn build_source_map(sources: &[SourceConfig]) -> SourceMap {
 
 /// Return (source_name, rel_path) for a given absolute path.
 /// Picks the most-specific (longest) matching root.
-fn find_source<'a>(path: &Path, map: &'a SourceMap) -> Option<(String, String)> {
+fn find_source(path: &Path, map: &SourceMap) -> Option<(String, String)> {
     let mut best: Option<(&PathBuf, &String, &String)> = None;
     for (root, name, root_str) in map {
-        if path.starts_with(root) {
-            if best.map_or(true, |(b, _, _)| root.as_os_str().len() > b.as_os_str().len()) {
-                best = Some((root, name, root_str));
-            }
+        if path.starts_with(root)
+            && best.is_none_or(|(b, _, _)| root.as_os_str().len() > b.as_os_str().len())
+        {
+            best = Some((root, name, root_str));
         }
     }
     best.map(|(root, name, _)| {

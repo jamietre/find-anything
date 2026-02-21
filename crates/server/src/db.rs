@@ -5,7 +5,6 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
-use serde_json;
 
 use find_common::api::{ContextLine, DirEntry, FileRecord, IndexFile, KindStats, ScanHistoryPoint};
 

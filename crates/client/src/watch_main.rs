@@ -4,6 +4,8 @@ mod watch;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+#[cfg(windows)]
+use clap::Subcommand;
 
 use find_common::config::ClientConfig;
 
