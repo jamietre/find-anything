@@ -279,7 +279,8 @@
 		transform: translateY(1px);
 	}
 
-	/* Markdown rendering styles */
+	/* Markdown rendering styles — child selectors use :global() because the
+	   content is injected via {@html} and Svelte can't see those elements. */
 	.markdown-content {
 		padding: 32px 48px;
 		max-width: 900px;
@@ -288,9 +289,9 @@
 		line-height: 1.7;
 	}
 
-	.markdown-content h1,
-	.markdown-content h2,
-	.markdown-content h3 {
+	.markdown-content :global(h1),
+	.markdown-content :global(h2),
+	.markdown-content :global(h3) {
 		border-bottom: 1px solid var(--border);
 		padding-bottom: 0.4em;
 		margin-top: 32px;
@@ -298,44 +299,44 @@
 		font-weight: 600;
 	}
 
-	.markdown-content h1 {
+	.markdown-content :global(h1) {
 		font-size: 2em;
 		margin-top: 0;
 	}
 
-	.markdown-content h2 {
+	.markdown-content :global(h2) {
 		font-size: 1.5em;
 	}
 
-	.markdown-content h3 {
+	.markdown-content :global(h3) {
 		font-size: 1.25em;
 	}
 
-	.markdown-content h4 {
+	.markdown-content :global(h4) {
 		font-size: 1.1em;
 		font-weight: 600;
 		margin-top: 24px;
 		margin-bottom: 16px;
 	}
 
-	.markdown-content h5,
-	.markdown-content h6 {
+	.markdown-content :global(h5),
+	.markdown-content :global(h6) {
 		font-size: 1em;
 		font-weight: 600;
 		margin-top: 20px;
 		margin-bottom: 12px;
 	}
 
-	.markdown-content a {
+	.markdown-content :global(a) {
 		color: var(--accent);
 		text-decoration: none;
 	}
 
-	.markdown-content a:hover {
+	.markdown-content :global(a:hover) {
 		text-decoration: underline;
 	}
 
-	.markdown-content code {
+	.markdown-content :global(code) {
 		background: var(--bg-secondary);
 		padding: 0.2em 0.4em;
 		border-radius: 3px;
@@ -343,7 +344,7 @@
 		font-size: 0.9em;
 	}
 
-	.markdown-content pre {
+	.markdown-content :global(pre) {
 		background: var(--bg-secondary);
 		padding: 16px;
 		border-radius: 6px;
@@ -352,69 +353,69 @@
 		line-height: 1.5;
 	}
 
-	.markdown-content pre code {
+	.markdown-content :global(pre code) {
 		background: none;
 		padding: 0;
 	}
 
-	.markdown-content blockquote {
+	.markdown-content :global(blockquote) {
 		border-left: 4px solid var(--accent);
 		padding: 8px 0 8px 20px;
 		margin: 24px 0;
 		color: var(--text-muted);
 	}
 
-	.markdown-content table {
+	.markdown-content :global(table) {
 		border-collapse: collapse;
 		width: 100%;
 		margin: 24px 0;
 	}
 
-	.markdown-content th,
-	.markdown-content td {
+	.markdown-content :global(th),
+	.markdown-content :global(td) {
 		border: 1px solid var(--border);
 		padding: 8px 12px;
 		text-align: left;
 	}
 
-	.markdown-content th {
+	.markdown-content :global(th) {
 		background: var(--bg-secondary);
 		font-weight: 600;
 	}
 
-	.markdown-content tr:nth-child(even) {
+	.markdown-content :global(tr:nth-child(even)) {
 		background: var(--bg-hover);
 	}
 
-	.markdown-content img {
+	.markdown-content :global(img) {
 		max-width: 100%;
 		height: auto;
 	}
 
-	.markdown-content ul,
-	.markdown-content ol {
+	.markdown-content :global(ul),
+	.markdown-content :global(ol) {
 		padding-left: 2em;
 		margin: 16px 0;
 	}
 
-	.markdown-content li {
+	.markdown-content :global(li) {
 		margin: 6px 0;
 		line-height: 1.6;
 	}
 
-	.markdown-content li > p {
+	.markdown-content :global(li > p) {
 		margin: 4px 0;
 	}
 
-	.markdown-content p {
+	.markdown-content :global(p) {
 		margin: 16px 0;
 	}
 
-	.markdown-content p:first-child {
+	.markdown-content :global(p:first-child) {
 		margin-top: 0;
 	}
 
-	.markdown-content hr {
+	.markdown-content :global(hr) {
 		border: none;
 		border-top: 1px solid var(--border);
 		margin: 32px 0;

@@ -17,6 +17,22 @@ export interface AppState {
 	currentDirPrefix: string;
 }
 
+// Serializable form stored in history.state via SvelteKit's pushState/replaceState.
+// FilePath class instances don't survive structured clone (prototype getters are lost),
+// so currentFile is stored as its string path and reconstructed on restore.
+export type SerializedAppState = Omit<AppState, 'currentFile'> & {
+	currentFilePath: string | null;
+};
+
+export function serializeState(s: AppState): SerializedAppState {
+	const { currentFile, ...rest } = s;
+	return { ...rest, currentFilePath: currentFile?.full ?? null };
+}
+
+export function deserializeState(s: SerializedAppState): AppState {
+	return { ...s, currentFile: s.currentFilePath ? new FilePath(s.currentFilePath) : null };
+}
+
 export function buildUrl(s: AppState): string {
 	const p = new URLSearchParams();
 	if (s.query) p.set('q', s.query);

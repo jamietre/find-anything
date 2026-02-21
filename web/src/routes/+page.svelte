@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { onMount, tick } from 'svelte';
+	import { pushState as svelteKitPushState, replaceState as svelteKitReplaceState, afterNavigate } from '$app/navigation';
+	import { page } from '$app/stores';
+	import { get } from 'svelte/store';
 	import SearchView from '$lib/SearchView.svelte';
 	import FileView from '$lib/FileView.svelte';
 	import CommandPalette from '$lib/CommandPalette.svelte';
@@ -11,9 +14,15 @@
 	import { formatHash } from '$lib/lineSelection';
 	import type { LineSelection } from '$lib/lineSelection';
 	import { FilePath } from '$lib/filePath';
-	import { buildUrl, restoreFromParams } from '$lib/appState';
-	import type { AppState } from '$lib/appState';
+	import { buildUrl, restoreFromParams, serializeState, deserializeState } from '$lib/appState';
+	import type { AppState, SerializedAppState } from '$lib/appState';
 	import { profile } from '$lib/profile';
+
+	// SvelteKit passes params to every layout/page component. Declare it to avoid
+	// the runtime "unknown prop" warning. Assigned to _params to signal that it
+	// is intentionally unused (access via $page.params if ever needed).
+	export let params: Record<string, string>;
+	const _params = params;
 
 	// ── State ──────────────────────────────────────────────────────────────────
 
@@ -48,13 +57,13 @@
 
 	function pushState() {
 		const s = captureState();
-		history.pushState(s, '', buildUrl(s) + formatHash(fileSelection));
+		svelteKitPushState(buildUrl(s) + formatHash(fileSelection), serializeState(s));
 	}
 
 	function syncHash() {
 		const hash = formatHash(fileSelection);
 		const base = location.pathname + location.search;
-		history.replaceState(history.state, '', hash ? base + hash : base);
+		svelteKitReplaceState(hash ? base + hash : base, get(page).state);
 	}
 
 	function applyState(s: AppState) {
@@ -72,6 +81,18 @@
 
 	// ── Lifecycle ───────────────────────────────────────────────────────────────
 
+	// Handle browser back/forward through states pushed by pushState() above.
+	// afterNavigate fires after SvelteKit has updated $page.state, so reading
+	// get(page).state here gives the restored AppState. The 'popstate' type
+	// covers both deep history entries (state present) and entries predating our
+	// app (state absent — fall back to URL params).
+	afterNavigate(({ type }) => {
+		if (type !== 'popstate') return;
+		const s = get(page).state as SerializedAppState;
+		if (s?.view) applyState(deserializeState(s));
+		else applyState(restoreFromParams(new URLSearchParams(location.search)));
+	});
+
 	onMount(() => {
 		(async () => {
 			try { sources = await listSources(); } catch { /* silent */ }
@@ -82,14 +103,9 @@
 				const restored = restoreFromParams(params);
 				showTree = restored.showTree;
 				applyState(restored);
-				history.replaceState(captureState(), '', location.href);
+				svelteKitReplaceState(location.href, serializeState(captureState()));
 			}
 		})();
-
-		function handlePopState(e: PopStateEvent) {
-			if (e.state) applyState(e.state as AppState);
-			else applyState(restoreFromParams(new URLSearchParams(location.search)));
-		}
 
 		function handleKeydown(e: KeyboardEvent) {
 			if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
@@ -98,13 +114,11 @@
 			}
 		}
 
-		window.addEventListener('popstate', handlePopState);
 		window.addEventListener('keydown', handleKeydown, { capture: true });
 		// Scroll events as a secondary trigger: when the window is scrollable
 		// and the user scrolls near the sentinel, load more results.
 		window.addEventListener('scroll', checkScroll, { passive: true });
 		return () => {
-			window.removeEventListener('popstate', handlePopState);
 			window.removeEventListener('keydown', handleKeydown, { capture: true });
 			window.removeEventListener('scroll', checkScroll);
 		};
