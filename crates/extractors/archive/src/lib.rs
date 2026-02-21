@@ -32,7 +32,7 @@ pub fn extract(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
 pub fn accepts(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| is_archive_ext(e))
+        .map(is_archive_ext)
         .unwrap_or(false)
 }
 
