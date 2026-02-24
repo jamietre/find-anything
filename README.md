@@ -98,6 +98,7 @@ cargo build --release
 | `find-scan`            | Initial filesystem indexer                 | each client machine         |
 | `find-watch`           | Real-time file watcher (incremental)       | each client machine         |
 | `find-anything`        | CLI search client                          | anywhere                    |
+| `find-config`          | Show effective client config with defaults | each client machine         |
 | `find-extract-text`    | Text/Markdown extractor                    | client (used by find-watch) |
 | `find-extract-pdf`     | PDF extractor                              | client (used by find-watch) |
 | `find-extract-media`   | Image/audio/video metadata extractor       | client (used by find-watch) |

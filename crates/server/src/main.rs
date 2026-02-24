@@ -17,7 +17,7 @@ use axum::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use find_common::config::ServerAppConfig;
+use find_common::config::{parse_server_config, ServerAppConfig};
 
 // ── Embedded web UI ────────────────────────────────────────────────────────────
 // In release builds, all files under web/build/ are compiled into the binary.
@@ -74,8 +74,7 @@ async fn main() -> Result<()> {
 
     let config_str = std::fs::read_to_string(&config_path)
         .with_context(|| format!("reading config: {config_path}"))?;
-    let config: ServerAppConfig = toml::from_str(&config_str)
-        .context("parsing server config")?;
+    let config = parse_server_config(&config_str)?;
 
     let data_dir = PathBuf::from(&config.server.data_dir);
     std::fs::create_dir_all(data_dir.join("sources"))

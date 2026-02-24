@@ -6,14 +6,14 @@ mod scan;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use find_common::config::ClientConfig;
+use find_common::config::{default_config_path, parse_client_config};
 
 #[derive(Parser)]
 #[command(name = "find-scan", about = "Index files and submit to find-anything server")]
 struct Args {
-    /// Path to client config file
-    #[arg(long, default_value = "/etc/find-anything/client.toml")]
-    config: String,
+    /// Path to client config file (default: ~/.config/find-anything/client.toml)
+    #[arg(long)]
+    config: Option<String>,
 
     /// Force a full reindex regardless of mtime
     #[arg(long)]
@@ -31,10 +31,10 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
-    let config_str = std::fs::read_to_string(&args.config)
-        .with_context(|| format!("reading config {}", args.config))?;
-    let config: ClientConfig =
-        toml::from_str(&config_str).context("parsing client config")?;
+    let config_path = args.config.unwrap_or_else(default_config_path);
+    let config_str = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("reading config {config_path}"))?;
+    let config = parse_client_config(&config_str)?;
 
     let client = api::ApiClient::new(&config.server.url, &config.server.token);
 

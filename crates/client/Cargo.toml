@@ -15,6 +15,10 @@ path = "src/watch_main.rs"
 name = "find-anything"
 path = "src/query_main.rs"
 
+[[bin]]
+name = "find-config"
+path = "src/config_main.rs"
+
 [dependencies]
 find-common = { path = "../common" }
 find-extract-text = { path = "../extractors/text" }
@@ -36,7 +40,7 @@ globset     = { workspace = true }
 
 reqwest     = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 notify      = "6"
-toml        = "0.8"
+toml        = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 colored     = "2"
 flate2      = "1"

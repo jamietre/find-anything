@@ -7,6 +7,8 @@ use clap::Parser;
 #[cfg(windows)]
 use clap::Subcommand;
 
+use find_common::config::{default_config_path, parse_client_config};
+#[cfg(windows)]
 use find_common::config::ClientConfig;
 
 // ── Windows Service boilerplate ───────────────────────────────────────────────
@@ -140,7 +142,7 @@ fn resolve_config(config: Option<String>) -> String {
         if cfg!(windows) {
             "client.toml".to_string()
         } else {
-            "/etc/find-anything/client.toml".to_string()
+            default_config_path()
         }
     })
 }
@@ -188,7 +190,7 @@ async fn main() -> Result<()> {
     // Default: run the watcher in the foreground.
     let config_str = std::fs::read_to_string(&config_path)
         .with_context(|| format!("reading config {config_path}"))?;
-    let config: ClientConfig = toml::from_str(&config_str).context("parsing client config")?;
+    let config = parse_client_config(&config_str)?;
 
     watch::run_watch(&config).await
 }

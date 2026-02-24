@@ -1,4 +1,6 @@
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
@@ -215,6 +217,52 @@ fn default_search_limit() -> usize { 50 }
 fn default_max_limit() -> usize { 500 }
 fn default_fts_candidate_limit() -> usize { 2000 }
 fn default_context_window() -> usize { 1 }
+
+/// Resolves the client config path using the following priority:
+///
+/// 1. `FIND_ANYTHING_CONFIG` environment variable (if set)
+/// 2. `$XDG_CONFIG_HOME/find-anything/client.toml` (if `XDG_CONFIG_HOME` is set)
+/// 3. `~/.config/find-anything/client.toml` (default)
+pub fn default_config_path() -> String {
+    if let Ok(p) = std::env::var("FIND_ANYTHING_CONFIG") {
+        return p;
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return format!("{xdg}/find-anything/client.toml");
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    format!("{home}/.config/find-anything/client.toml")
+}
+
+// ── Config loaders with unknown-field warnings ─────────────────────────────
+
+/// Parse a client `client.toml` string, emitting `warn!` for any unrecognised keys.
+pub fn parse_client_config(toml_str: &str) -> Result<ClientConfig> {
+    let value: toml::Value = toml::from_str(toml_str).context("invalid TOML")?;
+    let mut unknown = Vec::new();
+    let cfg = serde_ignored::deserialize(value, |path| {
+        unknown.push(path.to_string());
+    })
+    .context("parsing client config")?;
+    for key in &unknown {
+        warn!("unknown config key: {key}");
+    }
+    Ok(cfg)
+}
+
+/// Parse a server `server.toml` string, emitting `warn!` for any unrecognised keys.
+pub fn parse_server_config(toml_str: &str) -> Result<ServerAppConfig> {
+    let value: toml::Value = toml::from_str(toml_str).context("invalid TOML")?;
+    let mut unknown = Vec::new();
+    let cfg = serde_ignored::deserialize(value, |path| {
+        unknown.push(path.to_string());
+    })
+    .context("parsing server config")?;
+    for key in &unknown {
+        warn!("unknown config key: {key}");
+    }
+    Ok(cfg)
+}
 
 #[cfg(test)]
 mod tests {

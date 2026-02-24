@@ -14,6 +14,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - `find-anything` binary renamed from `find` to avoid conflict with the coreutils `find` command
 
 ### Added
+- **`find-config`** — new binary that shows the effective client configuration with all defaults filled in; also warns on unknown config keys
+- **Unknown config key warnings** — all three client binaries and `find-server` now emit a `WARN` log for any unrecognised TOML keys
+- **Default config path** — all client tools now default to `~/.config/find-anything/client.toml`; overridable via `FIND_ANYTHING_CONFIG` env var or `XDG_CONFIG_HOME`
 - **About tab** in Settings — shows server version and a "Check for updates" button
 - **Scan progress** — `find-scan` now logs `X/Y files completed` on each batch submission
 - **armv7 build target** — supports Synology NAS and other 32-bit ARM Linux devices
