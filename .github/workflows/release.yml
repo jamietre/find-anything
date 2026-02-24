@@ -52,6 +52,11 @@ jobs:
             target: aarch64-unknown-linux-gnu
             artifact_name: linux-aarch64
             ext: ""
+          - os: ubuntu-24.04
+            target: armv7-unknown-linux-gnueabihf
+            artifact_name: linux-armv7
+            ext: ""
+            use_cross: true
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: macos-aarch64
@@ -86,8 +91,12 @@ jobs:
           key: ${{ runner.os }}-${{ matrix.target }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-${{ matrix.target }}-cargo-
 
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
       - name: Build
-        run: cargo build --release --workspace --target ${{ matrix.target }}
+        run: ${{ matrix.use_cross && 'cross' || 'cargo' }} build --release --workspace --target ${{ matrix.target }}
 
       - name: Package
         shell: bash
