@@ -1,6 +1,6 @@
 #!/bin/sh
 # find-anything installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/main/install.sh | sh
+# Usage: curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
 #
 # Options (environment variables):
 #   INSTALL_DIR   Destination directory (default: ~/.local/bin)
