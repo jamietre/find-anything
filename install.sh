@@ -276,13 +276,12 @@ echo "  Edit this file to add more sources, change exclude patterns, etc."
 echo ""
 echo "Setting up find-watch service..."
 
-if command -v systemctl >/dev/null 2>&1 && [ -d "/run/systemd/system" ]; then
-  # systemd is available
+if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
+  # systemd user session is active — install as a user service
   SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
   SERVICE_FILE="$SYSTEMD_USER_DIR/find-watch.service"
   mkdir -p "$SYSTEMD_USER_DIR"
 
-  # Write the service unit with the actual binary path
   cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=find-anything file watcher
@@ -309,6 +308,38 @@ EOF
   echo "  Status:  systemctl --user status find-watch"
   echo "  Logs:    journalctl --user -u find-watch -f"
   echo "  Stop:    systemctl --user stop find-watch"
+
+elif command -v systemctl >/dev/null 2>&1 && [ -d "/run/systemd/system" ]; then
+  # systemd is present but user session is unavailable (e.g. Synology DSM).
+  # Write the unit file to a temp location and instruct the user to install it.
+  UNIT_STAGING="$HOME/.config/find-anything/find-watch.service"
+  cat > "$UNIT_STAGING" <<EOF
+[Unit]
+Description=find-anything file watcher
+After=network.target
+
+[Service]
+User=$(id -un)
+ExecStart=${INSTALL_DIR}/find-watch --config ${CONFIG_FILE}
+Restart=on-failure
+RestartSec=5s
+Environment=RUST_LOG=find_watch=info
+Environment=PATH=${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  echo ""
+  echo "systemd user sessions are not supported on this system (e.g. Synology DSM)."
+  echo "A system-level service unit has been written to:"
+  echo "  $UNIT_STAGING"
+  echo ""
+  echo "To install and enable it, run:"
+  echo ""
+  echo "  sudo mv $UNIT_STAGING /etc/systemd/system/find-watch.service"
+  echo "  sudo systemctl daemon-reload"
+  echo "  sudo systemctl enable --now find-watch"
 
 elif [ "$OS_NAME" = "macos" ]; then
   # macOS: suggest launchd
@@ -350,14 +381,12 @@ EOF
   echo "  Stop:    launchctl unload $PLIST_FILE"
 
 else
-  # Non-systemd Linux: print manual instructions
+  # No systemd at all
   echo ""
-  echo "Autostart not configured (systemd user session not detected)."
-  echo "Run find-watch manually:"
+  echo "Autostart not configured (systemd not detected)."
+  echo "Start find-watch manually:"
   echo ""
   echo "  ${INSTALL_DIR}/find-watch --config ${CONFIG_FILE}"
-  echo ""
-  echo "Or add it to your session startup script."
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
