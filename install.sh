@@ -232,16 +232,6 @@ echo ""
 echo "Configuration written to: $CONFIG_FILE"
 echo "  Edit this file to add more sources, change exclude patterns, etc."
 
-# ── Run initial full scan ─────────────────────────────────────────────────────
-
-echo ""
-echo "Running initial scan (this may take a while)..."
-echo "  Server:    $SERVER_URL"
-echo "  Watching:  $DIRS_INPUT"
-echo ""
-
-"${INSTALL_DIR}/find-scan" --config "$CONFIG_FILE" --full
-
 # ── Install systemd user service ──────────────────────────────────────────────
 
 echo ""
@@ -342,4 +332,9 @@ echo ""
 echo "  Config:    $CONFIG_FILE"
 echo "    ^ Edit this file to add sources, change excludes, etc."
 echo ""
-echo "Re-run a full scan:  find-scan --config $CONFIG_FILE --full"
+echo "Next step — run the initial scan:"
+echo ""
+echo "  find-scan --config $CONFIG_FILE --full"
+echo ""
+echo "This indexes all configured directories. Run it once before"
+echo "find-watch will have anything useful to keep up to date."

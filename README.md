@@ -60,8 +60,8 @@ curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/insta
 The script will:
 - Prompt for the server URL, bearer token, and directories to watch
 - Write an annotated `client.toml` with all options
-- Run `find-scan --full` to index existing files
 - Install and enable the `find-watch` systemd user service
+- Print the `find-scan` command to run when you're ready to index
 
 **Options:**
 
