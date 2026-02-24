@@ -140,7 +140,7 @@ jobs:
       - name: Build installer
         if: matrix.os == 'windows-latest'
         shell: pwsh
-        run: iscc /DAppVersion=${{ github.ref_name }} /DBinDir=target\x86_64-pc-windows-msvc\release packaging\windows\find-anything.iss
+        run: iscc "/DAppVersion=${{ github.ref_name }}" "/DBinDir=$env:GITHUB_WORKSPACE\target\x86_64-pc-windows-msvc\release" packaging\windows\find-anything.iss
 
       - name: Stage installer
         if: matrix.os == 'windows-latest'
