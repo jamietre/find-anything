@@ -148,6 +148,17 @@ if [ -f "$CONFIG_FILE" ]; then
     y|Y) ;;
     *)
       echo "Skipping configuration. Existing config preserved."
+      echo ""
+      echo "Restart the watcher to pick up the new binary:"
+      echo ""
+      if systemctl --user status find-watch >/dev/null 2>&1; then
+        echo "  systemctl --user restart find-watch"
+      elif systemctl status find-watch >/dev/null 2>&1; then
+        echo "  sudo systemctl restart find-watch"
+      else
+        echo "  systemctl --user restart find-watch   # or: sudo systemctl restart find-watch"
+      fi
+      echo ""
       exit 0
       ;;
   esac
