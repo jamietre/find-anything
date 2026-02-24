@@ -259,8 +259,7 @@ begin
     TomlContent :=
       '[server]' + #13#10 +
       'url   = "' + TomlEscape(ServerUrl) + '"' + #13#10 +
-      'token = "' + TomlEscape(Token) + '"' + #13#10 +
-      #13#10 +
+      'token = "' + TomlEscape(Token) + '"' + #13#10 + #13#10 +
       '[[sources]]' + #13#10 +
       'name  = "home"' + #13#10 +
       'paths = [' + PathsStr + ']' + #13#10;
