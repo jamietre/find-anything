@@ -190,10 +190,41 @@ token = "$TOKEN_ESC"
 [[sources]]
 name  = "home"
 paths = [$PATHS_TOML]
+# base_url = ""   # Optional: public URL prefix for file links in search results
+
+[scan]
+# max_file_size_kb = 1024   # Skip files larger than this (KB)
+# max_line_length  = 120    # Wrap long lines at this column (0 = disable)
+# follow_symlinks  = false
+# include_hidden   = false  # Index dot-files and dot-directories
+# ocr              = false  # OCR image files (requires tesseract)
+# exclude = [               # Glob patterns to skip (these are the defaults)
+#   "**/.git/**",
+#   "**/node_modules/**",
+#   "**/target/**",
+#   "**/__pycache__/**",
+#   "**/.next/**",
+#   "**/dist/**",
+#   "**/.cache/**",
+#   "**/.tox/**",
+#   "**/.venv/**",
+#   "**/venv/**",
+#   "**/*.pyc",
+#   "**/*.class",
+# ]
+
+[scan.archives]
+# enabled   = true
+# max_depth = 10   # Max nesting depth for archives-within-archives
+
+[watch]
+# debounce_ms   = 500   # Wait this long (ms) after last change before re-indexing
+# extractor_dir = ""    # Path to find-extract-* binaries (default: auto-detect)
 EOF
 
 echo ""
-echo "Configuration written to $CONFIG_FILE"
+echo "Configuration written to: $CONFIG_FILE"
+echo "  Edit this file to add more sources, change exclude patterns, etc."
 
 # ── Run initial full scan ─────────────────────────────────────────────────────
 
@@ -300,7 +331,9 @@ echo ""
 echo "Installation complete!"
 echo ""
 echo "  Server:    $SERVER_URL"
-echo "  Config:    $CONFIG_FILE"
 echo "  Binaries:  $INSTALL_DIR"
+echo ""
+echo "  Config:    $CONFIG_FILE"
+echo "    ^ Edit this file to add sources, change excludes, etc."
 echo ""
 echo "Re-run a full scan:  find-scan --config $CONFIG_FILE --full"
