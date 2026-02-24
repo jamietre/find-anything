@@ -34,24 +34,16 @@ Run on the machine that will host the central index:
 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
 ```
 
-The script will:
-- Ask whether to install as a **system service** (root required, dedicated user, `/etc/find-anything/`) or a **user service** (`~/.config/find-anything/`)
-- Prompt for bind address and data directory
-- Auto-generate a secure bearer token (or let you supply your own)
-- Write an annotated `server.toml` with all options
-- Install and enable the `find-server` systemd service
-- Print the token — you'll need it to configure clients
+The script will prompt for:
+- Version to install (default: latest release)
+- Install directory (default: `/usr/local/bin` for system, `~/.local/bin` for user)
+- Service mode: **system** (root required, dedicated user, `/etc/find-anything/`) or **user** (`~/.config/find-anything/`)
+- Bind address, data directory, and bearer token (auto-generated)
 
-By default the script installs the latest release. To override, prefix
-environment variables to the command:
+It then writes an annotated `server.toml`, installs and enables the service, and
+prints the token for use when configuring clients.
 
-```sh
-# Install a specific version
-VERSION=v0.2.3 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
-
-# Install to a custom directory
-INSTALL_DIR=/opt/find-anything curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
-```
+To skip all prompts (e.g. in scripts): `SKIP_CONFIG=1 curl ... | sh`
 
 ### Client installation (Linux & macOS)
 
@@ -61,25 +53,15 @@ Run on each machine whose files you want to index:
 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
 ```
 
-The script will:
-- Prompt for the server URL, bearer token, and directories to watch
-- Write an annotated `client.toml` with all options
-- Install and enable the `find-watch` systemd user service
-- Print the `find-scan` command to run when you're ready to index
+The script will prompt for:
+- Version to install (default: latest release)
+- Install directory (default: `~/.local/bin`)
+- Server URL, bearer token, and directories to watch
 
-By default the script installs the latest release and prompts interactively.
-To override:
+It then writes an annotated `client.toml`, installs and enables the `find-watch`
+systemd user service, and prints the `find-scan` command to run when ready.
 
-```sh
-# Install a specific version
-VERSION=v0.2.3 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
-
-# Install to a custom directory
-INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
-
-# Skip interactive prompts (config must be written separately)
-SKIP_CONFIG=1 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
-```
+To skip all prompts (e.g. in scripts): `SKIP_CONFIG=1 curl ... | sh`
 
 ### Windows client
 

@@ -1,6 +1,6 @@
 #!/bin/sh
 # find-anything client installer
-# Installs find-scan, find-watch, find, and the extractor binaries.
+# Installs find-scan, find-watch, find-anything, and the extractor binaries.
 # Configures the client to talk to a running find-anything server.
 #
 # Usage: curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
@@ -8,15 +8,11 @@
 # For server installation use install-server.sh instead:
 #   curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
 #
-# Options (environment variables):
-#   INSTALL_DIR   Destination directory (default: ~/.local/bin)
-#   VERSION       Specific release tag to install (default: latest)
-#   SKIP_CONFIG   Set to 1 to skip the configuration prompts
+# SKIP_CONFIG=1 skips all interactive prompts (binaries only, no config written)
 
 set -e
 
 REPO="jamietre/find-anything"
-INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
 
 # ── Detect platform ────────────────────────────────────────────────────────────
 
@@ -44,20 +40,37 @@ esac
 
 PLATFORM="${OS_NAME}-${ARCH_NAME}"
 
-# ── Resolve version ────────────────────────────────────────────────────────────
+# ── Fetch latest version (used as default in prompt) ──────────────────────────
 
-if [ -z "$VERSION" ]; then
-  echo "Fetching latest release..."
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' \
-    | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
-  if [ -z "$VERSION" ]; then
-    echo "Failed to determine latest version. Set VERSION explicitly and retry."
-    exit 1
-  fi
+LATEST_VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  | grep '"tag_name"' \
+  | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
+if [ -z "$LATEST_VERSION" ]; then
+  LATEST_VERSION="(unknown)"
 fi
 
-echo "Installing find-anything ${VERSION} (${PLATFORM})..."
+# ── Prompts ────────────────────────────────────────────────────────────────────
+
+if [ "${SKIP_CONFIG:-0}" = "1" ]; then
+  VERSION="${VERSION:-$LATEST_VERSION}"
+  INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+else
+  printf "Version [%s]: " "$LATEST_VERSION"
+  read -r VERSION_INPUT </dev/tty
+  VERSION="${VERSION_INPUT:-$LATEST_VERSION}"
+
+  printf "Install directory [%s/.local/bin]: " "$HOME"
+  read -r INSTALL_DIR_INPUT </dev/tty
+  INSTALL_DIR="${INSTALL_DIR_INPUT:-$HOME/.local/bin}"
+fi
+
+if [ -z "$VERSION" ] || [ "$VERSION" = "(unknown)" ]; then
+  echo "Could not determine version. Check your internet connection and retry." >&2
+  exit 1
+fi
+
+echo ""
+echo "Installing find-anything ${VERSION} (${PLATFORM}) to ${INSTALL_DIR}..."
 
 # ── Download and extract ───────────────────────────────────────────────────────
 

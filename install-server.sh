@@ -7,10 +7,7 @@
 # For client installation use install.sh instead:
 #   curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
 #
-# Options (environment variables):
-#   INSTALL_DIR   Destination directory (default: /usr/local/bin for system, ~/.local/bin for user)
-#   VERSION       Specific release tag to install (default: latest)
-#   SKIP_CONFIG   Set to 1 to skip the configuration prompts
+# SKIP_CONFIG=1 skips all interactive prompts
 
 set -e
 
@@ -42,19 +39,31 @@ esac
 
 PLATFORM="${OS_NAME}-${ARCH_NAME}"
 
-# ── Resolve version ────────────────────────────────────────────────────────────
+# ── Fetch latest version (used as default in prompt) ──────────────────────────
 
-if [ -z "$VERSION" ]; then
-  echo "Fetching latest release..."
-  VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep '"tag_name"' \
-    | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
-  if [ -z "$VERSION" ]; then
-    echo "Failed to determine latest version. Set VERSION explicitly and retry."
-    exit 1
-  fi
+LATEST_VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+  | grep '"tag_name"' \
+  | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
+if [ -z "$LATEST_VERSION" ]; then
+  LATEST_VERSION="(unknown)"
 fi
 
+# ── Version prompt ─────────────────────────────────────────────────────────────
+
+if [ "${SKIP_CONFIG:-0}" != "1" ]; then
+  printf "Version [%s]: " "$LATEST_VERSION"
+  read -r VERSION_INPUT </dev/tty
+  VERSION="${VERSION_INPUT:-$LATEST_VERSION}"
+else
+  VERSION="${VERSION:-$LATEST_VERSION}"
+fi
+
+if [ -z "$VERSION" ] || [ "$VERSION" = "(unknown)" ]; then
+  echo "Could not determine version. Check your internet connection and retry." >&2
+  exit 1
+fi
+
+echo ""
 echo "Installing find-anything server ${VERSION} (${PLATFORM})..."
 
 # ── Download and extract ───────────────────────────────────────────────────────
@@ -97,13 +106,13 @@ case "$SERVICE_MODE" in
       echo "System service installation requires root. Re-run with sudo." >&2
       exit 1
     fi
-    INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+    DEFAULT_INSTALL_DIR="/usr/local/bin"
     CONFIG_DIR="/etc/find-anything"
     DATA_DIR="/var/lib/find-anything"
     SERVICE_USER="find-anything"
     ;;
   user)
-    INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+    DEFAULT_INSTALL_DIR="$HOME/.local/bin"
     if [ -n "$XDG_CONFIG_HOME" ]; then
       CONFIG_DIR="$XDG_CONFIG_HOME/find-anything"
     else
@@ -121,6 +130,14 @@ case "$SERVICE_MODE" in
     exit 1
     ;;
 esac
+
+if [ "${SKIP_CONFIG:-0}" = "1" ]; then
+  INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
+else
+  printf "Install directory [%s]: " "$DEFAULT_INSTALL_DIR"
+  read -r INSTALL_DIR_INPUT </dev/tty
+  INSTALL_DIR="${INSTALL_DIR_INPUT:-$DEFAULT_INSTALL_DIR}"
+fi
 
 CONFIG_FILE="$CONFIG_DIR/server.toml"
 
