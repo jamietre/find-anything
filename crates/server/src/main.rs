@@ -10,12 +10,50 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use axum::{
     extract::DefaultBodyLimit,
+    http::{header, StatusCode},
+    response::IntoResponse,
     routing::{get, post},
     Router,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use find_common::config::ServerAppConfig;
+
+// ── Embedded web UI ────────────────────────────────────────────────────────────
+// In release builds, all files under web/build/ are compiled into the binary.
+// In debug builds (no `debug-embed` feature), they are read from disk at runtime.
+
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../../web/build/"]
+struct WebAssets;
+
+async fn serve_static(uri: axum::http::Uri) -> impl IntoResponse {
+    let path = uri.path().trim_start_matches('/');
+    let path = if path.is_empty() { "index.html" } else { path };
+
+    match WebAssets::get(path) {
+        Some(content) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            (
+                [(header::CONTENT_TYPE, mime.essence_str())],
+                content.data,
+            )
+                .into_response()
+        }
+        None => {
+            // SPA fallback — serve index.html for any unknown path so the
+            // SvelteKit client-side router can handle it.
+            match WebAssets::get("index.html") {
+                Some(content) => (
+                    [(header::CONTENT_TYPE, "text/html")],
+                    content.data,
+                )
+                    .into_response(),
+                None => StatusCode::NOT_FOUND.into_response(),
+            }
+        }
+    }
+}
 
 pub struct AppState {
     pub config: ServerAppConfig,
@@ -68,6 +106,7 @@ async fn main() -> Result<()> {
         .route("/api/v1/metrics",        get(routes::get_metrics))
         .route("/api/v1/stats",          get(routes::get_stats))
         .route("/api/v1/tree",           get(routes::list_dir))
+        .fallback(serve_static)
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state);
 

@@ -8,8 +8,9 @@
 	import CommandPalette from '$lib/CommandPalette.svelte';
 	import Settings from '$lib/Settings.svelte';
 	import Dashboard from '$lib/Dashboard.svelte';
-	import { search, listSources, getSettings } from '$lib/api';
+	import { search, listSources, getSettings, AuthError } from '$lib/api';
 	import type { SearchResult, SourceInfo } from '$lib/api';
+	import { getToken, setToken } from '$lib/token';
 	import { contextWindow } from '$lib/settingsStore';
 	import { formatHash } from '$lib/lineSelection';
 	import type { LineSelection } from '$lib/lineSelection';
@@ -48,6 +49,31 @@
 	let showPalette = false;
 	let showSettings = false;
 	let showDashboard = false;
+
+	// ── Token setup ──────────────────────────────────────────────────────────────
+
+	let showTokenSetup = false;
+	let tokenInput = '';
+
+	function checkToken() {
+		if (!getToken()) showTokenSetup = true;
+	}
+
+	function saveToken() {
+		if (!tokenInput.trim()) return;
+		setToken(tokenInput.trim());
+		tokenInput = '';
+		showTokenSetup = false;
+		// Re-run initial data load now that we have a token.
+		initialLoad();
+	}
+
+	async function initialLoad() {
+		try { sources = await listSources(); } catch (e) {
+			if (e instanceof AuthError) { showTokenSetup = true; return; }
+		}
+		try { const s = await getSettings(); contextWindow.set(s.context_window); } catch { /* silent */ }
+	}
 
 	// ── History ─────────────────────────────────────────────────────────────────
 
@@ -95,8 +121,8 @@
 
 	onMount(() => {
 		(async () => {
-			try { sources = await listSources(); } catch { /* silent */ }
-			try { const s = await getSettings(); contextWindow.set(s.context_window); } catch { /* silent */ }
+			checkToken();
+			if (!showTokenSetup) await initialLoad();
 
 			const params = new URLSearchParams(location.search);
 			if (params.has('q') || params.has('path')) {
@@ -381,6 +407,23 @@
 	on:close={() => (showDashboard = false)}
 />
 
+{#if showTokenSetup}
+	<!-- svelte-ignore a11y-click-events-have-key-events a11y-no-static-element-interactions -->
+	<div class="token-overlay" on:click|self={() => {}}>
+		<div class="token-dialog">
+			<h2>Connect to find-server</h2>
+			<p>Enter the bearer token from your <code>server.toml</code> to connect.</p>
+			<input
+				type="password"
+				placeholder="Paste your token here"
+				bind:value={tokenInput}
+				on:keydown={(e) => e.key === 'Enter' && saveToken()}
+			/>
+			<button on:click={saveToken} disabled={!tokenInput.trim()}>Connect</button>
+		</div>
+	</div>
+{/if}
+
 <style>
 	.page.file-view {
 		display: flex;
@@ -416,5 +459,73 @@
 	@keyframes spin {
 		from { transform: rotate(0deg); }
 		to { transform: rotate(360deg); }
+	}
+
+	.token-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.6);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 1000;
+	}
+
+	.token-dialog {
+		background: var(--bg, #1e1e1e);
+		border: 1px solid var(--border, #333);
+		border-radius: 8px;
+		padding: 32px;
+		width: min(420px, 90vw);
+		display: flex;
+		flex-direction: column;
+		gap: 16px;
+	}
+
+	.token-dialog h2 {
+		margin: 0;
+		font-size: 18px;
+		font-weight: 600;
+	}
+
+	.token-dialog p {
+		margin: 0;
+		font-size: 14px;
+		color: var(--text-muted, #999);
+		line-height: 1.5;
+	}
+
+	.token-dialog input {
+		width: 100%;
+		padding: 10px 12px;
+		border: 1px solid var(--border, #333);
+		border-radius: 6px;
+		background: var(--bg-input, #2a2a2a);
+		color: inherit;
+		font-size: 14px;
+		font-family: monospace;
+		box-sizing: border-box;
+	}
+
+	.token-dialog input:focus {
+		outline: 2px solid var(--accent, #4a9eff);
+		outline-offset: -1px;
+	}
+
+	.token-dialog button {
+		align-self: flex-end;
+		padding: 8px 20px;
+		background: var(--accent, #4a9eff);
+		color: #fff;
+		border: none;
+		border-radius: 6px;
+		font-size: 14px;
+		font-weight: 500;
+		cursor: pointer;
+	}
+
+	.token-dialog button:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
 	}
 </style>

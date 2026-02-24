@@ -77,3 +77,7 @@ jobs:
       - name: Type-check
         run: pnpm run check
         working-directory: web
+
+      - name: Build
+        run: pnpm run build
+        working-directory: web
