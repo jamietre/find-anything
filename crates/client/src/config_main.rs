@@ -15,6 +15,11 @@ struct Args {
 }
 
 fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::io::stderr)
+        .init();
+
     let args = Args::parse();
 
     let config_path = args.config.unwrap_or_else(default_config_path);

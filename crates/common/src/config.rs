@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
@@ -235,8 +236,7 @@ pub fn default_config_path() -> String {
 
 // ── Config loaders with unknown-field warnings ─────────────────────────────
 
-/// Parse a client `client.toml` string, printing to stderr for any unrecognised keys.
-/// Uses stderr directly so warnings are always visible regardless of log level.
+/// Parse a client `client.toml` string, emitting `warn!` for any unrecognised keys.
 pub fn parse_client_config(toml_str: &str) -> Result<ClientConfig> {
     let value: toml::Value = toml::from_str(toml_str).context("invalid TOML")?;
     let mut unknown = Vec::new();
@@ -245,13 +245,12 @@ pub fn parse_client_config(toml_str: &str) -> Result<ClientConfig> {
     })
     .context("parsing client config")?;
     for key in &unknown {
-        eprintln!("WARNING: unknown config key: {key}");
+        warn!("unknown config key: {key}");
     }
     Ok(cfg)
 }
 
-/// Parse a server `server.toml` string, printing to stderr for any unrecognised keys.
-/// Uses stderr directly so warnings are always visible regardless of log level.
+/// Parse a server `server.toml` string, emitting `warn!` for any unrecognised keys.
 pub fn parse_server_config(toml_str: &str) -> Result<ServerAppConfig> {
     let value: toml::Value = toml::from_str(toml_str).context("invalid TOML")?;
     let mut unknown = Vec::new();
@@ -260,7 +259,7 @@ pub fn parse_server_config(toml_str: &str) -> Result<ServerAppConfig> {
     })
     .context("parsing server config")?;
     for key in &unknown {
-        eprintln!("WARNING: unknown config key: {key}");
+        warn!("unknown config key: {key}");
     }
     Ok(cfg)
 }
