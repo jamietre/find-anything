@@ -4,8 +4,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use tracing::info;
-
 use find_common::api::{detect_kind_from_ext, BulkRequest, IndexFile, IndexLine};
 
 use crate::api::ApiClient;
@@ -107,9 +105,6 @@ pub async fn submit_batch(
     scan_timestamp: Option<i64>,
 ) -> Result<()> {
     let files = std::mem::take(batch);
-    if !files.is_empty() {
-        info!("submitting batch of {} files", files.len());
-    }
     api.bulk(&BulkRequest {
         source: source_name.to_string(),
         files,

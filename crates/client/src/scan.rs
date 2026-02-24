@@ -78,6 +78,8 @@ pub async fn run_scan(
     );
 
     // Index in batches.
+    let total = to_index.len();
+    let mut completed: usize = 0;
     let mut batch: Vec<IndexFile> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_bytes: usize = 0;
 
@@ -107,12 +109,15 @@ pub async fn run_scan(
             f.extract_ms = Some(extract_ms);
         }
 
+        completed += 1;
+
         for file in index_files {
             let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
             batch_bytes += file_bytes;
             batch.push(file);
 
             if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
+                info!("submitting batch — {completed}/{total} files completed");
                 submit_batch(api, source_name, base_url, &mut batch, vec![], None).await?;
                 batch_bytes = 0;
             }
@@ -130,7 +135,7 @@ pub async fn run_scan(
     }
     submit_batch(api, source_name, base_url, &mut batch, to_delete, Some(now)).await?;
 
-    info!("scan complete");
+    info!("scan complete — {total} files indexed");
     Ok(())
 }
 
