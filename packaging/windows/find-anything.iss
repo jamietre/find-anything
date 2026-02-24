@@ -25,6 +25,7 @@ AppUpdatesURL={#AppURL}/releases
 DefaultDirName={localappdata}\{#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=admin
+UsedUserAreasWarning=no
 OutputDir=Output
 OutputBaseFilename=find-anything-setup-{#AppVersion}-windows-x86_64
 Compression=lzma
