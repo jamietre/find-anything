@@ -159,15 +159,7 @@ read -r SERVER_URL </dev/tty
 SERVER_URL="${SERVER_URL:-http://localhost:8765}"
 
 printf "Bearer token (from server.toml): "
-# Try to disable echo for password-style input; fall back gracefully
-if command -v stty >/dev/null 2>&1; then
-  stty -echo </dev/tty 2>/dev/null || true
-  read -r TOKEN </dev/tty
-  stty echo </dev/tty 2>/dev/null || true
-  echo ""
-else
-  read -r TOKEN </dev/tty
-fi
+read -r TOKEN </dev/tty
 
 if [ -z "$TOKEN" ]; then
   echo "Token cannot be empty." >&2
