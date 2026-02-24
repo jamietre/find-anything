@@ -1,6 +1,12 @@
 #!/bin/sh
-# find-anything installer
+# find-anything client installer
+# Installs find-scan, find-watch, find, and the extractor binaries.
+# Configures the client to talk to a running find-anything server.
+#
 # Usage: curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
+#
+# For server installation use install-server.sh instead:
+#   curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
 #
 # Options (environment variables):
 #   INSTALL_DIR   Destination directory (default: ~/.local/bin)
