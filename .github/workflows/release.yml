@@ -135,14 +135,12 @@ jobs:
         run: |
           Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile "$env:TEMP\innosetup.exe"
           Start-Process -FilePath "$env:TEMP\innosetup.exe" -Args "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
+          echo "C:\Program Files (x86)\Inno Setup 6" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Build installer
         if: matrix.os == 'windows-latest'
-        shell: cmd
-        run: >
-          iscc /DAppVersion=${{ github.ref_name }}
-               /DBinDir=target\x86_64-pc-windows-msvc\release
-               packaging\windows\find-anything.iss
+        shell: pwsh
+        run: iscc /DAppVersion=${{ github.ref_name }} /DBinDir=target\x86_64-pc-windows-msvc\release packaging\windows\find-anything.iss
 
       - name: Stage installer
         if: matrix.os == 'windows-latest'
