@@ -6,8 +6,39 @@ on:
       - "v*.*.*"
 
 jobs:
+  build-web:
+    name: Build Web UI
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install
+        working-directory: web
+
+      - name: Build
+        run: pnpm run build
+        working-directory: web
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: web/build/
+          retention-days: 1
+
   build:
     name: Build (${{ matrix.artifact_name }})
+    needs: [build-web]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -36,6 +67,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: web-build
+          path: web/build/
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -93,10 +129,41 @@ jobs:
             echo "ARTIFACT_NAME=${ARTIFACT}.tar.gz" >> "$GITHUB_ENV"
           fi
 
+      - name: Install Inno Setup
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://jrsoftware.org/download.php/is.exe" -OutFile "$env:TEMP\innosetup.exe"
+          Start-Process -FilePath "$env:TEMP\innosetup.exe" -Args "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -Wait
+
+      - name: Build installer
+        if: matrix.os == 'windows-latest'
+        shell: cmd
+        run: >
+          iscc /DAppVersion=${{ github.ref_name }}
+               /DBinDir=target\x86_64-pc-windows-msvc\release
+               packaging\windows\find-anything.iss
+
+      - name: Stage installer
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_name }}"
+          INSTALLER="find-anything-setup-${VERSION}-windows-x86_64.exe"
+          cp "packaging/windows/Output/${INSTALLER}" "dist/${INSTALLER}"
+          echo "INSTALLER_PATH=dist/${INSTALLER}" >> "$GITHUB_ENV"
+
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
           path: ${{ env.ARTIFACT_PATH }}
+          retention-days: 1
+
+      - uses: actions/upload-artifact@v4
+        if: matrix.os == 'windows-latest'
+        with:
+          name: windows-installer
+          path: ${{ env.INSTALLER_PATH }}
           retention-days: 1
 
   publish:
@@ -118,4 +185,5 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.exe
           generate_release_notes: true

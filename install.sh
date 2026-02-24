@@ -5,6 +5,7 @@
 # Options (environment variables):
 #   INSTALL_DIR   Destination directory (default: ~/.local/bin)
 #   VERSION       Specific release tag to install (default: latest)
+#   SKIP_CONFIG   Set to 1 to skip the configuration prompts
 
 set -e
 
@@ -70,7 +71,8 @@ mkdir -p "$INSTALL_DIR"
 EXTRACTED_DIR="${TMPDIR}/find-anything-${VERSION}-${PLATFORM}"
 
 BINARIES="find find-scan find-watch find-server \
-  find-extract-text find-extract-pdf find-extract-media find-extract-archive"
+  find-extract-text find-extract-pdf find-extract-media find-extract-archive \
+  find-extract-html find-extract-office find-extract-epub"
 
 for bin in $BINARIES; do
   if [ -f "${EXTRACTED_DIR}/${bin}" ]; then
@@ -90,9 +92,7 @@ echo ""
 # ── PATH check ────────────────────────────────────────────────────────────────
 
 case ":$PATH:" in
-  *":${INSTALL_DIR}:"*)
-    echo "Ready! Run 'find-server --help' to get started."
-    ;;
+  *":${INSTALL_DIR}:"*) ;;
   *)
     echo "NOTE: ${INSTALL_DIR} is not in your PATH."
     echo "Add this to your shell profile:"
@@ -101,3 +101,206 @@ case ":$PATH:" in
     echo ""
     ;;
 esac
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+
+if [ "${SKIP_CONFIG:-0}" = "1" ]; then
+  echo "Skipping configuration (SKIP_CONFIG=1)."
+  exit 0
+fi
+
+# Determine config directory
+if [ -n "$XDG_CONFIG_HOME" ]; then
+  CONFIG_DIR="$XDG_CONFIG_HOME/find-anything"
+else
+  CONFIG_DIR="$HOME/.config/find-anything"
+fi
+CONFIG_FILE="$CONFIG_DIR/client.toml"
+
+if [ -f "$CONFIG_FILE" ]; then
+  echo "Configuration already exists at $CONFIG_FILE"
+  printf "Re-configure? [y/N] "
+  read -r RECONFIGURE
+  case "$RECONFIGURE" in
+    y|Y) ;;
+    *)
+      echo "Skipping configuration. Existing config preserved."
+      exit 0
+      ;;
+  esac
+fi
+
+echo "Client configuration"
+echo "  find-anything server URL and token (from your server's server.toml)."
+echo ""
+
+printf "Server URL [http://localhost:8765]: "
+read -r SERVER_URL
+SERVER_URL="${SERVER_URL:-http://localhost:8765}"
+
+printf "Bearer token (from server.toml): "
+# Try to disable echo for password-style input; fall back gracefully
+if command -v stty >/dev/null 2>&1; then
+  stty -echo 2>/dev/null || true
+  read -r TOKEN
+  stty echo 2>/dev/null || true
+  echo ""
+else
+  read -r TOKEN
+fi
+
+if [ -z "$TOKEN" ]; then
+  echo "Token cannot be empty." >&2
+  exit 1
+fi
+
+printf "Directories to index (space-separated) [%s]: " "$HOME"
+read -r DIRS_INPUT
+if [ -z "$DIRS_INPUT" ]; then
+  DIRS_INPUT="$HOME"
+fi
+
+# ── Write client.toml ─────────────────────────────────────────────────────────
+
+mkdir -p "$CONFIG_DIR"
+
+# Build TOML paths array from space-separated input
+PATHS_TOML=""
+FIRST=1
+for dir in $DIRS_INPUT; do
+  # Escape backslashes and quotes (unlikely on Linux but be safe)
+  escaped="$(printf '%s' "$dir" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+  if [ "$FIRST" = "1" ]; then
+    PATHS_TOML="\"$escaped\""
+    FIRST=0
+  else
+    PATHS_TOML="$PATHS_TOML, \"$escaped\""
+  fi
+done
+
+# Escape URL and token for TOML
+SERVER_URL_ESC="$(printf '%s' "$SERVER_URL" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+TOKEN_ESC="$(printf '%s' "$TOKEN" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+
+cat > "$CONFIG_FILE" <<EOF
+[server]
+url   = "$SERVER_URL_ESC"
+token = "$TOKEN_ESC"
+
+[[sources]]
+name  = "home"
+paths = [$PATHS_TOML]
+EOF
+
+echo ""
+echo "Configuration written to $CONFIG_FILE"
+
+# ── Run initial full scan ─────────────────────────────────────────────────────
+
+echo ""
+echo "Running initial scan (this may take a while)..."
+echo "  Server:    $SERVER_URL"
+echo "  Watching:  $DIRS_INPUT"
+echo ""
+
+"${INSTALL_DIR}/find-scan" --config "$CONFIG_FILE" --full
+
+# ── Install systemd user service ──────────────────────────────────────────────
+
+echo ""
+echo "Setting up find-watch service..."
+
+if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
+  # systemd is available
+  SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+  SERVICE_FILE="$SYSTEMD_USER_DIR/find-watch.service"
+  mkdir -p "$SYSTEMD_USER_DIR"
+
+  # Write the service unit with the actual binary path
+  cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=find-anything file watcher
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=${INSTALL_DIR}/find-watch --config ${CONFIG_FILE}
+Restart=on-failure
+RestartSec=5s
+Environment=RUST_LOG=find_watch=info
+Environment=PATH=${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
+EOF
+
+  systemctl --user daemon-reload
+  systemctl --user enable find-watch
+  systemctl --user start find-watch
+
+  echo ""
+  echo "find-watch systemd user service installed and started."
+  echo "  Status:  systemctl --user status find-watch"
+  echo "  Logs:    journalctl --user -u find-watch -f"
+  echo "  Stop:    systemctl --user stop find-watch"
+
+elif [ "$OS_NAME" = "macos" ]; then
+  # macOS: suggest launchd
+  PLIST_DIR="$HOME/Library/LaunchAgents"
+  PLIST_FILE="$PLIST_DIR/com.jamietre.find-watch.plist"
+  mkdir -p "$PLIST_DIR"
+
+  cat > "$PLIST_FILE" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jamietre.find-watch</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${INSTALL_DIR}/find-watch</string>
+    <string>--config</string>
+    <string>${CONFIG_FILE}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${HOME}/Library/Logs/find-watch.log</string>
+  <key>StandardErrorPath</key>
+  <string>${HOME}/Library/Logs/find-watch.log</string>
+</dict>
+</plist>
+EOF
+
+  launchctl load "$PLIST_FILE"
+
+  echo ""
+  echo "find-watch launchd agent installed and started."
+  echo "  Status:  launchctl list com.jamietre.find-watch"
+  echo "  Logs:    tail -f ~/Library/Logs/find-watch.log"
+  echo "  Stop:    launchctl unload $PLIST_FILE"
+
+else
+  # Non-systemd Linux: print manual instructions
+  echo ""
+  echo "Autostart not configured (systemd user session not detected)."
+  echo "Run find-watch manually:"
+  echo ""
+  echo "  ${INSTALL_DIR}/find-watch --config ${CONFIG_FILE}"
+  echo ""
+  echo "Or add it to your session startup script."
+fi
+
+# ── Summary ───────────────────────────────────────────────────────────────────
+
+echo ""
+echo "Installation complete!"
+echo ""
+echo "  Server:    $SERVER_URL"
+echo "  Config:    $CONFIG_FILE"
+echo "  Binaries:  $INSTALL_DIR"
+echo ""
+echo "Re-run a full scan:  find-scan --config $CONFIG_FILE --full"
