@@ -157,13 +157,13 @@ max_file_size_mb = 10
 ### 3. Run an initial scan
 
 ```sh
-find-scan --config client.toml
+find-scan
 ```
 
 ### 4. Start the file watcher
 
 ```sh
-find-watch --config client.toml
+find-watch
 ```
 
 `find-watch` keeps the index current as files are created, modified, or deleted.
@@ -204,7 +204,7 @@ systemctl --user status find-watch
 systemctl --user restart find-watch
 
 # Re-run a full scan at any time
-find-scan --config ~/.config/find-anything/client.toml --full
+find-scan --full
 ```
 
 ---
@@ -277,7 +277,7 @@ extractor_dir = "/usr/local/bin"  # optional; auto-detected if omitted
 Run the binary directly to see the error output:
 
 ```sh
-find-watch --config ~/.config/find-anything/client.toml
+find-watch
 ```
 
 Common causes:

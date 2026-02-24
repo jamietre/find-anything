@@ -320,6 +320,7 @@ EOF
   systemctl --user enable find-watch
   systemctl --user start find-watch
 
+  WATCH_SERVICE_TYPE="user"
   echo ""
   echo "find-watch systemd user service installed and started."
   echo "  Status:  systemctl --user status find-watch"
@@ -354,6 +355,7 @@ EOF
   echo ""
   echo "To install and enable it, run:"
   echo ""
+  WATCH_SERVICE_TYPE="system"
   echo "  sudo mv $UNIT_STAGING /etc/systemd/system/find-watch.service"
   echo "  sudo systemctl daemon-reload"
   echo "  sudo systemctl enable find-watch"
@@ -392,6 +394,7 @@ EOF
 
   launchctl load "$PLIST_FILE"
 
+  WATCH_SERVICE_TYPE="macos"
   echo ""
   echo "find-watch launchd agent installed and started."
   echo "  Status:  launchctl list com.jamietre.find-watch"
@@ -400,6 +403,7 @@ EOF
 
 else
   # No systemd at all
+  WATCH_SERVICE_TYPE="manual"
   echo ""
   echo "Autostart not configured (systemd not detected)."
   echo "Start find-watch manually:"
@@ -418,13 +422,33 @@ echo ""
 echo "  Config:    $CONFIG_FILE"
 echo "    ^ Edit this file to add sources, change excludes, etc."
 echo ""
+if [ "$WATCH_SERVICE_TYPE" = "user" ]; then
+  echo "Service commands:"
+  echo "  systemctl --user status find-watch"
+  echo "  systemctl --user restart find-watch"
+  echo "  systemctl --user stop find-watch"
+  echo "  journalctl --user -u find-watch -f"
+elif [ "$WATCH_SERVICE_TYPE" = "system" ]; then
+  echo "Service commands:"
+  echo "  sudo systemctl status find-watch"
+  echo "  sudo systemctl restart find-watch"
+  echo "  sudo systemctl stop find-watch"
+  echo "  sudo journalctl -u find-watch -f"
+elif [ "$WATCH_SERVICE_TYPE" = "macos" ]; then
+  echo "Service commands:"
+  echo "  launchctl list com.jamietre.find-watch"
+  echo "  launchctl start com.jamietre.find-watch"
+  echo "  launchctl stop com.jamietre.find-watch"
+  echo "  tail -f ~/Library/Logs/find-watch.log"
+fi
+echo ""
 echo "If upgrading, restart the watcher to pick up the new binary:"
 echo ""
 print_restart_cmd
 echo ""
 echo "First-time setup — run the initial scan:"
 echo ""
-echo "  find-scan --config $CONFIG_FILE --full"
+echo "  find-scan --full"
 echo ""
 echo "This indexes all configured directories. Run it once before"
 echo "find-watch will have anything useful to keep up to date."
