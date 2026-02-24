@@ -6,8 +6,6 @@
 	import SearchView from '$lib/SearchView.svelte';
 	import FileView from '$lib/FileView.svelte';
 	import CommandPalette from '$lib/CommandPalette.svelte';
-	import Settings from '$lib/Settings.svelte';
-	import Dashboard from '$lib/Dashboard.svelte';
 	import { search, listSources, getSettings } from '$lib/api';
 	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { contextWindow } from '$lib/settingsStore';
@@ -46,8 +44,6 @@
 	let currentDirPrefix = '';
 	let showTree = false;
 	let showPalette = false;
-	let showSettings = false;
-	let showDashboard = false;
 
 	// ── History ─────────────────────────────────────────────────────────────────
 
@@ -323,8 +319,6 @@
 			on:back={handleBack}
 			on:search={handleSearch}
 			on:sourceChange={handleSourceChange}
-			on:gear={() => (showSettings = !showSettings)}
-			on:dashboard={() => (showDashboard = !showDashboard)}
 			on:treeToggle={handleTreeToggle}
 			on:openFileFromTree={handleOpenFileFromTree}
 			on:openDirFile={handleOpenDirFile}
@@ -345,8 +339,6 @@
 			on:search={handleSearch}
 			on:sourceChange={handleSourceChange}
 			on:open={openFile}
-			on:gear={() => (showSettings = !showSettings)}
-			on:dashboard={() => (showDashboard = !showDashboard)}
 		/>
 		<div bind:this={sentinel}></div>
 		{#if loadingMore}
@@ -370,16 +362,7 @@
 	on:close={() => (showPalette = false)}
 />
 
-<Settings
-	open={showSettings}
-	{sources}
-	on:close={() => (showSettings = false)}
-/>
 
-<Dashboard
-	open={showDashboard}
-	on:close={() => (showDashboard = false)}
-/>
 
 <style>
 	.page.file-view {

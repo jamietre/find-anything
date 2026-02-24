@@ -1,11 +1,7 @@
 <script lang="ts">
-	import { createEventDispatcher, onMount } from 'svelte';
+	import { onMount } from 'svelte';
 	import { getStats } from '$lib/api';
 	import type { SourceStats, StatsResponse } from '$lib/api';
-
-	export let open = false;
-
-	const dispatch = createEventDispatcher<{ close: void }>();
 
 	let stats: StatsResponse | null = null;
 	let loading = false;
@@ -14,9 +10,7 @@
 
 	$: currentSource = stats?.sources.find((s) => s.name === selectedSource) ?? stats?.sources[0] ?? null;
 
-	$: if (open && !stats && !loading) {
-		fetchStats();
-	}
+	onMount(() => { fetchStats(); });
 
 	async function fetchStats() {
 		loading = true;
@@ -31,14 +25,6 @@
 		} finally {
 			loading = false;
 		}
-	}
-
-	function close() {
-		dispatch('close');
-	}
-
-	function onKeydown(e: KeyboardEvent) {
-		if (e.key === 'Escape') close();
 	}
 
 	// ── Formatting helpers ─────────────────────────────────────────────────────
@@ -142,175 +128,101 @@
 	}
 </script>
 
-{#if open}
-	<!-- svelte-ignore a11y-no-static-element-interactions -->
-	<div class="backdrop" on:click={close} on:keydown={onKeydown}>
-		<!-- svelte-ignore a11y-no-static-element-interactions -->
-		<div class="panel" on:click|stopPropagation on:keydown|stopPropagation>
-			<div class="header">
-				<span class="title">Index Dashboard</span>
-				<button class="close-btn" on:click={close}>✕</button>
+{#if loading}
+	<div class="status">Loading…</div>
+{:else if error}
+	<div class="status error">{error}</div>
+{:else if !stats || stats.sources.length === 0}
+	<div class="status">No sources indexed yet.</div>
+{:else}
+	<!-- Source selector -->
+	{#if stats.sources.length > 1}
+		<div class="source-row">
+			<label class="source-label" for="source-select">Source</label>
+			<select id="source-select" class="source-select" bind:value={selectedSource}>
+				{#each stats.sources as src (src.name)}
+					<option value={src.name}>{src.name}</option>
+				{/each}
+			</select>
+		</div>
+	{/if}
+
+	{#if currentSource}
+		<!-- Summary cards -->
+		<div class="cards">
+			<div class="card">
+				<div class="card-value">{currentSource.total_files.toLocaleString()}</div>
+				<div class="card-label">files</div>
 			</div>
-
-			<div class="body">
-				{#if loading}
-					<div class="status">Loading…</div>
-				{:else if error}
-					<div class="status error">{error}</div>
-				{:else if !stats || stats.sources.length === 0}
-					<div class="status">No sources indexed yet.</div>
-				{:else}
-					<!-- Source selector -->
-					{#if stats.sources.length > 1}
-						<div class="source-row">
-							<label class="source-label" for="source-select">Source</label>
-							<select id="source-select" class="source-select" bind:value={selectedSource}>
-								{#each stats.sources as src (src.name)}
-									<option value={src.name}>{src.name}</option>
-								{/each}
-							</select>
-						</div>
-					{/if}
-
-					{#if currentSource}
-						<!-- Summary cards -->
-						<div class="cards">
-							<div class="card">
-								<div class="card-value">{currentSource.total_files.toLocaleString()}</div>
-								<div class="card-label">files</div>
-							</div>
-							<div class="card">
-								<div class="card-value">{fmtSize(currentSource.total_size)}</div>
-								<div class="card-label">indexed</div>
-							</div>
-							<div class="card">
-								<div class="card-value">{fmtRelativeTime(currentSource.last_scan)}</div>
-								<div class="card-label">last scan</div>
-							</div>
-						</div>
-
-						<!-- Global metrics (shown once, from first source section) -->
-						{#if stats.total_archives > 0 || stats.inbox_pending > 0}
-							<div class="global-metrics">
-								<span>{stats.total_archives.toLocaleString()} archive{stats.total_archives !== 1 ? 's' : ''}</span>
-								{#if stats.inbox_pending > 0}
-									<span class="pending">{stats.inbox_pending} pending</span>
-								{/if}
-								{#if stats.failed_requests > 0}
-									<span class="failed">{stats.failed_requests} failed</span>
-								{/if}
-							</div>
-						{/if}
-
-						<!-- By Kind -->
-						{#if Object.keys(currentSource.by_kind).length > 0}
-							<div class="section-title">By Kind</div>
-							<div class="kinds">
-								{#each sortedKinds(currentSource) as [kind, ks] (kind)}
-									{@const pct = currentSource.total_files > 0 ? (ks.count / currentSource.total_files) * 100 : 0}
-									<div class="kind-row">
-										<span class="kind-name">{kind}</span>
-										<div class="kind-bar-wrap">
-											<div class="kind-bar" style="width: {pct}%"></div>
-										</div>
-										<span class="kind-count">{ks.count.toLocaleString()}</span>
-										<span class="kind-size">{fmtSize(ks.size)}</span>
-										<span class="kind-ms">{fmtMs(ks.avg_extract_ms)}</span>
-									</div>
-								{/each}
-							</div>
-						{/if}
-
-						<!-- Items over time -->
-						{#if currentSource.history.length >= 2}
-							{@const chart = buildChart(currentSource)}
-							<div class="section-title">Files over time</div>
-							<svg class="chart" viewBox="0 0 {CHART_W} {CHART_H}" preserveAspectRatio="none">
-								<!-- Y-axis labels -->
-								{#each chart.yLabels as { y, label }}
-									<text class="axis-label" x={PAD_L - 6} y={y} text-anchor="end" dominant-baseline="middle">{label}</text>
-								{/each}
-								<!-- Y-axis line -->
-								<line class="axis-line" x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + PLOT_H} />
-								<!-- X-axis line -->
-								<line class="axis-line" x1={PAD_L} y1={PAD_T + PLOT_H} x2={PAD_L + PLOT_W} y2={PAD_T + PLOT_H} />
-								<!-- X-axis labels -->
-								{#each chart.xLabels as { x, label }}
-									<text class="axis-label" x={x} y={CHART_H - 4} text-anchor="middle">{label}</text>
-								{/each}
-								<!-- Data line -->
-								<polyline class="chart-line" points={chart.points} />
-							</svg>
-						{:else if currentSource.history.length === 1}
-							<div class="status-small">Only one scan recorded — run another scan to see the chart.</div>
-						{/if}
-					{/if}
-				{/if}
+			<div class="card">
+				<div class="card-value">{fmtSize(currentSource.total_size)}</div>
+				<div class="card-label">indexed</div>
+			</div>
+			<div class="card">
+				<div class="card-value">{fmtRelativeTime(currentSource.last_scan)}</div>
+				<div class="card-label">last scan</div>
 			</div>
 		</div>
-	</div>
+
+		<!-- Global metrics (shown once, from first source section) -->
+		{#if stats.total_archives > 0 || stats.inbox_pending > 0}
+			<div class="global-metrics">
+				<span>{stats.total_archives.toLocaleString()} archive{stats.total_archives !== 1 ? 's' : ''}</span>
+				{#if stats.inbox_pending > 0}
+					<span class="pending">{stats.inbox_pending} pending</span>
+				{/if}
+				{#if stats.failed_requests > 0}
+					<span class="failed">{stats.failed_requests} failed</span>
+				{/if}
+			</div>
+		{/if}
+
+		<!-- By Kind -->
+		{#if Object.keys(currentSource.by_kind).length > 0}
+			<div class="section-title">By Kind</div>
+			<div class="kinds">
+				{#each sortedKinds(currentSource) as [kind, ks] (kind)}
+					{@const pct = currentSource.total_files > 0 ? (ks.count / currentSource.total_files) * 100 : 0}
+					<div class="kind-row">
+						<span class="kind-name">{kind}</span>
+						<div class="kind-bar-wrap">
+							<div class="kind-bar" style="width: {pct}%"></div>
+						</div>
+						<span class="kind-count">{ks.count.toLocaleString()}</span>
+						<span class="kind-size">{fmtSize(ks.size)}</span>
+						<span class="kind-ms">{fmtMs(ks.avg_extract_ms)}</span>
+					</div>
+				{/each}
+			</div>
+		{/if}
+
+		<!-- Items over time -->
+		{#if currentSource.history.length >= 2}
+			{@const chart = buildChart(currentSource)}
+			<div class="section-title">Files over time</div>
+			<svg class="chart" viewBox="0 0 {CHART_W} {CHART_H}" preserveAspectRatio="none">
+				<!-- Y-axis labels -->
+				{#each chart.yLabels as { y, label }}
+					<text class="axis-label" x={PAD_L - 6} y={y} text-anchor="end" dominant-baseline="middle">{label}</text>
+				{/each}
+				<!-- Y-axis line -->
+				<line class="axis-line" x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + PLOT_H} />
+				<!-- X-axis line -->
+				<line class="axis-line" x1={PAD_L} y1={PAD_T + PLOT_H} x2={PAD_L + PLOT_W} y2={PAD_T + PLOT_H} />
+				<!-- X-axis labels -->
+				{#each chart.xLabels as { x, label }}
+					<text class="axis-label" x={x} y={CHART_H - 4} text-anchor="middle">{label}</text>
+				{/each}
+				<!-- Data line -->
+				<polyline class="chart-line" points={chart.points} />
+			</svg>
+		{:else if currentSource.history.length === 1}
+			<div class="status-small">Only one scan recorded — run another scan to see the chart.</div>
+		{/if}
+	{/if}
 {/if}
 
 <style>
-	.backdrop {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.5);
-		display: flex;
-		align-items: flex-start;
-		justify-content: center;
-		padding-top: 6vh;
-		z-index: 1000;
-	}
-
-	.panel {
-		width: min(640px, 94vw);
-		background: var(--bg-secondary);
-		border: 1px solid var(--border);
-		border-radius: 8px;
-		overflow: hidden;
-		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
-		max-height: 88vh;
-		display: flex;
-		flex-direction: column;
-	}
-
-	.header {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		padding: 12px 16px;
-		border-bottom: 1px solid var(--border);
-		flex-shrink: 0;
-	}
-
-	.title {
-		font-size: 14px;
-		font-weight: 600;
-		color: var(--text);
-	}
-
-	.close-btn {
-		background: none;
-		border: none;
-		color: var(--text-muted);
-		font-size: 14px;
-		padding: 2px 6px;
-		border-radius: 4px;
-		cursor: pointer;
-	}
-
-	.close-btn:hover {
-		color: var(--text);
-		background: var(--bg-hover);
-	}
-
-	.body {
-		padding: 16px;
-		overflow-y: auto;
-		flex: 1;
-	}
-
 	.status {
 		color: var(--text-muted);
 		font-size: 13px;

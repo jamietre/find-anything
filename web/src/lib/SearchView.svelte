@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
+	import { goto } from '$app/navigation';
 	import SearchBox from '$lib/SearchBox.svelte';
 	import SourceSelector from '$lib/SourceSelector.svelte';
 	import ResultList from '$lib/ResultList.svelte';
@@ -19,8 +20,6 @@
 		search: { query: string; mode: string };
 		sourceChange: string[];
 		open: SearchResult;
-		gear: void;
-		dashboard: void;
 	}>();
 
 	let isTyping = false;
@@ -45,15 +44,7 @@
 			on:change={(e) => dispatch('sourceChange', e.detail)}
 		/>
 	{/if}
-	<button class="gear-btn" title="Dashboard" on:click={() => dispatch('dashboard')}>
-		<svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-			<rect x="1" y="1" width="6" height="6" rx="1"/>
-			<rect x="9" y="1" width="6" height="6" rx="1"/>
-			<rect x="1" y="9" width="6" height="6" rx="1"/>
-			<rect x="9" y="9" width="6" height="6" rx="1"/>
-		</svg>
-	</button>
-	<button class="gear-btn" title="Settings" on:click={() => dispatch('gear')}>⚙</button>
+	<button class="gear-btn" title="Settings" on:click={() => goto('/settings')}>⚙</button>
 </div>
 
 <div class="content">
@@ -107,7 +98,7 @@
 		border: none;
 		cursor: pointer;
 		color: var(--text-muted);
-		font-size: 16px;
+		font-size: 20px;
 		padding: 2px 6px;
 		border-radius: 4px;
 		line-height: 1;
