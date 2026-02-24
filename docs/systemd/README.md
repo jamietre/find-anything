@@ -189,7 +189,7 @@ name  = "home"
 paths = ["/home/alice/documents", "/home/alice/projects"]
 
 [scan]
-max_file_size_kb = 1024
+max_file_size_mb = 10
 exclude = ["**/.git/**", "**/node_modules/**", "**/target/**"]
 
 [scan.archives]

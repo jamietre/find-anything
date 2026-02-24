@@ -35,6 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/insta
 ```
 
 The script prints the latest version, then prompts for:
+
 - Install directory (default: `/usr/local/bin` for system, `~/.local/bin` for user)
 - Service mode: **system** (root required, dedicated user, `/etc/find-anything/`) or **user** (`~/.config/find-anything/`)
 - Bind address, data directory, and bearer token (auto-generated)
@@ -55,6 +56,7 @@ curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/insta
 ```
 
 The script prints the latest version, then prompts for:
+
 - Install directory (default: `~/.local/bin`)
 - Server URL, bearer token, and directories to watch
 
@@ -148,7 +150,7 @@ paths = ["/home/alice/documents", "/home/alice/projects"]
 
 [scan]
 exclude = ["**/.git/**", "**/node_modules/**", "**/target/**"]
-max_file_size_kb = 1024
+max_file_size_mb = 10
 ```
 
 ### 3. Run an initial scan
@@ -252,7 +254,7 @@ base_url = "file:///home/alice"      # optional: makes results hyperlinkable
 
 [scan]
 exclude          = ["**/.git/**", "**/node_modules/**", "**/target/**"]
-max_file_size_kb = 1024
+max_file_size_mb = 10
 follow_symlinks  = false
 include_hidden   = false
 
@@ -309,9 +311,7 @@ limit is usually 8192, which is too low for large data volumes. Raise it:
 sudo sysctl -w fs.inotify.max_user_watches=524288
 ```
 
-To persist across reboots, Synology DSM does not process `/etc/sysctl.d/` at
-boot. Instead, use the **Task Scheduler** (this is the right tool for a
-one-shot boot command):
+To persist across reboots, create a startup task with **Task Scheduler**:
 
 1. Control Panel → Task Scheduler → Create → Triggered Task → User-defined script
 2. Set trigger to **Boot-up**, run as **root**

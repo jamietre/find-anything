@@ -32,7 +32,7 @@ exclude = [
     "**/tmp/**",
     "**/temp/**",
 ]
-max_file_size_kb = 1024
+max_file_size_mb = 10
 follow_symlinks = false
 include_hidden = false
 

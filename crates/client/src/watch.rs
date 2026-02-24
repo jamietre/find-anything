@@ -303,7 +303,7 @@ async fn handle_delete(
 
 async fn extract_via_subprocess(abs_path: &Path, config: &ClientConfig) -> Vec<IndexLine> {
     let binary = extractor_binary_for(abs_path, &config.watch.extractor_dir);
-    let max_size_kb = config.scan.max_file_size_kb.to_string();
+    let max_size_kb = (config.scan.max_file_size_mb * 1024).to_string();
     let max_depth = config.scan.archives.max_depth.to_string();
     let max_line_length = config.scan.max_line_length.to_string();
 

@@ -34,7 +34,7 @@ name  = "projects"
 paths = ["C:\\code", "C:\\projects"]
 
 [scan]
-max_file_size_kb = 1024
+max_file_size_mb = 10
 exclude = ["**/.git/**", "**/node_modules/**", "**/target/**"]
 
 [watch]

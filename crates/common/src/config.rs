@@ -29,17 +29,14 @@ pub struct ScanConfig {
     #[serde(default = "default_excludes")]
     pub exclude: Vec<String>,
 
-    #[serde(default = "default_max_file_size_kb")]
-    pub max_file_size_kb: u64,
+    #[serde(default = "default_max_file_size_mb")]
+    pub max_file_size_mb: u64,
 
     #[serde(default)]
     pub follow_symlinks: bool,
 
     #[serde(default)]
     pub include_hidden: bool,
-
-    #[serde(default)]
-    pub ocr: bool,
 
     #[serde(default)]
     pub archives: ArchiveConfig,
@@ -56,10 +53,9 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             exclude: default_excludes(),
-            max_file_size_kb: default_max_file_size_kb(),
+            max_file_size_mb: default_max_file_size_mb(),
             follow_symlinks: false,
             include_hidden: false,
-            ocr: false,
             archives: ArchiveConfig::default(),
             max_line_length: default_max_line_length(),
         }
@@ -132,8 +128,8 @@ fn default_excludes() -> Vec<String> {
     ]
 }
 
-fn default_max_file_size_kb() -> u64 {
-    1024
+fn default_max_file_size_mb() -> u64 {
+    10
 }
 
 fn default_max_line_length() -> usize {
@@ -164,7 +160,7 @@ impl ExtractorConfig {
     /// Build an `ExtractorConfig` from the scan section of the client config.
     pub fn from_scan(scan: &ScanConfig) -> Self {
         Self {
-            max_size_kb: scan.max_file_size_kb as usize,
+            max_size_kb: scan.max_file_size_mb as usize * 1024,
             max_depth: scan.archives.max_depth,
             max_line_length: scan.max_line_length,
         }

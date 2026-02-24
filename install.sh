@@ -238,11 +238,10 @@ paths = [$PATHS_TOML]
 # base_url = ""   # Optional: public URL prefix for file links in search results
 
 [scan]
-# max_file_size_kb = 1024   # Skip files larger than this (KB)
+# max_file_size_mb = 10   # Skip files larger than this (MB)
 # max_line_length  = 120    # Wrap long lines at this column (0 = disable)
 # follow_symlinks  = false
 # include_hidden   = false  # Index dot-files and dot-directories
-# ocr              = false  # OCR image files (requires tesseract)
 # exclude = [               # Glob patterns to skip (these are the defaults)
 #   "**/.git/**",
 #   "**/node_modules/**",
@@ -339,7 +338,8 @@ EOF
   echo ""
   echo "  sudo mv $UNIT_STAGING /etc/systemd/system/find-watch.service"
   echo "  sudo systemctl daemon-reload"
-  echo "  sudo systemctl enable --now find-watch"
+  echo "  sudo systemctl enable find-watch"
+  echo "  sudo systemctl start find-watch"
 
 elif [ "$OS_NAME" = "macos" ]; then
   # macOS: suggest launchd
@@ -400,7 +400,17 @@ echo ""
 echo "  Config:    $CONFIG_FILE"
 echo "    ^ Edit this file to add sources, change excludes, etc."
 echo ""
-echo "Next step — run the initial scan:"
+echo "If upgrading, restart the watcher to pick up the new binary:"
+echo ""
+if systemctl --user status find-watch >/dev/null 2>&1; then
+  echo "  systemctl --user restart find-watch"
+elif systemctl status find-watch >/dev/null 2>&1; then
+  echo "  sudo systemctl restart find-watch"
+else
+  echo "  systemctl --user restart find-watch   # or: sudo systemctl restart find-watch"
+fi
+echo ""
+echo "First-time setup — run the initial scan:"
 echo ""
 echo "  find-scan --config $CONFIG_FILE --full"
 echo ""
