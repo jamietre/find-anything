@@ -12,6 +12,19 @@
 
 set -e
 
+# Print the appropriate `systemctl restart find-watch` command for this machine.
+print_restart_cmd() {
+  set +e
+  if systemctl --user status find-watch >/dev/null 2>&1; then
+    echo "  systemctl --user restart find-watch"
+  elif systemctl status find-watch >/dev/null 2>&1; then
+    echo "  sudo systemctl restart find-watch"
+  else
+    echo "  systemctl --user restart find-watch   # or: sudo systemctl restart find-watch"
+  fi
+  set -e
+}
+
 REPO="jamietre/find-anything"
 
 # ── Detect platform ────────────────────────────────────────────────────────────
@@ -151,13 +164,7 @@ if [ -f "$CONFIG_FILE" ]; then
       echo ""
       echo "Restart the watcher to pick up the new binary:"
       echo ""
-      if systemctl --user status find-watch >/dev/null 2>&1; then
-        echo "  systemctl --user restart find-watch"
-      elif systemctl status find-watch >/dev/null 2>&1; then
-        echo "  sudo systemctl restart find-watch"
-      else
-        echo "  systemctl --user restart find-watch   # or: sudo systemctl restart find-watch"
-      fi
+      print_restart_cmd
       echo ""
       exit 0
       ;;
@@ -413,13 +420,7 @@ echo "    ^ Edit this file to add sources, change excludes, etc."
 echo ""
 echo "If upgrading, restart the watcher to pick up the new binary:"
 echo ""
-if systemctl --user status find-watch >/dev/null 2>&1; then
-  echo "  systemctl --user restart find-watch"
-elif systemctl status find-watch >/dev/null 2>&1; then
-  echo "  sudo systemctl restart find-watch"
-else
-  echo "  systemctl --user restart find-watch   # or: sudo systemctl restart find-watch"
-fi
+print_restart_cmd
 echo ""
 echo "First-time setup — run the initial scan:"
 echo ""
