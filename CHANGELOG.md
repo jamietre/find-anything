@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+---
+
+## [0.2.5] - 2026-02-24
+
 ### Changed
 - `max_file_size_kb` renamed to `max_file_size_mb`; default changed from 1 MB to 10 MB
 - `find-anything` binary renamed from `find` to avoid conflict with the coreutils `find` command
