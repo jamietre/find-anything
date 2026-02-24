@@ -6,8 +6,6 @@
 	import SearchView from '$lib/SearchView.svelte';
 	import FileView from '$lib/FileView.svelte';
 	import CommandPalette from '$lib/CommandPalette.svelte';
-	import Settings from '$lib/Settings.svelte';
-	import Dashboard from '$lib/Dashboard.svelte';
 	import { search, listSources, getSettings, AuthError } from '$lib/api';
 	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { getToken, setToken } from '$lib/token';
