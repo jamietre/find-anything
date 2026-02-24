@@ -26,20 +26,56 @@ Client tools run on each machine whose files you want to index.
 
 ## Installation
 
-### Option 1 — Install script (Linux & macOS)
+### Server installation (Linux & macOS)
 
-Downloads pre-built binaries for your platform from GitHub Releases:
+Run on the machine that will host the central index:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
 ```
 
-Installs to `~/.local/bin` by default. Override with `INSTALL_DIR=/usr/local/bin`.
+The script will:
+- Ask whether to install as a **system service** (root required, dedicated user, `/etc/find-anything/`) or a **user service** (`~/.config/find-anything/`)
+- Prompt for bind address and data directory
+- Auto-generate a secure bearer token (or let you supply your own)
+- Write an annotated `server.toml` with all options
+- Install and enable the `find-server` systemd service
+- Print the token — you'll need it to configure clients
 
-### Option 2 — Docker (server only)
+**Options:**
 
-Run the server with Docker Compose. Clients still install natively via the
-install script above.
+```sh
+INSTALL_DIR=/usr/local/bin   # override binary destination
+VERSION=v0.2.3               # pin a specific release
+```
+
+### Client installation (Linux & macOS)
+
+Run on each machine whose files you want to index:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
+```
+
+The script will:
+- Prompt for the server URL, bearer token, and directories to watch
+- Write an annotated `client.toml` with all options
+- Run `find-scan --full` to index existing files
+- Install and enable the `find-watch` systemd user service
+
+**Options:**
+
+```sh
+INSTALL_DIR=~/.local/bin   # override binary destination
+VERSION=v0.2.3             # pin a specific release
+SKIP_CONFIG=1              # skip prompts (e.g. for scripted installs)
+```
+
+### Windows client
+
+Download the installer from [GitHub Releases](https://github.com/jamietre/find-anything/releases/latest) and run it. The wizard will ask for the server URL, token, and directories to watch, then register `find-watch` as a Windows service and run the initial scan.
+
+### Docker (server only)
 
 ```sh
 git clone https://github.com/jamietre/find-anything
@@ -48,7 +84,7 @@ cp server.toml.example server.toml   # edit: set token and data_dir
 docker compose up -d
 ```
 
-### Option 3 — Build from source
+### Build from source
 
 ```sh
 git clone https://github.com/jamietre/find-anything
@@ -157,21 +193,21 @@ pnpm dev                      # http://localhost:5173
 
 ## Linux: running as a service
 
-See [`docs/systemd/README.md`](docs/systemd/README.md) for ready-to-use systemd
-unit files and full installation instructions for both user-mode (personal
-workstation) and system-mode (multi-user server) setups.
-
-Quick summary:
+The install scripts handle systemd setup automatically. If you need to manage
+the services manually, or want system-mode unit files for a multi-user server,
+see [`docs/systemd/README.md`](docs/systemd/README.md).
 
 ```sh
-# Copy unit files
-cp docs/systemd/user/find-server.service ~/.config/systemd/user/
-cp docs/systemd/user/find-watch.service  ~/.config/systemd/user/
-systemctl --user daemon-reload
+# Server service
+systemctl status find-server          # system install
+systemctl --user status find-server   # user install
 
-# Run initial scan, then enable the watcher
-find-scan --config ~/.config/find-anything/client.toml
-systemctl --user enable --now find-server find-watch
+# Client watcher service
+systemctl --user status find-watch
+systemctl --user restart find-watch
+
+# Re-run a full scan at any time
+find-scan --config ~/.config/find-anything/client.toml --full
 ```
 
 ---
