@@ -120,7 +120,7 @@ CONFIG_FILE="$CONFIG_DIR/client.toml"
 if [ -f "$CONFIG_FILE" ]; then
   echo "Configuration already exists at $CONFIG_FILE"
   printf "Re-configure? [y/N] "
-  read -r RECONFIGURE
+  read -r RECONFIGURE </dev/tty
   case "$RECONFIGURE" in
     y|Y) ;;
     *)
@@ -135,18 +135,18 @@ echo "  find-anything server URL and token (from your server's server.toml)."
 echo ""
 
 printf "Server URL [http://localhost:8765]: "
-read -r SERVER_URL
+read -r SERVER_URL </dev/tty
 SERVER_URL="${SERVER_URL:-http://localhost:8765}"
 
 printf "Bearer token (from server.toml): "
 # Try to disable echo for password-style input; fall back gracefully
 if command -v stty >/dev/null 2>&1; then
-  stty -echo 2>/dev/null || true
-  read -r TOKEN
-  stty echo 2>/dev/null || true
+  stty -echo </dev/tty 2>/dev/null || true
+  read -r TOKEN </dev/tty
+  stty echo </dev/tty 2>/dev/null || true
   echo ""
 else
-  read -r TOKEN
+  read -r TOKEN </dev/tty
 fi
 
 if [ -z "$TOKEN" ]; then
@@ -155,7 +155,7 @@ if [ -z "$TOKEN" ]; then
 fi
 
 printf "Directories to index (space-separated) [%s]: " "$HOME"
-read -r DIRS_INPUT
+read -r DIRS_INPUT </dev/tty
 if [ -z "$DIRS_INPUT" ]; then
   DIRS_INPUT="$HOME"
 fi
