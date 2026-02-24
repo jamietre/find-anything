@@ -42,11 +42,15 @@ The script will:
 - Install and enable the `find-server` systemd service
 - Print the token — you'll need it to configure clients
 
-**Options:**
+By default the script installs the latest release. To override, prefix
+environment variables to the command:
 
 ```sh
-INSTALL_DIR=/usr/local/bin   # override binary destination
-VERSION=v0.2.3               # pin a specific release
+# Install a specific version
+VERSION=v0.2.3 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
+
+# Install to a custom directory
+INSTALL_DIR=/opt/find-anything curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
 ```
 
 ### Client installation (Linux & macOS)
@@ -63,12 +67,18 @@ The script will:
 - Install and enable the `find-watch` systemd user service
 - Print the `find-scan` command to run when you're ready to index
 
-**Options:**
+By default the script installs the latest release and prompts interactively.
+To override:
 
 ```sh
-INSTALL_DIR=~/.local/bin   # override binary destination
-VERSION=v0.2.3             # pin a specific release
-SKIP_CONFIG=1              # skip prompts (e.g. for scripted installs)
+# Install a specific version
+VERSION=v0.2.3 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
+
+# Install to a custom directory
+INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
+
+# Skip interactive prompts (config must be written separately)
+SKIP_CONFIG=1 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
 ```
 
 ### Windows client
