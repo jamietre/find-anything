@@ -260,3 +260,5 @@ This project follows semantic versioning (MAJOR.MINOR.PATCH):
 1. When completing a feature, update the patch version
 2. If changes are substantial, suggest a minor version bump in the commit message
 3. Update `ROADMAP.md` to mark features as completed in the appropriate version section
+4. Add a summary of changes to the `[Unreleased]` section of `CHANGELOG.md` as work is done
+5. When cutting a release, move the `[Unreleased]` entries to a new versioned section (e.g. `## [0.2.5] - YYYY-MM-DD`)
