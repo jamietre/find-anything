@@ -41,7 +41,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; (no optional tasks — scan-and-start is a [Run] entry)
 
 [Files]
-Source: "{#BinDir}\find.exe";                DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BinDir}\find-anything.exe";       DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-scan.exe";           DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-watch.exe";          DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-server.exe";         DestDir: "{app}"; Flags: ignoreversion

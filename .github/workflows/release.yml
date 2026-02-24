@@ -97,7 +97,7 @@ jobs:
           BINDIR="target/${{ matrix.target }}/release"
           EXT="${{ matrix.ext }}"
           BINARIES=(
-            "find"
+            "find-anything"
             "find-scan"
             "find-watch"
             "find-server"

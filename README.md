@@ -4,7 +4,7 @@ Distributed full-content file indexing and fuzzy search. Index one or more machi
 into a central server, then query everything from a single CLI or web UI.
 
 ```
-find "password strength"
+find-anything "password strength"
 [code] src/auth/validate.rs:142  check_password_strength(input)?;
 [code] docs/security.md:87       Password strength requirements: minimum 12 chars
 ```
@@ -111,7 +111,7 @@ cargo build --release
 | `find-server`          | Central index server                       | server machine              |
 | `find-scan`            | Initial filesystem indexer                 | each client machine         |
 | `find-watch`           | Real-time file watcher (incremental)       | each client machine         |
-| `find`                 | CLI search client                          | anywhere                    |
+| `find-anything`        | CLI search client                          | anywhere                    |
 | `find-extract-text`    | Text/Markdown extractor                    | client (used by find-watch) |
 | `find-extract-pdf`     | PDF extractor                              | client (used by find-watch) |
 | `find-extract-media`   | Image/audio/video metadata extractor       | client (used by find-watch) |
@@ -185,9 +185,9 @@ Run `find-scan` once first; `find-watch` does not do an initial scan on startup.
 ### 5. Search
 
 ```sh
-find "some pattern"
-find "some pattern" --mode exact
-find "fn handler" --mode regex --source home --limit 20
+find-anything "some pattern"
+find-anything "some pattern" --mode exact
+find-anything "fn handler" --mode regex --source home --limit 20
 ```
 
 ### 6. Web UI (optional)

@@ -17,7 +17,7 @@ Installers:
     InstallerType: zip
     NestedInstallerType: portable
     NestedInstallerFiles:
-      - RelativeFilePath: find.exe
+      - RelativeFilePath: find-anything.exe
         PortableCommandAlias: find-anything
     InstallerUrl: https://github.com/jamietre/find-anything/releases/download/v0.2.3/find-anything-v0.2.3-windows-x86_64.zip
     # Update InstallerSha256 by running:

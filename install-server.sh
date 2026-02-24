@@ -127,7 +127,7 @@ CONFIG_FILE="$CONFIG_DIR/server.toml"
 
 mkdir -p "$INSTALL_DIR"
 
-BINARIES="find-server find find-scan find-watch \
+BINARIES="find-server find-anything find-scan find-watch \
   find-extract-text find-extract-pdf find-extract-media find-extract-archive \
   find-extract-html find-extract-office find-extract-epub"
 
