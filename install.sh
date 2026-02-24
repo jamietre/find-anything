@@ -106,7 +106,7 @@ tar -xzf "${TMPDIR}/${TARBALL}" -C "${TMPDIR}"
 mkdir -p "$INSTALL_DIR"
 EXTRACTED_DIR="${TMPDIR}/find-anything-${VERSION}-${PLATFORM}"
 
-BINARIES="find-anything find-scan find-watch find-server \
+BINARIES="find-anything find-scan find-watch find-server find-config \
   find-extract-text find-extract-pdf find-extract-media find-extract-archive \
   find-extract-html find-extract-office find-extract-epub"
 
@@ -122,6 +122,7 @@ echo "  find-server          — search server"
 echo "  find-scan            — initial indexer"
 echo "  find-watch           — incremental file watcher"
 echo "  find-anything        — command-line search client"
+echo "  find-config          — show effective configuration with defaults"
 echo "  find-extract-*       — extractor binaries (used by find-watch)"
 echo ""
 
