@@ -1,0 +1,32 @@
+PackageIdentifier: Outsharked.FindAnything
+PackageVersion: 0.2.3
+InstallerLocale: en-US
+Commands:
+  - find-anything
+  - find-scan
+  - find-watch
+  - find-server
+Installers:
+  - Architecture: x64
+    InstallerType: inno
+    InstallerUrl: https://github.com/jamietre/find-anything/releases/download/v0.2.3/find-anything-setup-v0.2.3-windows-x86_64.exe
+    # Update InstallerSha256 by running:
+    #   (Get-FileHash find-anything-setup-v0.2.3-windows-x86_64.exe -Algorithm SHA256).Hash
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+  - Architecture: x64
+    InstallerType: zip
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: find-anything.exe
+        PortableCommandAlias: find-anything
+    InstallerUrl: https://github.com/jamietre/find-anything/releases/download/v0.2.3/find-anything-v0.2.3-windows-x86_64.zip
+    # Update InstallerSha256 by running:
+    #   (Get-FileHash find-anything-v0.2.3-windows-x86_64.zip -Algorithm SHA256).Hash
+    InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
+InstallModes:
+  - interactive
+  - silent
+  - silentWithProgress
+ReleaseDate: 2026-02-23
+ManifestType: installer
+ManifestVersion: 1.6.0

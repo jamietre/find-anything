@@ -1,6 +1,6 @@
 [package]
 name = "find-server"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 
 [[bin]]
@@ -23,6 +23,10 @@ rusqlite      = { version = "0.31", features = ["bundled"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 toml          = "0.8"
 regex         = "1"
+
+# Web UI embedding
+rust-embed   = { version = "8", features = ["axum"] }
+mime_guess   = "2"
 
 # ZIP archive management and async processing
 zip           = "2"

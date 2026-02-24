@@ -1,0 +1,23 @@
+PackageIdentifier: Outsharked.FindAnything
+PackageVersion: 0.2.3
+PackageLocale: en-US
+Publisher: Jamie T
+PublisherUrl: https://github.com/findanything
+PackageName: find-anything
+PackageUrl: https://github.com/findanything/find-anything
+License: MIT
+LicenseUrl: https://github.com/findanything/find-anything/blob/master/LICENSE
+ShortDescription: Fast full-text search across your local filesystem
+Description: >-
+  find-anything indexes your filesystem and provides full-text search across
+  file contents, including PDFs, Office documents, archives, images (EXIF),
+  audio metadata, and more. Includes a web UI served directly from the server
+  binary, a real-time file watcher, and a system tray app on Windows.
+Tags:
+  - search
+  - filesystem
+  - indexer
+  - full-text-search
+ReleaseNotesUrl: https://github.com/findanything/find-anything/releases/tag/v0.2.3
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

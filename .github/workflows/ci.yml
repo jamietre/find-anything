@@ -25,6 +25,9 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-
 
+      - name: Create web/build stub
+        run: mkdir -p web/build
+
       - name: Test
         run: cargo test --workspace
 
@@ -51,6 +54,9 @@ jobs:
           key: windows-x86_64-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: windows-x86_64-cargo-
 
+      - name: Create web/build stub
+        run: mkdir -p web/build
+
       - name: Build (Windows)
         run: cargo build --workspace --target x86_64-pc-windows-msvc
 
@@ -76,4 +82,8 @@ jobs:
 
       - name: Type-check
         run: pnpm run check
+        working-directory: web
+
+      - name: Build
+        run: pnpm run build
         working-directory: web

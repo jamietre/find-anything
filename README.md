@@ -4,7 +4,7 @@ Distributed full-content file indexing and fuzzy search. Index one or more machi
 into a central server, then query everything from a single CLI or web UI.
 
 ```
-find "password strength"
+find-anything "password strength"
 [code] src/auth/validate.rs:142  check_password_strength(input)?;
 [code] docs/security.md:87       Password strength requirements: minimum 12 chars
 ```
@@ -13,26 +13,11 @@ find "password strength"
 
 ## How it works
 
-A central **server** stores the index. Client machines run **`find-scan`** to do
-an initial index and **`find-watch`** to keep it current as files change. The
-**`find`** CLI and web UI query the server over HTTP.
+- A server stores the index and exposes an HTTP endpoint to add indexed files.
 
-```
-┌─────────────────────────────────────────────┐
-│              Central Server                  │
-│  find-server  ──►  SQLite per source         │
-│       │                                      │
-│  find (CLI)    find-web (SvelteKit)          │
-└──────────────────────┬──────────────────────┘
-                       │  HTTP + bearer token
-          ┌────────────┴────────────┐
-          │                         │
-   ┌──────▼──────┐           ┌──────▼──────┐
-   │  Machine A  │           │  Machine B  │
-   │  find-scan  │           │  find-scan  │  initial index
-   │  find-watch │           │  find-watch │  real-time updates
-   └─────────────┘           └─────────────┘
-```
+- Client machines run `find-scan` to do a full or incremental scan
+- Client machines run `find-watch` to monitor filesystem changes and keep the index up to date
+- Client command `find` can query the index, or use web UI exposed by the server
 
 The server can run anywhere — on a home server, NAS, VPS, or your local machine.
 Client tools run on each machine whose files you want to index.
@@ -41,20 +26,50 @@ Client tools run on each machine whose files you want to index.
 
 ## Installation
 
-### Option 1 — Install script (Linux & macOS)
+### Server installation (Linux & macOS)
 
-Downloads pre-built binaries for your platform from GitHub Releases:
+Run on the machine that will host the central index:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
 ```
 
-Installs to `~/.local/bin` by default. Override with `INSTALL_DIR=/usr/local/bin`.
+The script prints the latest version, then prompts for:
+- Install directory (default: `/usr/local/bin` for system, `~/.local/bin` for user)
+- Service mode: **system** (root required, dedicated user, `/etc/find-anything/`) or **user** (`~/.config/find-anything/`)
+- Bind address, data directory, and bearer token (auto-generated)
 
-### Option 2 — Docker (server only)
+It then writes an annotated `server.toml`, installs and enables the service, and
+prints the token for use when configuring clients.
 
-Run the server with Docker Compose. Clients still install natively via the
-install script above.
+To install a specific version: `VERSION=v0.2.4 curl ... | sh`
+
+To skip all prompts (e.g. in scripts): `SKIP_CONFIG=1 curl ... | sh`
+
+### Client installation (Linux & macOS)
+
+Run on each machine whose files you want to index:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
+```
+
+The script prints the latest version, then prompts for:
+- Install directory (default: `~/.local/bin`)
+- Server URL, bearer token, and directories to watch
+
+It then writes an annotated `client.toml`, installs and enables the `find-watch`
+systemd user service, and prints the `find-scan` command to run when ready.
+
+To install a specific version: `VERSION=v0.2.4 curl ... | sh`
+
+To skip all prompts (e.g. in scripts): `SKIP_CONFIG=1 curl ... | sh`
+
+### Windows client
+
+Download the installer from [GitHub Releases](https://github.com/jamietre/find-anything/releases/latest) and run it. The wizard will ask for the server URL, token, and directories to watch, then register `find-watch` as a Windows service and run the initial scan.
+
+### Docker (server only)
 
 ```sh
 git clone https://github.com/jamietre/find-anything
@@ -63,7 +78,7 @@ cp server.toml.example server.toml   # edit: set token and data_dir
 docker compose up -d
 ```
 
-### Option 3 — Build from source
+### Build from source
 
 ```sh
 git clone https://github.com/jamietre/find-anything
@@ -75,19 +90,19 @@ cargo build --release
 
 ## Binaries
 
-| Binary | Role | Runs on |
-|--------|------|---------|
-| `find-server` | Central index server | server machine |
-| `find-scan` | Initial filesystem indexer | each client machine |
-| `find-watch` | Real-time file watcher (incremental) | each client machine |
-| `find` | CLI search client | anywhere |
-| `find-extract-text` | Text/Markdown extractor | client (used by find-watch) |
-| `find-extract-pdf` | PDF extractor | client (used by find-watch) |
-| `find-extract-media` | Image/audio/video metadata extractor | client (used by find-watch) |
-| `find-extract-archive` | ZIP/TAR/7Z extractor | client (used by find-watch) |
-| `find-extract-html` | HTML extractor | client (used by find-watch) |
-| `find-extract-office` | Office document extractor (DOCX/XLSX/PPTX) | client (used by find-watch) |
-| `find-extract-epub` | EPUB ebook extractor | client (used by find-watch) |
+| Binary                 | Role                                       | Runs on                     |
+| ---------------------- | ------------------------------------------ | --------------------------- |
+| `find-server`          | Central index server                       | server machine              |
+| `find-scan`            | Initial filesystem indexer                 | each client machine         |
+| `find-watch`           | Real-time file watcher (incremental)       | each client machine         |
+| `find-anything`        | CLI search client                          | anywhere                    |
+| `find-extract-text`    | Text/Markdown extractor                    | client (used by find-watch) |
+| `find-extract-pdf`     | PDF extractor                              | client (used by find-watch) |
+| `find-extract-media`   | Image/audio/video metadata extractor       | client (used by find-watch) |
+| `find-extract-archive` | ZIP/TAR/7Z extractor                       | client (used by find-watch) |
+| `find-extract-html`    | HTML extractor                             | client (used by find-watch) |
+| `find-extract-office`  | Office document extractor (DOCX/XLSX/PPTX) | client (used by find-watch) |
+| `find-extract-epub`    | EPUB ebook extractor                       | client (used by find-watch) |
 
 The `find-extract-*` binaries are used by `find-watch` to extract file content
 in subprocesses. They must be co-located with `find-watch` or on PATH.
@@ -99,6 +114,7 @@ in subprocesses. They must be co-located with `find-watch` or on PATH.
 ### 1. Start the server
 
 **With Docker Compose:**
+
 ```sh
 cp server.toml.example server.toml
 # Edit server.toml: set a strong token value
@@ -106,6 +122,7 @@ docker compose up -d
 ```
 
 **Or run directly:**
+
 ```sh
 cat > server.toml <<EOF
 [server]
@@ -114,7 +131,7 @@ data_dir = "/var/lib/find-anything"
 token    = "change-me"
 EOF
 
-find-server --config server.toml
+find-server server.toml
 ```
 
 ### 2. Create a client config
@@ -152,9 +169,9 @@ Run `find-scan` once first; `find-watch` does not do an initial scan on startup.
 ### 5. Search
 
 ```sh
-find "some pattern"
-find "some pattern" --mode exact
-find "fn handler" --mode regex --source home --limit 20
+find-anything "some pattern"
+find-anything "some pattern" --mode exact
+find-anything "fn handler" --mode regex --source home --limit 20
 ```
 
 ### 6. Web UI (optional)
@@ -170,38 +187,38 @@ pnpm dev                      # http://localhost:5173
 
 ## Linux: running as a service
 
-See [`docs/systemd/README.md`](docs/systemd/README.md) for ready-to-use systemd
-unit files and full installation instructions for both user-mode (personal
-workstation) and system-mode (multi-user server) setups.
-
-Quick summary:
+The install scripts handle systemd setup automatically. If you need to manage
+the services manually, or want system-mode unit files for a multi-user server,
+see [`docs/systemd/README.md`](docs/systemd/README.md).
 
 ```sh
-# Copy unit files
-cp docs/systemd/user/find-server.service ~/.config/systemd/user/
-cp docs/systemd/user/find-watch.service  ~/.config/systemd/user/
-systemctl --user daemon-reload
+# Server service
+systemctl status find-server          # system install
+systemctl --user status find-server   # user install
 
-# Run initial scan, then enable the watcher
-find-scan --config ~/.config/find-anything/client.toml
-systemctl --user enable --now find-server find-watch
+# Client watcher service
+systemctl --user status find-watch
+systemctl --user restart find-watch
+
+# Re-run a full scan at any time
+find-scan --config ~/.config/find-anything/client.toml --full
 ```
 
 ---
 
 ## Supported file types
 
-| Type | What's extracted |
-|------|-----------------|
-| Text, source code, Markdown | Full content; Markdown YAML frontmatter as structured fields |
-| PDF | Full text content |
-| HTML (.html, .htm, .xhtml) | Visible text from headings/paragraphs; title and description as metadata |
-| Office (DOCX, XLSX, XLS, XLSM, PPTX) | Paragraphs, rows, slide text; document title/author as metadata |
-| EPUB | Full chapter text; title, creator, publisher, language as metadata |
-| Images (JPEG, PNG, TIFF, HEIC, RAW) | EXIF metadata (camera, GPS, dates) |
-| Audio (MP3, FLAC, M4A, OGG) | ID3/Vorbis/MP4 tags (title, artist, album) |
-| Video (MP4, MKV, WebM, AVI, MOV) | Format, resolution, duration |
-| Archives (ZIP, TAR, 7Z, GZ) | Recursive extraction of all member files |
+| Type                                 | What's extracted                                                         |
+| ------------------------------------ | ------------------------------------------------------------------------ |
+| Text, source code, Markdown          | Full content; Markdown YAML frontmatter as structured fields             |
+| PDF                                  | Full text content                                                        |
+| HTML (.html, .htm, .xhtml)           | Visible text from headings/paragraphs; title and description as metadata |
+| Office (DOCX, XLSX, XLS, XLSM, PPTX) | Paragraphs, rows, slide text; document title/author as metadata          |
+| EPUB                                 | Full chapter text; title, creator, publisher, language as metadata       |
+| Images (JPEG, PNG, TIFF, HEIC, RAW)  | EXIF metadata (camera, GPS, dates)                                       |
+| Audio (MP3, FLAC, M4A, OGG)          | ID3/Vorbis/MP4 tags (title, artist, album)                               |
+| Video (MP4, MKV, WebM, AVI, MOV)     | Format, resolution, duration                                             |
+| Archives (ZIP, TAR, 7Z, GZ)          | Recursive extraction of all member files                                 |
 
 ---
 

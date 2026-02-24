@@ -47,6 +47,10 @@ run = "cargo run -p find-client --bin find-scan -- --config config/client.toml -
 description = "Start the web UI dev server (hot-reloads on change)"
 run = "pnpm --dir web dev"
 
+[tasks.build-release]
+description = "Build web UI then compile find-server release binary with embedded assets"
+run = ["pnpm --dir web run build", "cargo build --release -p find-server"]
+
 # ── Checks ────────────────────────────────────────────────────────────────────
 
 [tasks.check]

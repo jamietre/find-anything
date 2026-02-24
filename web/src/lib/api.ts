@@ -1,3 +1,5 @@
+import { getToken } from './token';
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 export interface SourceInfo {
@@ -54,10 +56,29 @@ export interface TreeResponse {
 	entries: DirEntry[];
 }
 
-// ── API calls (hit the SvelteKit proxy, which adds the bearer token) ─────────
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+export class AuthError extends Error {
+	constructor() { super('Unauthorized'); }
+}
+
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+	return { Authorization: `Bearer ${getToken()}`, ...extra };
+}
+
+async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
+	const resp = await fetch(url, {
+		...init,
+		headers: { ...authHeaders(), ...(init?.headers as Record<string, string> | undefined) }
+	});
+	if (resp.status === 401) throw new AuthError();
+	return resp;
+}
+
+// ── API calls ─────────────────────────────────────────────────────────────────
 
 export async function listSources(): Promise<SourceInfo[]> {
-	const resp = await fetch('/api/v1/sources');
+	const resp = await apiFetch('/api/v1/sources');
 	if (!resp.ok) throw new Error(`listSources: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
@@ -80,7 +101,7 @@ export async function search(params: SearchParams): Promise<SearchResponse> {
 	if (params.limit != null) url.searchParams.set('limit', String(params.limit));
 	if (params.offset != null) url.searchParams.set('offset', String(params.offset));
 
-	const resp = await fetch(url.toString());
+	const resp = await apiFetch(url.toString());
 	if (!resp.ok) {
 		const errorText = await resp.text().catch(() => resp.statusText);
 		throw new Error(`Search failed: ${errorText || resp.statusText}`);
@@ -98,7 +119,7 @@ export async function getFile(
 	url.searchParams.set('path', path);
 	if (archivePath) url.searchParams.set('archive_path', archivePath);
 
-	const resp = await fetch(url.toString());
+	const resp = await apiFetch(url.toString());
 	if (!resp.ok) throw new Error(`getFile: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
@@ -106,7 +127,7 @@ export async function getFile(
 export async function listFiles(source: string): Promise<FileRecord[]> {
 	const url = new URL('/api/v1/files', location.origin);
 	url.searchParams.set('source', source);
-	const resp = await fetch(url.toString());
+	const resp = await apiFetch(url.toString());
 	if (!resp.ok) throw new Error(`listFiles: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
@@ -122,7 +143,7 @@ export async function listDir(source: string, prefix = ''): Promise<TreeResponse
 	url.searchParams.set('source', source);
 	if (prefix) url.searchParams.set('prefix', prefix);
 
-	const resp = await fetch(url.toString());
+	const resp = await apiFetch(url.toString());
 	if (!resp.ok) throw new Error(`listDir: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
@@ -155,7 +176,7 @@ export interface ContextBatchResponse {
 }
 
 export async function contextBatch(requests: ContextBatchItem[]): Promise<ContextBatchResponse> {
-	const resp = await fetch('/api/v1/context-batch', {
+	const resp = await apiFetch('/api/v1/context-batch', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({ requests })
@@ -178,7 +199,7 @@ export async function getContext(
 	url.searchParams.set('window', String(window));
 	if (archivePath) url.searchParams.set('archive_path', archivePath);
 
-	const resp = await fetch(url.toString());
+	const resp = await apiFetch(url.toString());
 	if (!resp.ok) throw new Error(`getContext: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
@@ -188,7 +209,7 @@ export interface AppSettings {
 }
 
 export async function getSettings(): Promise<AppSettings> {
-	const resp = await fetch('/api/v1/settings');
+	const resp = await apiFetch('/api/v1/settings');
 	if (!resp.ok) throw new Error(`getSettings: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
@@ -224,7 +245,7 @@ export interface StatsResponse {
 }
 
 export async function getStats(): Promise<StatsResponse> {
-	const resp = await fetch('/api/v1/stats');
+	const resp = await apiFetch('/api/v1/stats');
 	if (!resp.ok) throw new Error(`getStats: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }

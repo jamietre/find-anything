@@ -1,6 +1,6 @@
 [package]
 name = "find-client"
-version = "0.2.3"
+version = "0.2.4"
 edition = "2021"
 
 [[bin]]
@@ -12,7 +12,7 @@ name = "find-watch"
 path = "src/watch_main.rs"
 
 [[bin]]
-name = "find"
+name = "find-anything"
 path = "src/query_main.rs"
 
 [dependencies]
