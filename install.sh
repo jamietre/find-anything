@@ -190,7 +190,12 @@ if [ -z "$TOKEN" ]; then
   exit 1
 fi
 
-printf "Directories to index (space-separated) [%s]: " "$HOME"
+DEFAULT_SOURCE_NAME="$(hostname | cut -d. -f1)"
+printf "Source name (identifies this machine in search results) [%s]: " "$DEFAULT_SOURCE_NAME"
+read -r SOURCE_NAME </dev/tty
+SOURCE_NAME="${SOURCE_NAME:-$DEFAULT_SOURCE_NAME}"
+
+printf "Directories to index (semicolon-separated) [%s]: " "$HOME"
 read -r DIRS_INPUT </dev/tty
 if [ -z "$DIRS_INPUT" ]; then
   DIRS_INPUT="$HOME"
@@ -200,9 +205,11 @@ fi
 
 mkdir -p "$CONFIG_DIR"
 
-# Build TOML paths array from space-separated input
+# Build TOML paths array from semicolon-separated input
 PATHS_TOML=""
 FIRST=1
+OLD_IFS="$IFS"
+IFS=';'
 for dir in $DIRS_INPUT; do
   # Escape backslashes and quotes (unlikely on Linux but be safe)
   escaped="$(printf '%s' "$dir" | sed 's/\\/\\\\/g; s/"/\\"/g')"
@@ -213,10 +220,12 @@ for dir in $DIRS_INPUT; do
     PATHS_TOML="$PATHS_TOML, \"$escaped\""
   fi
 done
+IFS="$OLD_IFS"
 
-# Escape URL and token for TOML
+# Escape URL, token, and source name for TOML
 SERVER_URL_ESC="$(printf '%s' "$SERVER_URL" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 TOKEN_ESC="$(printf '%s' "$TOKEN" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+SOURCE_NAME_ESC="$(printf '%s' "$SOURCE_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 
 cat > "$CONFIG_FILE" <<EOF
 [server]
@@ -224,7 +233,7 @@ url   = "$SERVER_URL_ESC"
 token = "$TOKEN_ESC"
 
 [[sources]]
-name  = "home"
+name  = "$SOURCE_NAME_ESC"
 paths = [$PATHS_TOML]
 # base_url = ""   # Optional: public URL prefix for file links in search results
 
@@ -267,7 +276,7 @@ echo "  Edit this file to add more sources, change exclude patterns, etc."
 echo ""
 echo "Setting up find-watch service..."
 
-if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
+if command -v systemctl >/dev/null 2>&1 && [ -d "/run/systemd/system" ]; then
   # systemd is available
   SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
   SERVICE_FILE="$SYSTEMD_USER_DIR/find-watch.service"
