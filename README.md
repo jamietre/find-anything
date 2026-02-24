@@ -267,6 +267,81 @@ extractor_dir = "/usr/local/bin"  # optional; auto-detected if omitted
 
 ---
 
+## Troubleshooting
+
+### find-watch crashes immediately
+
+Run the binary directly to see the error output:
+
+```sh
+find-watch --config ~/.config/find-anything/client.toml
+```
+
+Common causes:
+
+- **Config file not found** — check the path; on Synology homes are under `/var/services/homes/<user>/`
+- **inotify watch limit reached** — see [Synology / inotify limit](#synology-nas) below
+- **Cannot connect to server** — verify the server URL and that `find-server` is running
+
+---
+
+### Synology NAS
+
+#### Service setup
+
+Synology DSM uses systemd but does not support user-level systemd sessions
+(`systemctl --user`). The install script detects this and writes a system-level
+unit file instead. Follow the `sudo mv` / `sudo systemctl` commands it prints.
+
+#### inotify watch limit
+
+When watching large directory trees, `find-watch` will fail with:
+
+```
+Error: OS file watch limit reached.
+```
+
+inotify uses one watch **per directory** (not per file). The default kernel
+limit is usually 8192, which is too low for large data volumes. Raise it:
+
+```sh
+# Apply immediately (no reboot needed)
+sudo sysctl -w fs.inotify.max_user_watches=524288
+```
+
+To persist across reboots, Synology DSM does not process `/etc/sysctl.d/` at
+boot. Instead, use the **Task Scheduler** (this is the right tool for a
+one-shot boot command):
+
+1. Control Panel → Task Scheduler → Create → Triggered Task → User-defined script
+2. Set trigger to **Boot-up**, run as **root**
+3. Script:
+   ```sh
+   sysctl -w fs.inotify.max_user_watches=524288
+   ```
+
+Then restart the service:
+
+```sh
+sudo systemctl restart find-watch
+```
+
+#### Logs
+
+Synology DSM does not run journald, so `journalctl` will show no entries.
+To view find-watch output, run the binary directly in a terminal (see above),
+or add log file output to the service unit:
+
+```ini
+# /etc/systemd/system/find-watch.service  — add under [Service]:
+StandardOutput=append:/var/log/find-watch.log
+StandardError=append:/var/log/find-watch.log
+```
+
+Then: `sudo systemctl daemon-reload && sudo systemctl restart find-watch`
+
+---
+
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for the full development roadmap, including
