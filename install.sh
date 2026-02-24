@@ -40,7 +40,7 @@ esac
 
 PLATFORM="${OS_NAME}-${ARCH_NAME}"
 
-# ── Fetch latest version (used as default in prompt) ──────────────────────────
+# ── Resolve version ────────────────────────────────────────────────────────────
 
 LATEST_VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
   | grep '"tag_name"' \
@@ -49,24 +49,27 @@ if [ -z "$LATEST_VERSION" ]; then
   LATEST_VERSION="(unknown)"
 fi
 
-# ── Prompts ────────────────────────────────────────────────────────────────────
-
-if [ "${SKIP_CONFIG:-0}" = "1" ]; then
-  VERSION="${VERSION:-$LATEST_VERSION}"
-  INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+if [ -n "$VERSION" ]; then
+  echo "Latest version: ${LATEST_VERSION}"
+  echo "Using VERSION override: ${VERSION}"
 else
-  printf "Version [%s]: " "$LATEST_VERSION"
-  read -r VERSION_INPUT </dev/tty
-  VERSION="${VERSION_INPUT:-$LATEST_VERSION}"
-
-  printf "Install directory [%s/.local/bin]: " "$HOME"
-  read -r INSTALL_DIR_INPUT </dev/tty
-  INSTALL_DIR="${INSTALL_DIR_INPUT:-$HOME/.local/bin}"
+  VERSION="$LATEST_VERSION"
+  echo "Latest version: ${VERSION}"
 fi
 
 if [ -z "$VERSION" ] || [ "$VERSION" = "(unknown)" ]; then
-  echo "Could not determine version. Check your internet connection and retry." >&2
+  echo "Could not determine latest version. Set VERSION explicitly and retry." >&2
   exit 1
+fi
+
+INSTALL_DIR="${INSTALL_DIR:-$HOME/.local/bin}"
+
+# ── Install directory prompt ───────────────────────────────────────────────────
+
+if [ "${SKIP_CONFIG:-0}" != "1" ]; then
+  printf "Install directory [%s]: " "$INSTALL_DIR"
+  read -r INSTALL_DIR_INPUT </dev/tty
+  INSTALL_DIR="${INSTALL_DIR_INPUT:-$INSTALL_DIR}"
 fi
 
 echo ""
@@ -154,9 +157,30 @@ echo "Client configuration"
 echo "  find-anything server URL and token (from your server's server.toml)."
 echo ""
 
-printf "Server URL [http://localhost:8765]: "
-read -r SERVER_URL </dev/tty
-SERVER_URL="${SERVER_URL:-http://localhost:8765}"
+while true; do
+  printf "Server URL [http://localhost:8765]: "
+  read -r SERVER_URL </dev/tty
+  SERVER_URL="${SERVER_URL:-http://localhost:8765}"
+
+  # Test connectivity (no auth needed — just checking the server is up)
+  printf "Checking server connectivity... "
+  if curl -fsS --max-time 5 "${SERVER_URL}/" >/dev/null 2>&1; then
+    echo "OK"
+    break
+  else
+    echo "no response"
+    echo ""
+    echo "WARNING: Could not reach ${SERVER_URL}"
+    echo "  Make sure the server is running and the URL is correct."
+    echo ""
+    printf "Re-enter URL, or press enter to continue anyway? [re-enter/continue]: "
+    read -r CONN_CHOICE </dev/tty
+    case "${CONN_CHOICE:-re-enter}" in
+      c|co|con|cont|conti|contin|continu|continue) break ;;
+      *) echo "" ;;
+    esac
+  fi
+done
 
 printf "Bearer token (from server.toml): "
 read -r TOKEN </dev/tty

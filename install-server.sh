@@ -39,7 +39,7 @@ esac
 
 PLATFORM="${OS_NAME}-${ARCH_NAME}"
 
-# ── Fetch latest version (used as default in prompt) ──────────────────────────
+# ── Resolve version ────────────────────────────────────────────────────────────
 
 LATEST_VERSION="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
   | grep '"tag_name"' \
@@ -48,18 +48,16 @@ if [ -z "$LATEST_VERSION" ]; then
   LATEST_VERSION="(unknown)"
 fi
 
-# ── Version prompt ─────────────────────────────────────────────────────────────
-
-if [ "${SKIP_CONFIG:-0}" != "1" ]; then
-  printf "Version [%s]: " "$LATEST_VERSION"
-  read -r VERSION_INPUT </dev/tty
-  VERSION="${VERSION_INPUT:-$LATEST_VERSION}"
+if [ -n "$VERSION" ]; then
+  echo "Latest version: ${LATEST_VERSION}"
+  echo "Using VERSION override: ${VERSION}"
 else
-  VERSION="${VERSION:-$LATEST_VERSION}"
+  VERSION="$LATEST_VERSION"
+  echo "Latest version: ${VERSION}"
 fi
 
 if [ -z "$VERSION" ] || [ "$VERSION" = "(unknown)" ]; then
-  echo "Could not determine version. Check your internet connection and retry." >&2
+  echo "Could not determine latest version. Set VERSION explicitly and retry." >&2
   exit 1
 fi
 

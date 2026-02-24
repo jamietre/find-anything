@@ -34,14 +34,15 @@ Run on the machine that will host the central index:
 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install-server.sh | sh
 ```
 
-The script will prompt for:
-- Version to install (default: latest release)
+The script prints the latest version, then prompts for:
 - Install directory (default: `/usr/local/bin` for system, `~/.local/bin` for user)
 - Service mode: **system** (root required, dedicated user, `/etc/find-anything/`) or **user** (`~/.config/find-anything/`)
 - Bind address, data directory, and bearer token (auto-generated)
 
 It then writes an annotated `server.toml`, installs and enables the service, and
 prints the token for use when configuring clients.
+
+To install a specific version: `VERSION=v0.2.4 curl ... | sh`
 
 To skip all prompts (e.g. in scripts): `SKIP_CONFIG=1 curl ... | sh`
 
@@ -53,13 +54,14 @@ Run on each machine whose files you want to index:
 curl -fsSL https://raw.githubusercontent.com/jamietre/find-anything/master/install.sh | sh
 ```
 
-The script will prompt for:
-- Version to install (default: latest release)
+The script prints the latest version, then prompts for:
 - Install directory (default: `~/.local/bin`)
 - Server URL, bearer token, and directories to watch
 
 It then writes an annotated `client.toml`, installs and enables the `find-watch`
 systemd user service, and prints the `find-scan` command to run when ready.
+
+To install a specific version: `VERSION=v0.2.4 curl ... | sh`
 
 To skip all prompts (e.g. in scripts): `SKIP_CONFIG=1 curl ... | sh`
 
