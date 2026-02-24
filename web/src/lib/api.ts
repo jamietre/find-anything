@@ -206,6 +206,7 @@ export async function getContext(
 
 export interface AppSettings {
 	context_window: number;
+	version: string;
 }
 
 export async function getSettings(): Promise<AppSettings> {

@@ -5,6 +5,7 @@
 	import type { SourceInfo } from '$lib/api';
 	import Preferences from '$lib/Preferences.svelte';
 	import StatsPanel from '$lib/StatsPanel.svelte';
+	import About from '$lib/About.svelte';
 	import { onMount } from 'svelte';
 
 	// Declare params prop to silence runtime "unknown prop" warning.
@@ -57,12 +58,22 @@
 			>
 				Stats
 			</button>
+			<button
+				class="nav-item"
+				class:active={activeSection === 'about'}
+				on:click={() => setSection('about')}
+			>
+				About
+			</button>
 		</nav>
 
 		<main class="content">
 			{#if activeSection === 'preferences'}
 				<h2 class="content-title">Preferences</h2>
 				<Preferences {sources} />
+			{:else if activeSection === 'about'}
+				<h2 class="content-title">About</h2>
+				<About />
 			{:else}
 				<h2 class="content-title">Index Statistics</h2>
 				<StatsPanel />

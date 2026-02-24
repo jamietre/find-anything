@@ -20,6 +20,7 @@ pub async fn get_settings(
 
     Json(AppSettingsResponse {
         context_window: state.config.search.context_window,
+        version: env!("CARGO_PKG_VERSION").to_string(),
     })
     .into_response()
 }

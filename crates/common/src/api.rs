@@ -260,6 +260,8 @@ pub struct AppSettingsResponse {
     /// Lines shown before and after each match in search result cards.
     /// Total lines = 2 × context_window + 1.
     pub context_window: usize,
+    /// Server version string (from Cargo.toml).
+    pub version: String,
 }
 
 // ── Stats types ───────────────────────────────────────────────────────────────
