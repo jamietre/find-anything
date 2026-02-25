@@ -29,7 +29,7 @@ tar = "0.4"
 flate2 = "1"
 bzip2 = "0.4"
 xz2 = { version = "0.1", features = ["static"] }
-sevenz-rust = "0.6"
+sevenz-rust2 = "0.20"
 
 # For writing media member bytes to a temp file before delegating to media extractor
 tempfile = "3"

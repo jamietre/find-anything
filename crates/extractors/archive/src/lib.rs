@@ -115,7 +115,12 @@ fn extract_zip_file(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>
         }
         let mut bytes = Vec::new();
         if let Err(e) = entry.read_to_end(&mut bytes) {
-            warn!("zip: failed to read entry '{}': {}", name, e);
+            let member_path = std::path::Path::new(&name);
+            if find_extract_media::accepts(member_path) {
+                tracing::debug!("zip: skipping binary entry '{}': {}", name, e);
+            } else {
+                warn!("zip: failed to read entry '{}': {}", name, e);
+            }
         }
         lines.extend(extract_member_bytes(bytes, &name, cfg, 1));
     }
@@ -145,7 +150,12 @@ fn extract_tar<R: Read>(mut archive: tar::Archive<R>, cfg: &ExtractorConfig) -> 
         }
         let mut bytes = Vec::new();
         if let Err(e) = entry.read_to_end(&mut bytes) {
-            warn!("tar: failed to read entry '{}': {}", name, e);
+            let member_path = std::path::Path::new(&name);
+            if find_extract_media::accepts(member_path) {
+                tracing::debug!("tar: skipping binary entry '{}': {}", name, e);
+            } else {
+                warn!("tar: failed to read entry '{}': {}", name, e);
+            }
         }
         lines.extend(extract_member_bytes(bytes, &name, cfg, 1));
     }
@@ -154,7 +164,7 @@ fn extract_tar<R: Read>(mut archive: tar::Archive<R>, cfg: &ExtractorConfig) -> 
 
 fn extract_7z(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
     let mut lines = Vec::new();
-    let mut sz = sevenz_rust::SevenZReader::open(path, sevenz_rust::Password::empty())?;
+    let mut sz = sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::empty())?;
 
     let size_limit = cfg.max_size_kb * 1024;
     sz.for_each_entries(|entry, reader| {
@@ -169,7 +179,13 @@ fn extract_7z(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
         }
         let mut bytes = Vec::new();
         if let Err(e) = reader.read_to_end(&mut bytes) {
-            warn!("7z: failed to read entry '{}': {}", name, e);
+            let member_path = std::path::Path::new(&name);
+            if find_extract_media::accepts(member_path) {
+                tracing::debug!("7z: skipping binary entry '{}': {}", name, e);
+            } else {
+                warn!("7z: failed to read entry '{}': {}", name, e);
+            }
+            // bytes stays empty — filename still indexed below
         }
         lines.extend(extract_member_bytes(bytes, &name, cfg, 1));
         Ok(true)
