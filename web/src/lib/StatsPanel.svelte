@@ -164,18 +164,18 @@
 			</div>
 		</div>
 
-		<!-- Global metrics (shown once, from first source section) -->
-		{#if stats.total_archives > 0 || stats.inbox_pending > 0}
-			<div class="global-metrics">
-				<span>{stats.total_archives.toLocaleString()} archive{stats.total_archives !== 1 ? 's' : ''}</span>
-				{#if stats.inbox_pending > 0}
-					<span class="pending">{stats.inbox_pending} pending</span>
-				{/if}
-				{#if stats.failed_requests > 0}
-					<span class="failed">{stats.failed_requests} failed</span>
-				{/if}
-			</div>
-		{/if}
+		<!-- Global metrics (shown once, not per-source) -->
+		<div class="global-metrics">
+			<span>{stats.total_archives.toLocaleString()} archive{stats.total_archives !== 1 ? 's' : ''}</span>
+			<span title="SQLite database size">DB: {fmtSize(stats.db_size_bytes)}</span>
+			<span title="ZIP archive size">Archives: {fmtSize(stats.archive_size_bytes)}</span>
+			{#if stats.inbox_pending > 0}
+				<span class="pending">{stats.inbox_pending} pending</span>
+			{/if}
+			{#if stats.failed_requests > 0}
+				<span class="failed">{stats.failed_requests} failed</span>
+			{/if}
+		</div>
 
 		<!-- By Kind -->
 		{#if Object.keys(currentSource.by_kind).length > 0}

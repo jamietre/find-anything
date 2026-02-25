@@ -99,13 +99,24 @@ fn extract_zip_file(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>
     let mut lines = Vec::new();
 
     for i in 0..archive.len() {
-        let mut entry = archive.by_index(i).context("reading zip entry")?;
+        let mut entry = match archive.by_index(i) {
+            Ok(e) => e,
+            Err(e) => { warn!("zip: skipping entry {i}: {e:#}"); continue; }
+        };
         if entry.is_dir() {
             continue;
         }
         let name = entry.name().to_string();
+        // Check uncompressed size before allocating — skip reading oversized members.
+        let size_limit = cfg.max_size_kb * 1024;
+        if entry.size() as usize > size_limit {
+            lines.extend(extract_member_bytes(vec![], &name, cfg, 1));
+            continue;
+        }
         let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes)?;
+        if let Err(e) = entry.read_to_end(&mut bytes) {
+            warn!("zip: failed to read entry '{}': {}", name, e);
+        }
         lines.extend(extract_member_bytes(bytes, &name, cfg, 1));
     }
     Ok(lines)
@@ -113,8 +124,12 @@ fn extract_zip_file(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>
 
 fn extract_tar<R: Read>(mut archive: tar::Archive<R>, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
     let mut lines = Vec::new();
+    let size_limit = cfg.max_size_kb * 1024;
     for entry_result in archive.entries().context("reading tar entries")? {
-        let mut entry = entry_result.context("reading tar entry")?;
+        let mut entry = match entry_result {
+            Ok(e) => e,
+            Err(e) => { warn!("tar: skipping entry: {e:#}"); continue; }
+        };
         if entry.header().entry_type().is_dir() {
             continue;
         }
@@ -122,8 +137,16 @@ fn extract_tar<R: Read>(mut archive: tar::Archive<R>, cfg: &ExtractorConfig) -> 
             .ok()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
+        // Check uncompressed size before allocating — skip reading oversized members.
+        let entry_size = entry.header().size().unwrap_or(0) as usize;
+        if entry_size > size_limit {
+            lines.extend(extract_member_bytes(vec![], &name, cfg, 1));
+            continue;
+        }
         let mut bytes = Vec::new();
-        entry.read_to_end(&mut bytes)?;
+        if let Err(e) = entry.read_to_end(&mut bytes) {
+            warn!("tar: failed to read entry '{}': {}", name, e);
+        }
         lines.extend(extract_member_bytes(bytes, &name, cfg, 1));
     }
     Ok(lines)
@@ -133,13 +156,21 @@ fn extract_7z(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
     let mut lines = Vec::new();
     let mut sz = sevenz_rust::SevenZReader::open(path, sevenz_rust::Password::empty())?;
 
+    let size_limit = cfg.max_size_kb * 1024;
     sz.for_each_entries(|entry, reader| {
         if entry.is_directory() {
             return Ok(true);
         }
         let name = entry.name().to_string();
+        // Check uncompressed size before allocating — skip reading oversized members.
+        if entry.size() as usize > size_limit {
+            lines.extend(extract_member_bytes(vec![], &name, cfg, 1));
+            return Ok(true);
+        }
         let mut bytes = Vec::new();
-        let _ = reader.read_to_end(&mut bytes);
+        if let Err(e) = reader.read_to_end(&mut bytes) {
+            warn!("7z: failed to read entry '{}': {}", name, e);
+        }
         lines.extend(extract_member_bytes(bytes, &name, cfg, 1));
         Ok(true)
     })?;
@@ -255,7 +286,7 @@ fn extract_member_bytes(
                         });
                         lines.extend(prefixed);
                     }
-                    Err(e) => warn!("failed to extract nested archive '{}': {}", entry_name, e),
+                    Err(e) => warn!("failed to extract nested archive '{}': {:#}", entry_name, e),
                 }
                 return lines;
             }
@@ -293,7 +324,7 @@ fn extract_member_bytes(
     }
 
     // ── Text ──────────────────────────────────────────────────────────────────
-    if find_extract_text::accepts(member_path) {
+    if find_extract_text::accepts_bytes(member_path, &bytes) {
         if let Ok(text) = String::from_utf8(bytes) {
             let text_lines = find_extract_text::lines_from_str(&text, Some(entry_name.to_string()));
             lines.extend(text_lines);
@@ -321,13 +352,18 @@ fn extract_archive_from_bytes(
             let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).context("opening nested zip")?;
             let mut lines = Vec::new();
             for i in 0..archive.len() {
-                let mut entry = archive.by_index(i)?;
+                let mut entry = match archive.by_index(i) {
+                    Ok(e) => e,
+                    Err(e) => { warn!("nested zip: skipping entry {i}: {e:#}"); continue; }
+                };
                 if entry.is_dir() {
                     continue;
                 }
                 let name = entry.name().to_string();
                 let mut entry_bytes = Vec::new();
-                entry.read_to_end(&mut entry_bytes)?;
+                if let Err(e) = entry.read_to_end(&mut entry_bytes) {
+                    warn!("nested zip: failed to read entry '{}': {}", name, e);
+                }
                 lines.extend(extract_member_bytes(entry_bytes, &name, cfg, depth));
             }
             Ok(lines)

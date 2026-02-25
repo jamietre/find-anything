@@ -247,7 +247,7 @@ pub async fn search(
                 total += source_total;
                 all_results.append(&mut r);
             }
-            Err(e) => tracing::warn!("search source error: {e}"),
+            Err(e) => tracing::warn!("search source error: {e:#}"),
         }
     }
 

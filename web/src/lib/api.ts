@@ -243,6 +243,8 @@ export interface StatsResponse {
 	inbox_pending: number;
 	failed_requests: number;
 	total_archives: number;
+	db_size_bytes: number;
+	archive_size_bytes: number;
 }
 
 export async function getStats(): Promise<StatsResponse> {

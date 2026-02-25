@@ -77,7 +77,7 @@ pub async fn get_file(
     {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => {
-            tracing::error!("get_file: {e}");
+            tracing::error!("get_file: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -111,7 +111,7 @@ pub async fn list_files(
     {
         Ok(files) => Json(files).into_response(),
         Err(e) => {
-            tracing::error!("list_files: {e}");
+            tracing::error!("list_files: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

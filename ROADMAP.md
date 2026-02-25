@@ -121,6 +121,73 @@ This document tracks the development roadmap for find-anything, from completed f
 
 ## Near-term Priorities
 
+### 🟡 `find-admin` — General-Purpose Admin Utility
+Replace `find-config` with a unified `find-admin` binary (or add subcommands to
+`find-config`) for all administrative and diagnostic tasks:
+
+- `find-admin config` — show effective client config with defaults filled in (current `find-config` behaviour)
+- `find-admin server-config` — show effective server config
+- `find-admin inbox` — list pending inbox files on the server (count, filenames, ages)
+- `find-admin inbox clear` — delete all pending inbox files (with confirmation prompt)
+- `find-admin inbox retry` — move failed inbox files back to pending
+- `find-admin stats` — print source statistics (file counts, sizes, last scan)
+- `find-admin check` — validate config, test server connectivity, print summary
+
+All subcommands that talk to the server use the same bearer-token auth as the other
+client tools. `find-config` can be kept as a shim or alias during transition.
+
+---
+
+### 🔴 File Serving & Share URL Mapping (High Priority)
+Map source names to base URLs in `server.toml` and expose a server endpoint that
+retrieves and serves the actual file bytes, enabling the UI and API clients to open or
+download any indexed file directly.
+
+- **`[sources.<name>]` config block** — Each source can have an optional
+  `share_url_root` that is a file path or URL prefix (e.g. `file:///mnt/nas/docs`,
+  `smb://server/share`, `https://files.example.com/`). The server uses this to
+  construct a full URL for any file in that source.
+- **`GET /api/v1/file-content?source=X&path=Y`** — Streams the actual file bytes
+  from the server's local filesystem. Authenticated (bearer token required). Supports
+  `Content-Type` detection via `mime_guess`. Respects `Range` headers for large files /
+  media streaming. Returns 404 if the file is not on the server's local filesystem.
+- **UI integration** — "Open" / "Download" button in the detail panel that hits this
+  endpoint; the browser receives the raw file rather than extracted text.
+- **Archive member serving** — For composite paths (`archive.zip::member.txt`), extract
+  and stream the specific member from the ZIP rather than the whole archive.
+
+---
+
+### 🟡 Memory-Safe Archive Extraction (Streaming)
+Currently archive members are fully buffered into a `Vec<u8>` before extraction.
+The per-member size pre-check prevents OOM for most cases, but a better long-term
+approach is streaming extraction so that even large members can be indexed without
+holding the full content in RAM.
+
+- **Streaming text extraction** — pipe member bytes directly into the line iterator
+  without buffering the whole member; only the current line needs to be in memory
+- **Temp-file fallback** — for extractors that require a seekable file (PDF, Office
+  docs), write the member to a `NamedTempFile` and pass the path; clean up after
+- **Benchmark** — measure peak RSS during extraction of a large tar.gz with big
+  members before and after to confirm the improvement
+
+---
+
+### 🟡 Archive Extractor Test Coverage
+Add automated tests for the archive extractor using fixture files checked into the
+repo:
+
+- **7z fixture** — a small `.7z` file containing text files, dotfiles (no extension),
+  `.cmd`/`.bat`/`.vbs` scripts, and a nested zip — verifying `accepts_bytes` content
+  sniffing, extension whitelist, and nested extraction
+- **Zip fixture** — covering corrupt/unreadable entries (verify skip-and-continue
+  behaviour), oversized members (verify size pre-check), and members with no extension
+- **Tar.gz fixture** — covering the same member-level scenarios
+- **Unit tests for `is_text_ext` / `accepts_bytes`** — table-driven tests covering
+  each extension category and the content-sniff fallback for extensionless files
+
+---
+
 ### 🟡 Installation & End-User Experience
 **Status:** Partially done (systemd units, install script, Docker in v0.2.0)
 

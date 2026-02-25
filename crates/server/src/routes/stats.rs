@@ -36,23 +36,36 @@ pub async fn get_stats(
     let inbox_pending = count_gz(&inbox_dir);
     let failed_requests = count_gz(&failed_dir);
 
-    let total_archives = {
+    let (total_archives, archive_size_bytes) = {
         let content_dir = sources_dir.join("content");
-        let mut count = 0;
+        let mut count = 0usize;
+        let mut size = 0u64;
         if let Ok(rd) = std::fs::read_dir(&content_dir) {
             for entry in rd.filter_map(|e| e.ok()) {
                 if entry.path().is_dir() {
                     if let Ok(subdir) = std::fs::read_dir(entry.path()) {
-                        count += subdir
-                            .filter_map(|e| e.ok())
-                            .filter(|e| e.path().extension().map(|x| x == "zip").unwrap_or(false))
-                            .count();
+                        for e in subdir.filter_map(|e| e.ok()) {
+                            if e.path().extension().map(|x| x == "zip").unwrap_or(false) {
+                                count += 1;
+                                size += e.metadata().map(|m| m.len()).unwrap_or(0);
+                            }
+                        }
                     }
                 }
             }
         }
-        count
+        (count, size)
     };
+
+    let db_size_bytes: u64 = std::fs::read_dir(&sources_dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map(|x| x == "db").unwrap_or(false))
+                .filter_map(|e| e.metadata().ok())
+                .map(|m| m.len())
+                .sum()
+        })
+        .unwrap_or(0);
 
     // Collect all source DBs.
     let source_dbs: Vec<(String, std::path::PathBuf)> = match std::fs::read_dir(&sources_dir) {
@@ -94,10 +107,10 @@ pub async fn get_stats(
     for handle in handles {
         match handle.await.unwrap_or_else(|e| Err(anyhow::anyhow!(e))) {
             Ok(stats) => sources.push(stats),
-            Err(e) => tracing::warn!("stats source error: {e}"),
+            Err(e) => tracing::warn!("stats source error: {e:#}"),
         }
     }
     sources.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Json(StatsResponse { sources, inbox_pending, failed_requests, total_archives }).into_response()
+    Json(StatsResponse { sources, inbox_pending, failed_requests, total_archives, db_size_bytes, archive_size_bytes }).into_response()
 }

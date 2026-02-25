@@ -50,27 +50,50 @@ pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexL
         .collect())
 }
 
-/// Check if a file path is likely a text file based on extension.
+/// Check if a file path is likely a text file based on extension or by sniffing the file on disk.
 pub fn accepts(path: &Path) -> bool {
-    // Fast path: known text extensions
-    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-        if is_text_ext(ext) {
-            return true;
-        }
-        // Known binary extensions are not text
-        if is_binary_ext(ext) {
-            return false;
-        }
-    }
-    // Fallback: sniff first 8 KB
-    if let Ok(mut f) = std::fs::File::open(path) {
-        let mut buf = vec![0u8; 8192];
-        if let Ok(n) = f.read(&mut buf) {
-            buf.truncate(n);
-            return content_inspector::inspect(&buf).is_text();
+    match ext_verdict(path) {
+        Some(is_text) => is_text,
+        None => {
+            // Fallback: sniff first 8 KB from disk
+            if let Ok(mut f) = std::fs::File::open(path) {
+                let mut buf = vec![0u8; 8192];
+                if let Ok(n) = f.read(&mut buf) {
+                    buf.truncate(n);
+                    return content_inspector::inspect(&buf).is_text();
+                }
+            }
+            false
         }
     }
-    false
+}
+
+/// Check if an archive member (in-memory bytes) is likely a text file.
+///
+/// Uses the same extension whitelist as `accepts`, but falls back to sniffing
+/// the provided bytes rather than reading from disk (which would fail for
+/// archive members that have no on-disk path).
+pub fn accepts_bytes(path: &Path, bytes: &[u8]) -> bool {
+    match ext_verdict(path) {
+        Some(is_text) => is_text,
+        None => {
+            let sniff = &bytes[..bytes.len().min(8192)];
+            content_inspector::inspect(sniff).is_text()
+        }
+    }
+}
+
+/// Returns Some(true) for known text extensions, Some(false) for known binary
+/// extensions, and None when the extension is unknown (caller should sniff).
+fn ext_verdict(path: &Path) -> Option<bool> {
+    let ext = path.extension().and_then(|e| e.to_str())?;
+    if is_text_ext(ext) {
+        return Some(true);
+    }
+    if is_binary_ext(ext) {
+        return Some(false);
+    }
+    None
 }
 
 /// Convert a string to IndexLines (used by archive extractor for text entries).
@@ -101,6 +124,17 @@ pub fn is_text_ext(ext: &str) -> bool {
         | "csv" | "tsv" | "sql" | "graphql" | "gql" | "proto"
         | "txt" | "log" | "diff" | "patch"
         | "lock"  // Cargo.lock, package-lock.json, etc.
+        // Windows scripting / automation
+        | "cmd" | "bat" | "vbs" | "vba" | "ahk" | "au3" | "reg"
+        // Editor / IDE project files (text-based)
+        | "workspace" | "code-workspace" | "sublime-project" | "sublime-workspace"
+        | "editorconfig" | "gitignore" | "gitattributes" | "gitmodules"
+        | "dockerignore" | "npmignore" | "eslintignore" | "prettierignore"
+        // Misc text formats
+        | "makefile" | "dockerfile" | "procfile" | "gemfile" | "rakefile"
+        | "brewfile" | "csproj" | "vcxproj" | "sln" | "gradle"
+        | "mod" | "sum"  // Go modules
+        | "cabal"
     )
 }
 

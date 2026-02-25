@@ -82,6 +82,10 @@ async fn main() -> Result<()> {
     std::fs::create_dir_all(data_dir.join("inbox").join("failed"))
         .context("creating inbox directory")?;
 
+    // Fail fast if any existing source DB has an incompatible schema.
+    db::check_all_sources(&data_dir.join("sources"))
+        .context("schema version check failed — delete the listed database(s) and re-run `find-scan --full`")?;
+
     let bind = config.server.bind.clone();
     let state = Arc::new(AppState { config, data_dir: data_dir.clone() });
 

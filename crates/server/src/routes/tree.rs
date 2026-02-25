@@ -88,11 +88,11 @@ pub async fn list_dir(
     match result {
         Ok(Ok(entries)) => Json(TreeResponse { entries }).into_response(),
         Ok(Err(e)) => {
-            tracing::error!("list_dir error: {e}");
+            tracing::error!("list_dir error: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
         Err(e) => {
-            tracing::error!("list_dir task error: {e}");
+            tracing::error!("list_dir task error: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

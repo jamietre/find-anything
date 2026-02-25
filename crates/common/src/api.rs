@@ -300,4 +300,8 @@ pub struct StatsResponse {
     pub inbox_pending: usize,
     pub failed_requests: usize,
     pub total_archives: usize,
+    /// Total on-disk size of all SQLite source databases (bytes).
+    pub db_size_bytes: u64,
+    /// Total on-disk size of all ZIP content archives (bytes).
+    pub archive_size_bytes: u64,
 }

@@ -225,7 +225,22 @@ fn process_file(
         |row| row.get(0),
     )?;
 
-    // Delete old lines for this file
+    // Delete old lines for this file.
+    // TODO(fts5-stale): When lines are deleted here (and via CASCADE from `DELETE FROM files`),
+    // their corresponding `lines_fts` entries are NOT cleaned up because `lines_fts` is a
+    // contentless FTS5 table (content='') with no triggers. Stale FTS5 rowids accumulate
+    // over time, causing `fts_count` (and thus the `total` field in search responses) to be
+    // inflated. Actual search results are correct because the JOIN with `lines` filters them
+    // out, but pagination may misbehave if the client uses `total` to decide whether to
+    // fetch more pages.
+    //
+    // Fix: add a `content TEXT` column to the `lines` table (schema v4 migration) and
+    // AFTER DELETE / AFTER INSERT triggers that maintain `lines_fts` automatically:
+    //   CREATE TRIGGER lines_ad AFTER DELETE ON lines BEGIN
+    //     INSERT INTO lines_fts(lines_fts, rowid, content) VALUES('delete', old.id, old.content);
+    //   END;
+    // The migration must also rebuild the FTS5 index from the stored content column, which
+    // means all existing databases will need a `find-scan --full` after upgrading.
     conn.execute("DELETE FROM lines WHERE file_id = ?1", rusqlite::params![file_id])?;
 
     // Build lookup: line_number → original line for FTS5 content

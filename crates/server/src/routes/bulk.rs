@@ -44,7 +44,7 @@ pub async fn bulk(
             StatusCode::ACCEPTED.into_response()
         }
         Err(e) => {
-            tracing::error!("Failed to write inbox request: {e}");
+            tracing::error!("Failed to write inbox request: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

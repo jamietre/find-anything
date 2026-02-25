@@ -129,12 +129,12 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
                     )
                     .await
                     {
-                        warn!("update {}: {e}", abs_path.display());
+                        warn!("update {}: {e:#}", abs_path.display());
                     }
                 }
                 AccumulatedKind::Delete => {
                     if let Err(e) = handle_delete(&api, &source_name, &rel_path, base_url).await {
-                        warn!("delete {}: {e}", abs_path.display());
+                        warn!("delete {}: {e:#}", abs_path.display());
                     }
                 }
             }
@@ -208,7 +208,7 @@ fn is_excluded(abs_path: &Path, source_map: &SourceMap, excludes: &GlobSet) -> b
 fn accumulate(pending: &mut HashMap<PathBuf, AccumulatedKind>, res: notify::Result<Event>) {
     let event = match res {
         Ok(e) => e,
-        Err(e) => { warn!("watch error: {e}"); return; }
+        Err(e) => { warn!("watch error: {e:#}"); return; }
     };
 
     for path in event.paths {
@@ -342,7 +342,7 @@ async fn extract_via_subprocess(abs_path: &Path, config: &ClientConfig) -> Vec<I
             vec![]
         }
         Err(e) => {
-            warn!("failed to run extractor {}: {e}", binary);
+            warn!("failed to run extractor {}: {e:#}", binary);
             vec![]
         }
     }

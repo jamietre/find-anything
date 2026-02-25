@@ -73,7 +73,7 @@ pub async fn get_context(
     {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => {
-            tracing::error!("context: {e}");
+            tracing::error!("context: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -110,7 +110,7 @@ pub async fn context_batch(
             let conn = match db::open(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
-                    tracing::warn!("context_batch open {}: {e}", db_path.display());
+                    tracing::warn!("context_batch open {}: {e:#}", db_path.display());
                     for item in items {
                         results.push(ContextBatchResult { source: item.source, path: item.path, line: item.line, start: 0, match_index: None, lines: vec![], kind: String::new() });
                     }
@@ -134,7 +134,7 @@ pub async fn context_batch(
                 })() {
                     Ok(t) => t,
                     Err(e) => {
-                        tracing::warn!("context_batch item {}/{}: {e}", item.source, item.path);
+                        tracing::warn!("context_batch item {}/{}: {e:#}", item.source, item.path);
                         (String::new(), 0_usize, None, vec![])
                     }
                 };
@@ -150,7 +150,7 @@ pub async fn context_batch(
     {
         Ok(resp) => Json(resp).into_response(),
         Err(e) => {
-            tracing::error!("context_batch: {e}");
+            tracing::error!("context_batch: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

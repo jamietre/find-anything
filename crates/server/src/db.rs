@@ -12,13 +12,59 @@ use crate::archive::{ArchiveManager, ChunkRef};
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 
+/// The current schema version. Stored in SQLite's built-in `user_version` pragma.
+/// Increment this whenever the schema changes incompatibly.
+const SCHEMA_VERSION: i64 = 3;
+
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("opening {}", db_path.display()))?;
+    check_schema_version(&conn, db_path)?;
     conn.execute_batch(include_str!("schema_v2.sql"))
         .context("initialising schema")?;
     migrate_v3(&conn).context("v3 migration")?;
     Ok(conn)
+}
+
+/// Check that the database schema version is compatible before touching any tables.
+/// Fails with a clear message if the DB is from an incompatible version.
+fn check_schema_version(conn: &Connection, db_path: &Path) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+
+    // Current version: fine.
+    if version == SCHEMA_VERSION {
+        return Ok(());
+    }
+
+    // Known incompatible future version.
+    if version != 0 {
+        anyhow::bail!(
+            "database schema is v{version} but this server requires v{SCHEMA_VERSION}. \
+             Delete {} and re-run `find-scan --full` to rebuild.",
+            db_path.display()
+        );
+    }
+
+    // version == 0: either a brand-new empty DB (fine) or a pre-versioned old DB (not fine).
+    // Distinguish by checking whether `lines` exists without the `chunk_archive` column.
+    let lines_exists: bool = conn
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='lines'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if lines_exists && conn.prepare("SELECT chunk_archive FROM lines LIMIT 0").is_err() {
+        anyhow::bail!(
+            "database has an incompatible schema (predates chunk-based storage). \
+             Delete {} and re-run `find-scan --full` to rebuild.",
+            db_path.display()
+        );
+    }
+
+    Ok(())
 }
 
 fn migrate_v3(conn: &Connection) -> Result<()> {
@@ -38,6 +84,26 @@ fn migrate_v3(conn: &Connection) -> Result<()> {
          );
          PRAGMA user_version = 3;",
     )?;
+    Ok(())
+}
+
+/// Check all existing source databases in `sources_dir` for schema compatibility.
+/// Called at server startup so an incompatible DB causes an immediate fatal error
+/// rather than a runtime warning when the first request arrives.
+pub fn check_all_sources(sources_dir: &Path) -> Result<()> {
+    let read_dir = match std::fs::read_dir(sources_dir) {
+        Ok(rd) => rd,
+        Err(_) => return Ok(()), // sources dir doesn't exist yet — nothing to check
+    };
+    for entry in read_dir.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("db") {
+            continue;
+        }
+        let conn = Connection::open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        check_schema_version(&conn, &path)?;
+    }
     Ok(())
 }
 
@@ -536,16 +602,26 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
         let rest = path.strip_prefix(prefix).unwrap_or(&path);
 
         if is_archive_listing {
-            // Inside an archive: "::"-separated segments act like directories.
-            // Treat first "::"-delimited or "/"-delimited component as the child.
-            let sep_pos = rest.find("::").or_else(|| rest.find('/'));
+            // Inside an archive: split at whichever separator comes first —
+            // "/" (subdirectory) or "::" (nested archive). Taking the wrong one
+            // first (e.g. "::" in "docs/inner.zip::file.txt") would produce a
+            // child name containing a slash, breaking the tree and causing the
+            // UI to recurse infinitely.
+            let sep_pos = match (rest.find("::"), rest.find('/')) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            };
             if let Some(pos) = sep_pos {
                 let child_name = &rest[..pos];
                 // Only create virtual dir if we haven't seen a real file with this path
                 if !seen_files.contains(child_name) && seen_dirs.insert(child_name.to_string()) {
+                    // Append "/" so the next listDir call gets a properly-terminated prefix.
+                    // Without this, strip_prefix() leaves a leading "/" in `rest`, sep_pos
+                    // hits position 0, child_name is empty, and the same path is returned
+                    // forever → infinite UI recursion.
                     dirs.push(DirEntry {
                         name: child_name.to_string(),
-                        path: format!("{}{}", prefix, child_name),
+                        path: format!("{}{}/", prefix, child_name),
                         entry_type: "dir".to_string(),
                         kind: None,
                         size: None,

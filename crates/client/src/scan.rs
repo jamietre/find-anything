@@ -95,7 +95,7 @@ pub async fn run_scan(
         let lines = match extract::extract(abs_path, &cfg) {
             Ok(l) => l,
             Err(e) => {
-                warn!("extract {}: {e}", abs_path.display());
+                warn!("extract {}: {e:#}", abs_path.display());
                 vec![]
             }
         };
@@ -187,7 +187,7 @@ fn walk_paths(
         {
             let entry = match entry {
                 Ok(e) => e,
-                Err(e) => { warn!("walk error: {e}"); continue; }
+                Err(e) => { warn!("walk error: {e:#}"); continue; }
             };
             if !entry.file_type().is_file() {
                 continue;

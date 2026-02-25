@@ -8,17 +8,20 @@ use anyhow::Result;
 /// This replaces the old find_common::extract module with the new
 /// standalone extractor crates.
 pub fn extract(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
-    // Skip files that exceed the size limit
+    // Dispatch to extractors in priority order
+    // Archives first (before text, since ZIPs would otherwise be detected as binary)
+    // Archives are exempt from the whole-file size limit — they can be arbitrarily
+    // large containers, and the per-member size limit inside the extractor handles
+    // skipping oversized individual members.
+    if find_extract_archive::accepts(path) {
+        return find_extract_archive::extract(path, cfg);
+    }
+
+    // Skip non-archive files that exceed the size limit
     if let Ok(meta) = std::fs::metadata(path) {
         if meta.len() > cfg.max_size_kb as u64 * 1024 {
             return Ok(vec![]);
         }
-    }
-
-    // Dispatch to extractors in priority order
-    // Archives first (before text, since ZIPs would otherwise be detected as binary)
-    if find_extract_archive::accepts(path) {
-        return find_extract_archive::extract(path, cfg);
     }
 
     if find_extract_pdf::accepts(path) {
