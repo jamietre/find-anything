@@ -4,6 +4,13 @@ This document tracks the development roadmap for find-anything, from completed f
 
 ---
 
+## Bugs
+
+[ ] Duplicate line 0 in web UI in archive inner files:
+
+./.local/share/pnpm/store/v3/files/66/7f618f25c199073cfc77211ab2ea78ef80870d262f8d1a0ee83cb31029a365d94a347d42764e0609bce6860900523b69ed52015c280f208ecccf286d05b5e6
+jamiet.tar.gz::./.local/share/pnpm/store/v3/files/66/7f618f25c199073cfc77211ab2ea78ef80870d262f8d1a0ee83cb31029a365d94a347d42764e0609bce6860900523b69ed52015c280f208ecccf286d05b5e6
+
 ## Recently Completed
 
 ### ✅ Core Search & Indexing (v0.1)
@@ -250,6 +257,7 @@ Beyond the release pipeline, the getting-started experience needs polish:
 
 ### Web UI Phase 2
 
+- Allow clicking on file path segments to navigate to that area in the left nav
 - Search suggestions / autocomplete
 - Recent searches dropdown
 - Search result export (JSON, CSV)
@@ -294,6 +302,7 @@ content-hash caching to avoid re-OCR.
 - [ ] Regex helper / tester UI
 - [ ] Result grouping by file type or source
 - [ ] Show images inlne when possible if remote-url works
+- [ ] In stats dashboard, show actual size of database and archive files
 
 ### Additional Content Types
 

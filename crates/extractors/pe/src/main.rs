@@ -7,6 +7,7 @@ fn main() -> anyhow::Result<()> {
         max_size_kb: 100 * 1024,
         max_depth: 10,
         max_line_length: 120,
+        ..Default::default()
     };
 
     let stdin = io::stdin();

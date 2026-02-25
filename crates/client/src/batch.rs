@@ -96,6 +96,57 @@ pub fn build_index_files(
     result
 }
 
+/// Convert one archive member's lines (from streaming extraction) into IndexFiles.
+///
+/// Unlike `build_index_files`, this is called once per top-level member callback
+/// invocation and does NOT produce an IndexFile for the outer archive itself
+/// (the caller emits that separately with the accurate `extract_ms`).
+///
+/// `member_lines` may contain lines spanning multiple archive-path keys when a
+/// nested archive (e.g. `inner.zip`) has been recursively expanded — the lines
+/// will have paths like `inner.zip` and `inner.zip::foo.txt`.
+pub fn build_member_index_files(
+    outer_path: &str,
+    mtime: i64,
+    size: i64,
+    member_lines: Vec<IndexLine>,
+) -> Vec<IndexFile> {
+    let mut groups: std::collections::HashMap<String, Vec<IndexLine>> = std::collections::HashMap::new();
+    for line in member_lines {
+        if let Some(member) = line.archive_path.clone() {
+            groups.entry(member).or_default().push(line);
+        }
+        // Lines without archive_path are ignored (archive extractor always sets it).
+    }
+
+    let mut result = Vec::new();
+    for (member, mut lines) in groups {
+        let composite_path = format!("{}::{}", outer_path, member);
+        for l in &mut lines {
+            l.archive_path = None;
+        }
+        lines.push(IndexLine {
+            archive_path: None,
+            line_number: 0,
+            content: composite_path.clone(),
+        });
+        let ext = Path::new(&member)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let member_kind = detect_kind_from_ext(ext).to_string();
+        result.push(IndexFile {
+            path: composite_path,
+            mtime,
+            size,
+            kind: member_kind,
+            lines,
+            extract_ms: None,
+        });
+    }
+    result
+}
+
 pub async fn submit_batch(
     api: &ApiClient,
     source_name: &str,

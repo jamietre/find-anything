@@ -18,7 +18,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Removed
 - **`find-config` binary** — replaced by `find-admin config`
 
+### Added
+- **`find-server --config` flag** — `find-server` now uses `--config <PATH>` (consistent with `find-scan`, `find-watch`, and `find-anything`); the flag defaults to `$XDG_CONFIG_HOME/find-anything/server.toml`, `/etc/find-anything/server.toml` when running as root, or `~/.config/find-anything/server.toml` otherwise; overridable with `FIND_ANYTHING_SERVER_CONFIG`
+- **CLI reference** — new `docs/cli.md` with comprehensive documentation for all binaries: `find-server`, `find-scan`, `find-watch`, `find-anything`, `find-admin` (all subcommands), full config references, and extractor binary table
+- **Startup schema check** — `find-server` now validates the schema version of every existing source database at startup and exits with a clear error if any are incompatible, rather than failing on the first query
+
 ### Fixed
+- **Streaming archive extraction** — archive members are now processed one at a time via a bounded channel; lines for each member are freed after the batch is submitted, keeping memory usage proportional to one member rather than the whole archive; nested ZIP archives that fit within `max_temp_file_mb` are extracted in-memory (no disk I/O), larger ones spill to a temp file, and nested 7z archives always use a temp file (required by the 7z API); nested TAR variants are streamed directly with zero extra allocation
+- **Archive scan progress** — `find-scan` now logs `extracting archive <name> (N/M)` when it begins processing each archive, so long-running extractions are visible rather than appearing stuck at `0/M files completed`
+- **Archive batch progress log** — the mid-archive batch submission log now shows per-batch member count alongside the cumulative total (e.g. `102 members, 302 total`), making it clear when the 8 MB byte limit (rather than the 200-item count limit) triggered the flush
+- **`include_hidden` applied to archive members** — archive members whose path contains a hidden component (a segment starting with `.`) are now filtered according to the `include_hidden` config setting, consistent with how the filesystem walker filters hidden files and directories
+- **Corrupt nested archive log noise** — "Could not find EOCD" and similar errors for unreadable nested archives are now logged at DEBUG instead of WARN; the outer member filename is still indexed regardless
+- **`mise inbox` / `inbox-clear` tasks** — fixed missing `--` separator causing `--config` to be parsed by `cargo run` instead of the binary; added both tasks to `.mise.toml`
 - **7z solid archive CRC failures** — files in a solid 7z block that were skipped due to the `max_file_size_mb` limit were not having their bytes drained from the decompressor stream; this left the stream at the wrong offset, causing every subsequent file in the block to read corrupt data and fail CRC verification; the reader is now always drained on size-limit skips
 - **7z archive compatibility** — replaced `sevenz-rust` with `sevenz-rust2` (v0.20); adds support for LZMA, BZIP2, DEFLATE, PPMD, LZ4, ZSTD codecs inside 7z archives, fixing widespread `ChecksumVerificationFailed` errors on real-world archives; 50% faster decompression on LZMA2 archives
 - **Archive log noise** — read failures for binary members (images, video, audio) inside ZIP, TAR, and 7z archives are now logged at DEBUG instead of WARN

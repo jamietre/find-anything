@@ -73,6 +73,11 @@ pub struct ArchiveConfig {
     /// Default: 10. Set to 1 to only extract direct members (no nested archives).
     #[serde(default = "default_max_archive_depth")]
     pub max_depth: usize,
+    /// Maximum size in MB of a temporary file created when extracting a nested
+    /// 7z or large nested zip archive.  Guards against excessive disk use from
+    /// deeply compressed or unusually large inner archives.  Default: 500 MB.
+    #[serde(default = "default_max_archive_temp_file_mb")]
+    pub max_temp_file_mb: usize,
 }
 
 impl Default for ArchiveConfig {
@@ -80,12 +85,17 @@ impl Default for ArchiveConfig {
         Self {
             enabled: true,
             max_depth: default_max_archive_depth(),
+            max_temp_file_mb: default_max_archive_temp_file_mb(),
         }
     }
 }
 
 fn default_max_archive_depth() -> usize {
     10
+}
+
+fn default_max_archive_temp_file_mb() -> usize {
+    500
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,6 +157,9 @@ fn default_true() -> bool {
 /// Bundles all per-extraction settings into one struct so that adding new
 /// options in the future only requires updating this struct and its
 /// construction site — not every function signature in the call chain.
+///
+/// Construction sites that don't care about a particular field can use
+/// `..ExtractorConfig::default()` to forward-compatibly inherit the defaults.
 #[derive(Debug, Clone, Copy)]
 pub struct ExtractorConfig {
     /// Maximum file/member size in KB; content extraction is skipped above this.
@@ -156,6 +169,26 @@ pub struct ExtractorConfig {
     /// Maximum line length in characters for PDF extraction.
     /// Long lines are wrapped at word boundaries. 0 = no wrapping.
     pub max_line_length: usize,
+    /// Maximum size in MB of a temporary file used when extracting nested 7z
+    /// archives (which require a seekable file path) or oversized nested zips.
+    /// Guards against excessive disk use. Default: 500 MB.
+    pub max_temp_file_mb: usize,
+    /// When false (default), archive members whose path contains a dot-prefixed
+    /// component (e.g. `.terraform/`, `.git/`) are skipped entirely, consistent
+    /// with the filesystem walk's `include_hidden = false` behaviour.
+    pub include_hidden: bool,
+}
+
+impl Default for ExtractorConfig {
+    fn default() -> Self {
+        Self {
+            max_size_kb: 10 * 1024,
+            max_depth: default_max_archive_depth(),
+            max_line_length: default_max_line_length(),
+            max_temp_file_mb: default_max_archive_temp_file_mb(),
+            include_hidden: false,
+        }
+    }
 }
 
 impl ExtractorConfig {
@@ -165,6 +198,8 @@ impl ExtractorConfig {
             max_size_kb: scan.max_file_size_mb as usize * 1024,
             max_depth: scan.archives.max_depth,
             max_line_length: scan.max_line_length,
+            max_temp_file_mb: scan.archives.max_temp_file_mb,
+            include_hidden: scan.include_hidden,
         }
     }
 }
@@ -217,6 +252,28 @@ fn default_search_limit() -> usize { 50 }
 fn default_max_limit() -> usize { 500 }
 fn default_fts_candidate_limit() -> usize { 2000 }
 fn default_context_window() -> usize { 1 }
+
+/// Resolves the server config path using the following priority:
+///
+/// 1. `FIND_ANYTHING_SERVER_CONFIG` environment variable (if set)
+/// 2. `$XDG_CONFIG_HOME/find-anything/server.toml` (if `XDG_CONFIG_HOME` is set)
+/// 3. `/etc/find-anything/server.toml` if running as root (uid 0) — typical for system services
+/// 4. `~/.config/find-anything/server.toml` otherwise
+pub fn default_server_config_path() -> String {
+    if let Ok(p) = std::env::var("FIND_ANYTHING_SERVER_CONFIG") {
+        return p;
+    }
+    if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
+        return format!("{xdg}/find-anything/server.toml");
+    }
+    // Running as root → system-wide config location used by service units.
+    #[cfg(unix)]
+    if unsafe { libc::getuid() } == 0 {
+        return "/etc/find-anything/server.toml".into();
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    format!("{home}/.config/find-anything/server.toml")
+}
 
 /// Resolves the client config path using the following priority:
 ///

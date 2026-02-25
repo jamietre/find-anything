@@ -17,7 +17,19 @@ use axum::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use find_common::config::{parse_server_config, ServerAppConfig};
+use clap::Parser;
+
+use find_common::config::{default_server_config_path, parse_server_config, ServerAppConfig};
+
+#[derive(Parser)]
+#[command(name = "find-server", about = "find-anything index server")]
+struct Args {
+    /// Path to server config file.
+    /// Defaults to $XDG_CONFIG_HOME/find-anything/server.toml,
+    /// or /etc/find-anything/server.toml when running as root.
+    #[arg(long, env = "FIND_ANYTHING_SERVER_CONFIG")]
+    config: Option<String>,
+}
 
 // ── Embedded web UI ────────────────────────────────────────────────────────────
 // In release builds, all files under web/build/ are compiled into the binary.
@@ -68,9 +80,8 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
-    let config_path = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "/etc/find-anything/server.toml".into());
+    let args = Args::parse();
+    let config_path = args.config.unwrap_or_else(default_server_config_path);
 
     let config_str = std::fs::read_to_string(&config_path)
         .with_context(|| format!("reading config: {config_path}"))?;

@@ -134,7 +134,7 @@ data_dir = "/var/lib/find-anything"
 token    = "change-me"
 EOF
 
-find-server server.toml
+find-server --config server.toml
 ```
 
 ### 2. Create a client config

@@ -22,6 +22,7 @@ fn main() {
         max_size_kb: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(102400),
         max_depth: 10,
         max_line_length: 120,
+        ..Default::default()
     };
 
     match find_extract_media::extract(path, &cfg) {

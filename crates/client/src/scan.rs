@@ -8,13 +8,15 @@ use tracing::{info, warn};
 use walkdir::WalkDir;
 
 use find_common::{
-    api::{IndexFile, IndexingFailure},
+    api::{IndexFile, IndexLine, IndexingFailure},
     config::{ExtractorConfig, ScanConfig},
 };
 
 use crate::api::ApiClient;
-use crate::batch::{build_index_files, submit_batch};
+use crate::batch::{build_index_files, build_member_index_files, submit_batch};
 use crate::extract;
+
+use find_extract_archive;
 
 const BATCH_SIZE: usize = 200;
 const BATCH_BYTES: usize = 8 * 1024 * 1024; // 8 MB
@@ -93,42 +95,105 @@ pub async fn run_scan(
         let mtime = mtime_of(abs_path).unwrap_or(0);
         let size = size_of(abs_path).unwrap_or(0);
         let kind = extract::detect_kind(abs_path).to_string();
-
         let t0 = std::time::Instant::now();
-        let lines = match extract::extract(abs_path, &cfg) {
-            Ok(l) => l,
-            Err(e) => {
-                let msg = format!("{e:#}");
-                let truncated = truncate_error(&msg, MAX_ERROR_LEN);
-                warn!("extract {}: {}", abs_path.display(), truncated);
-                if failures.len() < MAX_FAILURES_PER_BATCH {
-                    failures.push(IndexingFailure { path: rel_path.clone(), error: truncated });
-                }
-                vec![]
-            }
-        };
-        let extract_ms = t0.elapsed().as_millis() as u64;
-
-        // Group lines by archive_path. For non-archive files all archive_paths are None.
-        // For archive files, each distinct archive_path becomes a separate IndexFile.
-        let mut index_files = build_index_files(rel_path, mtime, size, kind, lines);
-        // Set extract_ms on the outer file only; archive members get None.
-        if let Some(f) = index_files.first_mut() {
-            f.extract_ms = Some(extract_ms);
-        }
 
         completed += 1;
 
-        for file in index_files {
-            let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
-            batch_bytes += file_bytes;
-            batch.push(file);
+        if find_extract_archive::accepts(abs_path) {
+            // ── Streaming archive extraction ─────────────────────────────────
+            // Members are processed one at a time via a bounded channel so that
+            // lines are freed after each member is converted to an IndexFile,
+            // rather than holding the entire archive's content in memory.
+            info!("extracting archive {rel_path} ({completed}/{total})");
 
-            if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
-                info!("submitting batch — {completed}/{total} files completed");
-                submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
-                batch_bytes = 0;
+            // Submit the outer archive file first, before any member batches.
+            // The server deletes stale inner members when it sees the outer file,
+            // so it must arrive before member batches — not after them.
+            let outer_file = IndexFile {
+                path: rel_path.clone(),
+                mtime,
+                size,
+                kind,
+                lines: vec![IndexLine { archive_path: None, line_number: 0, content: rel_path.clone() }],
+                extract_ms: None,
+            };
+            batch.push(outer_file);
+            submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
+            batch_bytes = 0;
+
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<IndexLine>>(16);
+            let abs_clone: std::path::PathBuf = (*abs_path).clone(); // owned — required by spawn_blocking 'static
+            let cfg_clone = cfg;
+
+            let extract_task = tokio::task::spawn_blocking(move || {
+                find_extract_archive::extract_streaming(&abs_clone, &cfg_clone, &mut |member_lines| {
+                    // blocking_send provides backpressure; ignore errors (scan cancelled).
+                    let _ = tx.blocking_send(member_lines);
+                })
+            });
+
+            let mut members_submitted: usize = 0;
+            while let Some(member_lines) = rx.recv().await {
+                for file in build_member_index_files(&rel_path, mtime, size, member_lines) {
+                    let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
+                    batch_bytes += file_bytes;
+                    members_submitted += 1;
+                    batch.push(file);
+                    if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
+                        info!("submitting batch — extracting {rel_path} ({} members, {} total)", batch.len(), members_submitted);
+                        submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
+                        batch_bytes = 0;
+                    }
+                }
             }
+
+            match extract_task.await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => {
+                    let msg = format!("{e:#}");
+                    let truncated = truncate_error(&msg, MAX_ERROR_LEN);
+                    warn!("extract {}: {}", abs_path.display(), truncated);
+                    if failures.len() < MAX_FAILURES_PER_BATCH {
+                        failures.push(IndexingFailure { path: rel_path.clone(), error: truncated });
+                    }
+                }
+                Err(e) => warn!("extract task panicked for {}: {e}", abs_path.display()),
+            }
+        } else {
+            // ── Non-archive extraction ───────────────────────────────────────
+            let lines = match extract::extract(abs_path, &cfg) {
+                Ok(l) => l,
+                Err(e) => {
+                    let msg = format!("{e:#}");
+                    let truncated = truncate_error(&msg, MAX_ERROR_LEN);
+                    warn!("extract {}: {}", abs_path.display(), truncated);
+                    if failures.len() < MAX_FAILURES_PER_BATCH {
+                        failures.push(IndexingFailure { path: rel_path.clone(), error: truncated });
+                    }
+                    vec![]
+                }
+            };
+            let extract_ms = t0.elapsed().as_millis() as u64;
+            let mut index_files = build_index_files(rel_path, mtime, size, kind, lines);
+            if let Some(f) = index_files.first_mut() {
+                f.extract_ms = Some(extract_ms);
+            }
+            for file in index_files {
+                let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
+                batch_bytes += file_bytes;
+                batch.push(file);
+                if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
+                    info!("submitting batch — {completed}/{total} files completed");
+                    submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
+                    batch_bytes = 0;
+                }
+            }
+        }
+
+        if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
+            info!("submitting batch — {completed}/{total} files completed");
+            submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
+            batch_bytes = 0;
         }
     }
 

@@ -25,11 +25,11 @@ outputs = ["node_modules"]
 
 [tasks.server]
 description = "Start the server, auto-rebuild on source changes (requires cargo-watch)"
-run = "cargo watch -w crates -x 'run -p find-server -- config/server.toml'"
+run = "cargo watch -w crates -x 'run -p find-server -- --config config/server.toml'"
 
 [tasks.server-once]
 description = "Start the server (single run, no watching)"
-run = "cargo run -p find-server -- config/server.toml"
+run = "cargo run -p find-server -- --config config/server.toml"
 
 # ── Client / scanning ─────────────────────────────────────────────────────────
 
@@ -62,6 +62,16 @@ run = ["pnpm --dir web run build", "cargo build --release -p find-server"]
 [tasks.check]
 description = "Type-check all Rust crates and the web UI"
 run = ["cargo check --workspace", "pnpm --dir web check"]
+
+# ── Admin ─────────────────────────────────────────────────────────────────────
+
+[tasks.inbox]
+description = "Show inbox status (pending and failed files)"
+run = "cargo run -p find-client --bin find-admin -- --config config/client.toml inbox"
+
+[tasks.inbox-clear]
+description = "Clear all pending inbox files"
+run = "cargo run -p find-client --bin find-admin -- --config config/client.toml inbox-clear"
 
 # ── Database management ───────────────────────────────────────────────────────
 

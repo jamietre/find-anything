@@ -23,6 +23,7 @@ fn main() {
         max_size_kb: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10240),
         max_depth: 10,
         max_line_length: 120,
+        ..Default::default()
     };
 
     match find_extract_text::extract(path, &cfg) {

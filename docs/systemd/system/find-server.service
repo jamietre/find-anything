@@ -7,7 +7,7 @@ Documentation=https://github.com/yourname/find-anything
 Type=simple
 User=find-anything
 Group=find-anything
-ExecStart=/usr/local/bin/find-server /etc/find-anything/server.toml
+ExecStart=/usr/local/bin/find-server --config /etc/find-anything/server.toml
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_LOG=find_server=info

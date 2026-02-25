@@ -131,3 +131,41 @@ pub fn accepts(path: &Path) -> bool {
         .map(|e| e.eq_ignore_ascii_case("pdf"))
         .unwrap_or(false)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use find_common::config::ExtractorConfig;
+
+    fn test_cfg() -> ExtractorConfig {
+        ExtractorConfig {
+            max_size_kb: 10 * 1024,
+            max_line_length: 0,
+            ..Default::default()
+        }
+    }
+
+    /// A password-protected PDF (AES-256, /Encrypt in trailer) must trigger the
+    /// encryption guard and return exactly one "Content encrypted" line.
+    /// pdf-extract is never called — the guard short-circuits on the /Encrypt token.
+    #[test]
+    fn encrypted_pdf_returns_single_content_encrypted_line() {
+        let bytes = include_bytes!("../tests/fixtures/encrypted.pdf");
+        let result = extract_from_bytes(bytes, "encrypted.pdf", &test_cfg()).unwrap();
+        assert_eq!(result.len(), 1, "expected exactly one line for encrypted PDF");
+        assert_eq!(result[0].content, "Content encrypted");
+        assert_eq!(result[0].line_number, 1);
+        assert!(result[0].archive_path.is_none());
+    }
+
+    /// An ordinary unencrypted PDF must never produce a "Content encrypted" line.
+    #[test]
+    fn unencrypted_pdf_does_not_produce_content_encrypted_line() {
+        let bytes = include_bytes!("../tests/fixtures/minimal.pdf");
+        let result = extract_from_bytes(bytes, "minimal.pdf", &test_cfg()).unwrap();
+        assert!(
+            result.iter().all(|l| l.content != "Content encrypted"),
+            "unencrypted PDF must not produce 'Content encrypted'"
+        );
+    }
+}
