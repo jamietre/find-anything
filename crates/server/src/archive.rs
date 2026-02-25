@@ -177,7 +177,7 @@ impl ArchiveManager {
             }
         }
 
-        // Reuse the latest archive if it still has room.
+        // Reuse the latest archive if it still has room and is not corrupt.
         if max_num > 0 {
             let latest_name = format!("content_{:05}.zip", max_num);
             let latest_path = self.archive_path_for_number(max_num);
@@ -185,12 +185,23 @@ impl ArchiveManager {
                 .map(|m| m.len() as usize)
                 .unwrap_or(usize::MAX);
             if on_disk < TARGET_ARCHIVE_SIZE {
-                self.current_archive = Some(latest_name);
-                return Ok(latest_path);
+                let valid = File::open(&latest_path)
+                    .ok()
+                    .and_then(|f| ZipArchive::new(f).ok())
+                    .is_some();
+                if valid {
+                    self.current_archive = Some(latest_name);
+                    return Ok(latest_path);
+                }
+                tracing::warn!(
+                    "content archive is corrupt (truncated write?), skipping: {}",
+                    latest_path.display()
+                );
+                // Fall through to create the next archive number.
             }
         }
 
-        // All existing archives are full (or there are none): create a new one.
+        // All existing archives are full or corrupt (or there are none): create a new one.
         let new_num = max_num + 1;
         let new_name = format!("content_{:05}.zip", new_num);
         let new_path = self.archive_path_for_number(new_num);

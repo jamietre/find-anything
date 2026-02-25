@@ -373,3 +373,24 @@ pub struct InboxDeleteResponse {
 pub struct InboxRetryResponse {
     pub retried: usize,
 }
+
+/// Summary of one file within an inbox batch, returned by `GET /api/v1/admin/inbox/show`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxShowFile {
+    pub path: String,
+    pub kind: String,
+    /// Number of content lines (line_number > 0).
+    pub content_lines: usize,
+}
+
+/// `GET /api/v1/admin/inbox/show` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxShowResponse {
+    /// "pending" or "failed"
+    pub queue: String,
+    pub source: String,
+    pub files: Vec<InboxShowFile>,
+    pub delete_paths: Vec<String>,
+    pub failures: Vec<IndexingFailure>,
+    pub scan_timestamp: Option<i64>,
+}

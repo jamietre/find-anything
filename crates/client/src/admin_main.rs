@@ -49,6 +49,11 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Show the contents of a named inbox item (searches pending and failed queues)
+    InboxShow {
+        /// Inbox filename, with or without .gz extension
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -242,6 +247,55 @@ async fn main() -> Result<()> {
 
             let resp = client.inbox_retry().await.context("retrying inbox")?;
             println!("Retried {} file(s).", resp.retried);
+        }
+
+        Command::InboxShow { name } => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+            let resp = client.inbox_show(&name).await.context("fetching inbox item")?;
+
+            let Some(resp) = resp else {
+                eprintln!("Not found: {name}");
+                std::process::exit(1);
+            };
+
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&resp)?);
+                return Ok(());
+            }
+
+            let queue_label = if resp.queue == "failed" {
+                format!(" [{}]", "FAILED".red())
+            } else {
+                String::new()
+            };
+            println!("source:  {}{queue_label}", resp.source);
+            if let Some(ts) = resp.scan_timestamp {
+                println!("scan_ts: {ts}");
+            }
+            println!();
+
+            if !resp.files.is_empty() {
+                println!("Upserts ({}):", resp.files.len());
+                for f in &resp.files {
+                    println!("  [{:7}]  {}  ({} content lines)", f.kind, f.path, f.content_lines);
+                }
+            }
+
+            if !resp.delete_paths.is_empty() {
+                println!();
+                println!("Deletes ({}):", resp.delete_paths.len());
+                for p in &resp.delete_paths {
+                    println!("  {p}");
+                }
+            }
+
+            if !resp.failures.is_empty() {
+                println!();
+                println!("Failures ({}):", resp.failures.len());
+                for f in &resp.failures {
+                    println!("  {}  —  {}", f.path, f.error);
+                }
+            }
         }
     }
 

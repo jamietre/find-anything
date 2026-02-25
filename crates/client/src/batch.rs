@@ -71,6 +71,8 @@ pub fn build_index_files(
         for l in &mut content_lines {
             l.archive_path = None;
         }
+        // Remove the extractor's filename line (member name only); replace with composite path.
+        content_lines.retain(|l| l.line_number != 0);
         // Add a line_number=0 entry so the member is findable by name.
         content_lines.push(IndexLine {
             archive_path: None,
@@ -125,6 +127,8 @@ pub fn build_member_index_files(
         for l in &mut lines {
             l.archive_path = None;
         }
+        // Remove the extractor's filename line (member name only); replace with composite path.
+        lines.retain(|l| l.line_number != 0);
         lines.push(IndexLine {
             archive_path: None,
             line_number: 0,

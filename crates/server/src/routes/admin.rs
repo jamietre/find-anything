@@ -7,10 +7,14 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use flate2::read::GzDecoder;
 use serde::Deserialize;
 use tokio::task::spawn_blocking;
 
-use find_common::api::{InboxDeleteResponse, InboxItem, InboxRetryResponse, InboxStatusResponse};
+use find_common::api::{
+    InboxDeleteResponse, InboxItem, InboxRetryResponse, InboxShowFile, InboxShowResponse,
+    InboxStatusResponse,
+};
 
 use crate::AppState;
 
@@ -172,6 +176,77 @@ pub async fn inbox_retry(
         Ok(retried) => Json(InboxRetryResponse { retried }).into_response(),
         Err(e) => {
             tracing::error!("inbox_retry error: {e:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
+// ── GET /api/v1/admin/inbox/show ──────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct InboxShowQuery {
+    name: String,
+}
+
+pub async fn inbox_show(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<InboxShowQuery>,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let inbox_dir = state.data_dir.join("inbox");
+    let failed_dir = inbox_dir.join("failed");
+
+    let result = spawn_blocking(move || -> anyhow::Result<Option<InboxShowResponse>> {
+        // Normalise: ensure the name ends in .gz
+        let filename = if query.name.ends_with(".gz") {
+            query.name.clone()
+        } else {
+            format!("{}.gz", query.name)
+        };
+
+        // Look in pending first, then failed.
+        let (path, queue) = if inbox_dir.join(&filename).exists() {
+            (inbox_dir.join(&filename), "pending")
+        } else if failed_dir.join(&filename).exists() {
+            (failed_dir.join(&filename), "failed")
+        } else {
+            return Ok(None);
+        };
+
+        let raw = std::fs::read(&path)?;
+        let req: find_common::api::BulkRequest =
+            serde_json::from_reader(GzDecoder::new(raw.as_slice()))?;
+
+        let files = req
+            .files
+            .iter()
+            .map(|f| InboxShowFile {
+                path: f.path.clone(),
+                kind: f.kind.clone(),
+                content_lines: f.lines.iter().filter(|l| l.line_number != 0).count(),
+            })
+            .collect();
+
+        Ok(Some(InboxShowResponse {
+            queue: queue.to_string(),
+            source: req.source,
+            files,
+            delete_paths: req.delete_paths,
+            failures: req.indexing_failures,
+            scan_timestamp: req.scan_timestamp,
+        }))
+    })
+    .await;
+
+    match result.unwrap_or_else(|e| Err(anyhow::anyhow!(e))) {
+        Ok(Some(resp)) => Json(resp).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::error!("inbox_show error: {e:#}");
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }

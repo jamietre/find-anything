@@ -134,6 +134,15 @@ pub async fn run_scan(
 
             let mut members_submitted: usize = 0;
             while let Some(member_lines) = rx.recv().await {
+                // Apply exclude patterns to archive members.
+                // archive_path may be "inner.zip::path/to/file.js" for nested archives;
+                // take the last segment (actual file path) for glob matching.
+                if let Some(ap) = member_lines.first().and_then(|l| l.archive_path.as_deref()) {
+                    let file_path = ap.rsplit("::").next().unwrap_or(ap);
+                    if excludes.is_match(file_path) {
+                        continue;
+                    }
+                }
                 for file in build_member_index_files(&rel_path, mtime, size, member_lines) {
                     let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
                     batch_bytes += file_bytes;

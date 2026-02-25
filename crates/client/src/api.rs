@@ -7,7 +7,8 @@ use std::io::Write;
 
 use find_common::api::{
     AppSettingsResponse, BulkRequest, ContextResponse, FileRecord, InboxDeleteResponse,
-    InboxRetryResponse, InboxStatusResponse, SearchResponse, SourceInfo, StatsResponse,
+    InboxRetryResponse, InboxShowResponse, InboxStatusResponse, SearchResponse, SourceInfo,
+    StatsResponse,
 };
 
 pub struct ApiClient {
@@ -181,6 +182,27 @@ impl ApiClient {
             .json::<InboxDeleteResponse>()
             .await
             .context("parsing inbox delete response")
+    }
+
+    /// GET /api/v1/admin/inbox/show?name=<name>
+    pub async fn inbox_show(&self, name: &str) -> Result<Option<InboxShowResponse>> {
+        let resp = self.client
+            .get(self.url("/api/v1/admin/inbox/show"))
+            .bearer_auth(&self.token)
+            .query(&[("name", name)])
+            .send()
+            .await
+            .context("GET /api/v1/admin/inbox/show")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        Ok(Some(
+            resp.error_for_status()
+                .context("inbox show")?
+                .json::<InboxShowResponse>()
+                .await
+                .context("parsing inbox show response")?,
+        ))
     }
 
     /// POST /api/v1/admin/inbox/retry

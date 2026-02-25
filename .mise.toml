@@ -65,13 +65,9 @@ run = ["cargo check --workspace", "pnpm --dir web check"]
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 
-[tasks.inbox]
+[tasks.admin]
 description = "Show inbox status (pending and failed files)"
-run = "cargo run -p find-client --bin find-admin -- --config config/client.toml inbox"
-
-[tasks.inbox-clear]
-description = "Clear all pending inbox files"
-run = "cargo run -p find-client --bin find-admin -- --config config/client.toml inbox-clear"
+run = "cargo run -p find-client --bin find-admin -- --config config/client.toml"
 
 # ── Database management ───────────────────────────────────────────────────────
 

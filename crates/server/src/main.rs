@@ -123,6 +123,7 @@ async fn main() -> Result<()> {
         .route("/api/v1/tree",           get(routes::list_dir))
         .route("/api/v1/admin/inbox",       get(routes::inbox_status).delete(routes::inbox_clear))
         .route("/api/v1/admin/inbox/retry", post(routes::inbox_retry))
+        .route("/api/v1/admin/inbox/show",  get(routes::inbox_show))
         .fallback(serve_static)
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(state);

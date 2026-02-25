@@ -1,12 +1,11 @@
 use std::sync::Arc;
 
 use axum::{
-    extract::{Query, State},
-    http::HeaderMap,
+    extract::{FromRequestParts, State},
+    http::{request::Parts, HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
-use serde::Deserialize;
 use tokio::task::spawn_blocking;
 
 use find_common::api::{SearchResponse, SearchResult};
@@ -18,59 +17,48 @@ use super::{check_auth, source_db_path};
 
 // ── GET /api/v1/search ────────────────────────────────────────────────────────
 
-#[derive(Deserialize)]
 pub struct SearchParams {
     pub q: String,
-    #[serde(default = "default_mode")]
     pub mode: String,
-    /// Repeatable: ?source=a&source=b. Empty = all sources.
-    /// Also accepts single value: ?source=a
-    #[serde(default, deserialize_with = "deserialize_string_or_seq")]
+    /// Collected from repeated ?source=a&source=b params.
     pub source: Vec<String>,
-    #[serde(default = "default_limit")]
     pub limit: usize,
-    #[serde(default)]
     pub offset: usize,
 }
 
-/// Deserialize either a single string or a sequence of strings into Vec<String>
-fn deserialize_string_or_seq<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    struct StringOrVec;
+impl<S: Send + Sync> FromRequestParts<S> for SearchParams {
+    type Rejection = (StatusCode, String);
 
-    impl<'de> serde::de::Visitor<'de> for StringOrVec {
-        type Value = Vec<String>;
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        let raw = parts.uri.query().unwrap_or("");
+        let mut q = None;
+        let mut mode = None;
+        let mut source = Vec::new();
+        let mut limit = None;
+        let mut offset = None;
 
-        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-            formatter.write_str("string or sequence of strings")
-        }
-
-        fn visit_str<E>(self, value: &str) -> Result<Vec<String>, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(vec![value.to_string()])
-        }
-
-        fn visit_seq<A>(self, mut seq: A) -> Result<Vec<String>, A::Error>
-        where
-            A: serde::de::SeqAccess<'de>,
-        {
-            let mut vec = Vec::new();
-            while let Some(value) = seq.next_element()? {
-                vec.push(value);
+        for (k, v) in form_urlencoded::parse(raw.as_bytes()) {
+            match k.as_ref() {
+                "q"      => q      = Some(v.into_owned()),
+                "mode"   => mode   = Some(v.into_owned()),
+                "source" => source.push(v.into_owned()),
+                "limit"  => limit  = Some(v.parse::<usize>()
+                    .map_err(|_| (StatusCode::BAD_REQUEST, "invalid limit".to_string()))?),
+                "offset" => offset = Some(v.parse::<usize>()
+                    .map_err(|_| (StatusCode::BAD_REQUEST, "invalid offset".to_string()))?),
+                _ => {}
             }
-            Ok(vec)
         }
+
+        Ok(SearchParams {
+            q:      q.ok_or_else(|| (StatusCode::BAD_REQUEST, "missing 'q'".to_string()))?,
+            mode:   mode.unwrap_or_else(|| "fuzzy".to_string()),
+            source,
+            limit:  limit.unwrap_or(50),
+            offset: offset.unwrap_or(0),
+        })
     }
-
-    deserializer.deserialize_any(StringOrVec)
 }
-
-fn default_mode() -> String { "fuzzy".into() }
-fn default_limit() -> usize { 50 }
 
 /// Extract maximal sequences of non-special characters from a regex pattern
 /// to use as FTS5 pre-filter terms. Special regex chars (`^$.*+?|()[]{}\`)
@@ -119,7 +107,7 @@ fn make_resource_url(base_url: &Option<String>, path: &str) -> Option<String> {
 pub async fn search(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Query(params): Query<SearchParams>,
+    params: SearchParams,
 ) -> impl IntoResponse {
     if let Err(s) = check_auth(&state, &headers) { return (s, Json(serde_json::Value::Null)).into_response(); }
 
