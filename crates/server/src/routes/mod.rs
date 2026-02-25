@@ -1,3 +1,4 @@
+mod admin;
 mod bulk;
 mod context;
 mod file;
@@ -5,6 +6,7 @@ mod search;
 mod stats;
 mod tree;
 
+pub use admin::{inbox_clear, inbox_retry, inbox_status};
 pub use bulk::bulk;
 pub use context::{context_batch, get_context};
 pub use file::{get_file, list_files};

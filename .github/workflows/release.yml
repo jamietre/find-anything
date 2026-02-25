@@ -110,7 +110,7 @@ jobs:
             "find-scan"
             "find-watch"
             "find-server"
-            "find-config"
+            "find-admin"
             "find-extract-text"
             "find-extract-pdf"
             "find-extract-media"

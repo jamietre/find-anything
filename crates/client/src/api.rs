@@ -5,7 +5,10 @@ use flate2::{write::GzEncoder, Compression};
 use reqwest::Client;
 use std::io::Write;
 
-use find_common::api::{BulkRequest, ContextResponse, FileRecord, SearchResponse};
+use find_common::api::{
+    AppSettingsResponse, BulkRequest, ContextResponse, FileRecord, InboxDeleteResponse,
+    InboxRetryResponse, InboxStatusResponse, SearchResponse, SourceInfo, StatsResponse,
+};
 
 pub struct ApiClient {
     client: Client,
@@ -102,6 +105,97 @@ impl ApiClient {
             .json::<ContextResponse>()
             .await
             .context("parsing context response")
+    }
+
+    /// GET /api/v1/stats
+    pub async fn get_stats(&self) -> Result<StatsResponse> {
+        self.client
+            .get(self.url("/api/v1/stats"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("GET /api/v1/stats")?
+            .error_for_status()
+            .context("stats status")?
+            .json::<StatsResponse>()
+            .await
+            .context("parsing stats response")
+    }
+
+    /// GET /api/v1/sources
+    pub async fn get_sources(&self) -> Result<Vec<SourceInfo>> {
+        self.client
+            .get(self.url("/api/v1/sources"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("GET /api/v1/sources")?
+            .error_for_status()
+            .context("sources status")?
+            .json::<Vec<SourceInfo>>()
+            .await
+            .context("parsing sources response")
+    }
+
+    /// GET /api/v1/settings
+    pub async fn get_settings(&self) -> Result<AppSettingsResponse> {
+        self.client
+            .get(self.url("/api/v1/settings"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("GET /api/v1/settings")?
+            .error_for_status()
+            .context("settings status")?
+            .json::<AppSettingsResponse>()
+            .await
+            .context("parsing settings response")
+    }
+
+    /// GET /api/v1/admin/inbox
+    pub async fn inbox_status(&self) -> Result<InboxStatusResponse> {
+        self.client
+            .get(self.url("/api/v1/admin/inbox"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("GET /api/v1/admin/inbox")?
+            .error_for_status()
+            .context("inbox status")?
+            .json::<InboxStatusResponse>()
+            .await
+            .context("parsing inbox status response")
+    }
+
+    /// DELETE /api/v1/admin/inbox?target=<target>
+    pub async fn inbox_clear(&self, target: &str) -> Result<InboxDeleteResponse> {
+        self.client
+            .delete(self.url("/api/v1/admin/inbox"))
+            .bearer_auth(&self.token)
+            .query(&[("target", target)])
+            .send()
+            .await
+            .context("DELETE /api/v1/admin/inbox")?
+            .error_for_status()
+            .context("inbox clear status")?
+            .json::<InboxDeleteResponse>()
+            .await
+            .context("parsing inbox delete response")
+    }
+
+    /// POST /api/v1/admin/inbox/retry
+    pub async fn inbox_retry(&self) -> Result<InboxRetryResponse> {
+        self.client
+            .post(self.url("/api/v1/admin/inbox/retry"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("POST /api/v1/admin/inbox/retry")?
+            .error_for_status()
+            .context("inbox retry status")?
+            .json::<InboxRetryResponse>()
+            .await
+            .context("parsing inbox retry response")
     }
 
     /// GET /api/v1/search

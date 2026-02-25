@@ -1,0 +1,282 @@
+use anyhow::{Context, Result};
+use clap::{Parser, Subcommand};
+use colored::Colorize;
+
+use find_common::config::{default_config_path, parse_client_config};
+
+mod api;
+
+#[derive(Parser)]
+#[command(name = "find-admin", about = "Administrative utilities for find-anything")]
+struct Args {
+    /// Path to client config file (default: ~/.config/find-anything/client.toml)
+    #[arg(long, global = true)]
+    config: Option<String>,
+    /// Output raw JSON instead of human-readable text
+    #[arg(long, global = true)]
+    json: bool,
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Print effective client configuration with defaults filled in
+    Config,
+    /// Print per-source statistics from the server
+    Stats,
+    /// List indexed sources
+    Sources,
+    /// Check server connectivity and authentication
+    Check,
+    /// Show inbox status (pending and failed files)
+    Inbox,
+    /// Delete inbox files
+    InboxClear {
+        /// Target the failed/ queue instead of pending
+        #[arg(long)]
+        failed: bool,
+        /// Target both pending and failed queues
+        #[arg(long)]
+        all: bool,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Move failed inbox files back to pending for retry
+    InboxRetry {
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::io::stderr)
+        .init();
+
+    let args = Args::parse();
+
+    let config_path = args.config.clone().unwrap_or_else(default_config_path);
+    let config_str = std::fs::read_to_string(&config_path)
+        .with_context(|| format!("reading config: {config_path}"))?;
+    let config = parse_client_config(&config_str)?;
+
+    match args.command {
+        Command::Config => {
+            if args.json {
+                let json = serde_json::to_string_pretty(&config)
+                    .context("serializing config to JSON")?;
+                println!("{json}");
+            } else {
+                let toml = toml::to_string_pretty(&config)
+                    .context("serializing config to TOML")?;
+                println!("# Effective configuration (file: {config_path})");
+                println!("# Values shown include defaults for any fields not set in your file.");
+                println!();
+                print!("{toml}");
+            }
+        }
+
+        Command::Stats => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+            let stats = client.get_stats().await.context("fetching stats")?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&stats)?);
+            } else {
+                println!("Sources:");
+                for s in &stats.sources {
+                    let age = s.last_scan.map(|ts| {
+                        let secs = chrono_age_secs(ts);
+                        format_age(secs)
+                    }).unwrap_or_else(|| "never".to_string());
+                    println!(
+                        "  {:20}  {:>6} files  {:>10}  last scan: {}",
+                        s.name,
+                        s.total_files,
+                        format_bytes(s.total_size as u64),
+                        age,
+                    );
+                }
+                println!();
+                println!("Inbox:    {} pending, {} failed", stats.inbox_pending, stats.failed_requests);
+                println!("Archives: {} ZIP files ({})", stats.total_archives, format_bytes(stats.archive_size_bytes));
+                println!("DB size:  {}", format_bytes(stats.db_size_bytes));
+            }
+        }
+
+        Command::Sources => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+            let sources = client.get_sources().await.context("fetching sources")?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&sources)?);
+            } else {
+                if sources.is_empty() {
+                    println!("No sources indexed.");
+                } else {
+                    for (i, s) in sources.iter().enumerate() {
+                        let base = s.base_url.as_deref().unwrap_or("none");
+                        println!("  {}. {}  (base_url: {})", i + 1, s.name, base);
+                    }
+                }
+            }
+        }
+
+        Command::Check => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+            let mut all_ok = true;
+
+            // Check server reachable + authenticated via /api/v1/settings
+            match client.get_settings().await {
+                Ok(settings) => {
+                    println!("{}", format!("✓  Server reachable at {}", config.server.url).green());
+                    println!("{}", "✓  Authenticated (token accepted)".green());
+                    println!("{}", format!("✓  Server version: {}", settings.version).green());
+                }
+                Err(e) => {
+                    // Distinguish auth failures from connectivity failures
+                    let msg = e.to_string();
+                    if msg.contains("401") || msg.contains("UNAUTHORIZED") || msg.contains("Unauthorized") {
+                        println!("{}", format!("✓  Server reachable at {}", config.server.url).green());
+                        println!("{}", "✗  Authentication failed (check token)".red());
+                    } else {
+                        println!("{}", format!("✗  Server not reachable at {} — {e:#}", config.server.url).red());
+                        println!("{}", "✗  Authentication not checked (server unreachable)".red());
+                    }
+                    println!("{}", "✗  Server version: unknown".red());
+                    all_ok = false;
+                }
+            }
+
+            // Check sources
+            match client.get_sources().await {
+                Ok(sources) => {
+                    println!("{}", format!("✓  {} source(s) indexed", sources.len()).green());
+                }
+                Err(e) => {
+                    println!("{}", format!("✗  Could not fetch sources: {e:#}").red());
+                    all_ok = false;
+                }
+            }
+
+            if !all_ok {
+                std::process::exit(1);
+            }
+        }
+
+        Command::Inbox => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+            let status = client.inbox_status().await.context("fetching inbox status")?;
+            if args.json {
+                println!("{}", serde_json::to_string_pretty(&status)?);
+            } else {
+                println!("Pending ({}):", status.pending.len());
+                for item in &status.pending {
+                    println!(
+                        "  {}  {}  age: {}",
+                        item.filename,
+                        format_bytes(item.size_bytes),
+                        format_age(item.age_secs),
+                    );
+                }
+                println!();
+                println!("Failed ({}):", status.failed.len());
+                for item in &status.failed {
+                    println!(
+                        "  {}  {}  age: {}",
+                        item.filename,
+                        format_bytes(item.size_bytes),
+                        format_age(item.age_secs),
+                    );
+                }
+            }
+        }
+
+        Command::InboxClear { failed, all, yes } => {
+            let target = if all { "all" } else if failed { "failed" } else { "pending" };
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+
+            if !yes {
+                let status = client.inbox_status().await.context("fetching inbox status")?;
+                let count = match target {
+                    "all" => status.pending.len() + status.failed.len(),
+                    "failed" => status.failed.len(),
+                    _ => status.pending.len(),
+                };
+                let qualifier = if target == "all" { String::new() } else { format!("{target} ") };
+                eprint!("Clear {} {}file(s)? [y/N] ", count, qualifier);
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).context("reading confirmation")?;
+                match input.trim() {
+                    "y" | "Y" => {}
+                    _ => {
+                        eprintln!("Aborted.");
+                        return Ok(());
+                    }
+                }
+            }
+
+            let resp = client.inbox_clear(target).await.context("clearing inbox")?;
+            println!("Deleted {} file(s).", resp.deleted);
+        }
+
+        Command::InboxRetry { yes } => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+
+            if !yes {
+                let status = client.inbox_status().await.context("fetching inbox status")?;
+                eprint!("Retry {} failed file(s)? [y/N] ", status.failed.len());
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).context("reading confirmation")?;
+                match input.trim() {
+                    "y" | "Y" => {}
+                    _ => {
+                        eprintln!("Aborted.");
+                        return Ok(());
+                    }
+                }
+            }
+
+            let resp = client.inbox_retry().await.context("retrying inbox")?;
+            println!("Retried {} file(s).", resp.retried);
+        }
+    }
+
+    Ok(())
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 * 1024 {
+        format!("{:.1} GB", bytes as f64 / (1024.0 * 1024.0 * 1024.0))
+    } else if bytes >= 1024 * 1024 {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn format_age(secs: u64) -> String {
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86400)
+    }
+}
+
+fn chrono_age_secs(unix_ts: i64) -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    (now - unix_ts).max(0) as u64
+}

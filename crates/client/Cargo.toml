@@ -16,8 +16,8 @@ name = "find-anything"
 path = "src/query_main.rs"
 
 [[bin]]
-name = "find-config"
-path = "src/config_main.rs"
+name = "find-admin"
+path = "src/admin_main.rs"
 
 [dependencies]
 find-common = { path = "../common" }

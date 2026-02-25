@@ -305,3 +305,32 @@ pub struct StatsResponse {
     /// Total on-disk size of all ZIP content archives (bytes).
     pub archive_size_bytes: u64,
 }
+
+// ── Inbox admin types ─────────────────────────────────────────────────────────
+
+/// One item in the inbox (pending or failed), returned by `GET /api/v1/admin/inbox`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxItem {
+    pub filename: String,
+    pub size_bytes: u64,
+    pub age_secs: u64,
+}
+
+/// `GET /api/v1/admin/inbox` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxStatusResponse {
+    pub pending: Vec<InboxItem>,
+    pub failed: Vec<InboxItem>,
+}
+
+/// `DELETE /api/v1/admin/inbox` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxDeleteResponse {
+    pub deleted: usize,
+}
+
+/// `POST /api/v1/admin/inbox/retry` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxRetryResponse {
+    pub retried: usize,
+}

@@ -7,6 +7,7 @@ This document tracks the development roadmap for find-anything, from completed f
 ## Recently Completed
 
 ### ✅ Core Search & Indexing (v0.1)
+
 - Full-text search with FTS5 trigram indexing
 - Fuzzy, exact, and regex search modes
 - Multi-source support (one client can manage multiple named sources)
@@ -16,11 +17,13 @@ This document tracks the development roadmap for find-anything, from completed f
 - Streaming text extraction (memory-efficient for large files)
 
 ### ✅ Rich Content Extraction (v0.2)
+
 - **PDF text extraction** — Extract and index text from PDF files
 - **Image EXIF metadata** — Index camera make/model, GPS, dates, descriptions
 - **Audio metadata** — Index MP3 (ID3), FLAC (Vorbis), M4A tags
 
 ### ✅ Web UI (v0.3)
+
 - SvelteKit-based web interface
 - Live fuzzy search with syntax highlighting
 - File preview and context display
@@ -28,10 +31,12 @@ This document tracks the development roadmap for find-anything, from completed f
 - Development tooling (mise, pnpm, corepack)
 
 ### ✅ Advanced Features (v0.4)
+
 - **Resource base URLs** — Hyperlinkable search results (file://, http://, smb://)
 - **Smart context retrieval** — File-type-aware context (metadata for images/audio, paragraph extracts for PDFs)
 
 ### ✅ ZIP Content Storage & Async Indexing (v0.1.1)
+
 - **ZIP-backed content storage** — File content stored in rotating 10MB ZIP archives, separate from SQLite FTS index
 - **Async inbox processing** — Client gzip-compresses and submits batches; server worker polls and processes asynchronously
 - **Schema v2** — Contentless FTS5 index; `lines` table stores chunk references instead of inline content
@@ -39,6 +44,7 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Auto-migration** — Detects and drops v1 schema on startup, prompting re-scan
 
 ### ✅ Directory Tree Explorer (v0.1.2)
+
 - **`GET /api/v1/tree` endpoint** — Prefix-based directory listing using range-scan SQL; returns virtual directory nodes grouped server-side
 - **Directory tree sidebar** — Collapsible tree with lazy loading per directory; auto-expands ancestors of the active file
 - **Breadcrumb navigation** — Clickable path segments at the top of the detail panel; clicking a directory switches to directory listing view
@@ -46,6 +52,7 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Atomic archive deletion** — File deletion keeps the SQLite transaction open until ZIP rewrite succeeds; rolls back on failure
 
 ### ✅ Archive Navigation & Path Refactoring (v0.1.3)
+
 - **Archive node highlighting** — Clicking nested archive members now correctly highlights the actual file, not the outermost archive
 - **Split click behavior** — Archive tree nodes: arrow toggles expansion, name opens/highlights node
 - **Improved fuzzy scoring** — Exact substring matches get massive score boost
@@ -53,27 +60,33 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Archive members as first-class files** — Composite `archive.zip::member.txt` paths; each member has its own `file_id`, searchable by name, browsable in the tree
 
 ### ✅ Video Metadata Extraction (v0.1.4)
+
 - **Video metadata indexing** — Format type, resolution, duration from MP4, MKV, WebM, AVI, MOV and more
 
 ### ✅ Word Wrap Toggle & UX (v0.1.5)
+
 - **Word wrap toggle** — Toolbar button with localStorage persistence
 - **Source selector dropdown** — Replaced pill-based filter with compact, scalable dropdown
 
 ### ✅ Archive Subfolder Organization (v0.1.6)
+
 - **Thousands-based subfolders** — `sources/content/NNNN/` structure; up to ~99.99 TB capacity
 - **Source selector** — Dropdown with checkboxes replaces pills; scales to many sources
 
 ### ✅ Markdown Frontmatter Extraction (v0.1.7)
+
 - **YAML frontmatter** — Title, author, tags, and arbitrary fields indexed as `[FRONTMATTER:key] value`
 - **Graceful degradation** — Malformed or missing frontmatter doesn't prevent content indexing
 - **Nested structures** — Nested YAML objects serialized to searchable strings
 
 ### ✅ Extractor Architecture Refactor (v0.1.8)
+
 - **Standalone extractor binaries** — `find-extract-text`, `find-extract-pdf`, `find-extract-media`, `find-extract-archive` as independent binaries with JSON output
 - **Shared library crates** — Each extractor is also a library crate consumed by `find-scan` directly
 - **Clean separation** — Extractor logic isolated from client logic; each binary can be tested independently
 
 ### ✅ Incremental File Watcher (v0.1.9)
+
 - **`find-watch` daemon** — Monitors source paths with `notify` (inotify/FSEvents/ReadDirectoryChanges); pushes single-file updates via `POST /api/v1/bulk`
 - **Debounce loop** — Configurable debounce window (default 500ms) collapses rapid events before processing
 - **Event accumulation** — Create/Modify → Update; Remove → Delete; Update→Delete = Delete; Delete→Update = Update
@@ -82,6 +95,7 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Systemd unit files** — User-mode (`~/.config/systemd/user/`) and system-mode (`/etc/systemd/system/`) units with installation README
 
 ### ✅ GitHub CI & Release Pipeline (v0.2.0)
+
 - **GitHub Actions CI** — `cargo test --workspace` + `cargo clippy -- -D warnings` + web type-check on every push/PR
 - **Binary release matrix** — Linux x86_64, Linux aarch64 (native ARM runner), macOS arm64, macOS x86_64 — builds all 8 binaries into platform tarballs
 - **GitHub Releases** — Automated release creation on `v*.*.*` tags via `softprops/action-gh-release`
@@ -90,12 +104,14 @@ This document tracks the development roadmap for find-anything, from completed f
 - **`server.toml.example`** — Annotated config template for Docker users
 
 ### ✅ Format Extractors: HTML, Office, EPUB (v0.2.1)
+
 - **`find-extract-html`** — Strips tags via `scraper` (html5ever); extracts `[HTML:title]`/`[HTML:description]` metadata, visible paragraph/heading/list text; skips nav/header/footer/script/style
 - **`find-extract-office`** — DOCX (zip+quick-xml, `<w:t>/<w:p>` paragraphs, `dc:title`/`dc:creator` metadata), XLSX/XLS/XLSM (calamine rows, sheet metadata), PPTX (zip+quick-xml, `<a:t>/<a:p>`, per-slide metadata)
 - **`find-extract-epub`** — Parses `META-INF/container.xml` → OPF → spine → XHTML text walk; indexes `[EPUB:title/creator/publisher/language]` metadata
 - **New `"document"` kind** — Added to `detect_kind_from_ext` for docx/xlsx/xls/xlsm/pptx/epub
 
 ### ✅ Windows Support (v0.2.2)
+
 - **Windows build pipeline** — Native x86_64-pc-windows-msvc builds via GitHub Actions `windows-latest` runner; ZIP artifacts with all binaries
 - **`find-watch` Windows Service** — Self-installing via `windows-service` crate; `install`/`uninstall`/`service-run` subcommands; integrates with Windows Service Control Manager
 - **`find-tray` system tray app** — Windows-only GUI using `tray-icon` crate; polls service status and server API; provides Run Full Scan, Start/Stop Watcher, Open Config, and Quit actions
@@ -104,6 +120,7 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Comprehensive documentation** — `docs/windows/README.md` with quick start, service management, troubleshooting, and Windows-specific differences
 
 ### ✅ Search UX, Infinite Scroll & Frontend Refactor (v0.2.3)
+
 - **Debounced search with live feedback** — 500ms debounce; old results stay visible and blurred while new search is in-flight; no flash on transition
 - **Infinite scroll** — Window scroll listener preemptively loads next 50 results when within 600px of bottom; paginated batches deduplicated by `source:path:line_number` to handle overlapping pages
 - **Lazy context loading** — `IntersectionObserver` per result card fetches context only when it scrolls into view; placeholder shown until loaded; avoids burst of N requests on page load
@@ -114,31 +131,32 @@ This document tracks the development roadmap for find-anything, from completed f
 - **Context API refactored** — `ContextResponse` returns `{start, match_index, lines[], kind}`; server routes split into `routes/` submodule (search, context, file, tree, bulk)
 
 ### ✅ Investigations
+
 - **Archive Index Compression** — FTS5 trigram index is inherently ~3x text size; current architecture is optimal. No changes needed.
 - **Audio Metadata Consolidation** — `audio-video-metadata` crate lacks rich music tags; current per-format extractors kept.
+
+### ✅ `find-admin` — General-Purpose Admin Utility (v0.2.6)
+
+Replaced `find-config` with a unified `find-admin` binary covering all administrative and diagnostic tasks:
+
+- `find-admin config` — show effective client config with defaults filled in (replaces `find-config`)
+- `find-admin stats` — print per-source file counts, sizes, and last-scan age from the server
+- `find-admin sources` — list indexed sources and their base URLs
+- `find-admin check` — validate connectivity, bearer-token auth, and source count with colored ✓/✗ output
+- `find-admin inbox` — list pending and failed inbox files with size and age
+- `find-admin inbox-clear [--failed|--all] [--yes]` — delete inbox files with optional confirmation
+- `find-admin inbox-retry [--yes]` — move failed files back to pending for retry
+
+New server endpoints: `GET /api/v1/admin/inbox`, `DELETE /api/v1/admin/inbox?target=pending|failed|all`,
+`POST /api/v1/admin/inbox/retry`. All admin endpoints use the same bearer-token auth as all other routes;
+RBAC is planned for a future release.
 
 ---
 
 ## Near-term Priorities
 
-### 🟡 `find-admin` — General-Purpose Admin Utility
-Replace `find-config` with a unified `find-admin` binary (or add subcommands to
-`find-config`) for all administrative and diagnostic tasks:
-
-- `find-admin config` — show effective client config with defaults filled in (current `find-config` behaviour)
-- `find-admin server-config` — show effective server config
-- `find-admin inbox` — list pending inbox files on the server (count, filenames, ages)
-- `find-admin inbox clear` — delete all pending inbox files (with confirmation prompt)
-- `find-admin inbox retry` — move failed inbox files back to pending
-- `find-admin stats` — print source statistics (file counts, sizes, last scan)
-- `find-admin check` — validate config, test server connectivity, print summary
-
-All subcommands that talk to the server use the same bearer-token auth as the other
-client tools. `find-config` can be kept as a shim or alias during transition.
-
----
-
 ### 🔴 File Serving & Share URL Mapping (High Priority)
+
 Map source names to base URLs in `server.toml` and expose a server endpoint that
 retrieves and serves the actual file bytes, enabling the UI and API clients to open or
 download any indexed file directly.
@@ -159,6 +177,7 @@ download any indexed file directly.
 ---
 
 ### 🟡 Memory-Safe Archive Extraction (Streaming)
+
 Currently archive members are fully buffered into a `Vec<u8>` before extraction.
 The per-member size pre-check prevents OOM for most cases, but a better long-term
 approach is streaming extraction so that even large members can be indexed without
@@ -174,6 +193,7 @@ holding the full content in RAM.
 ---
 
 ### 🟡 Improve 7z Archive Compatibility
+
 The current `sevenz-rust` crate produces `ChecksumVerificationFailed` errors for
 a significant number of entries in real-world `.7z` archives (observed: many image
 and some text files unreadable). Affected entries fall back to filename-only
@@ -196,6 +216,7 @@ indexing — content is silently missing. Investigate alternatives:
 ---
 
 ### 🟡 Archive Extractor Test Coverage
+
 Add automated tests for the archive extractor using fixture files checked into the
 repo:
 
@@ -211,6 +232,7 @@ repo:
 ---
 
 ### 🟡 Installation & End-User Experience
+
 **Status:** Partially done (systemd units, install script, Docker in v0.2.0)
 
 Beyond the release pipeline, the getting-started experience needs polish:
@@ -225,16 +247,19 @@ Beyond the release pipeline, the getting-started experience needs polish:
 ## Medium-term
 
 ### Performance
+
 - allow passing multiple files to extractors to avoid loading plugin repeatedly when processeing long lists of files
 - what does current arch do in these situations? worth doing?
 
 ### Search Quality Improvements
+
 - Recency bias (recently modified files rank higher)
 - Result deduplication across sources
 - Advanced filters in UI (file type, date range, size)
 - Boolean operators (AND, OR, NOT) in query syntax "advanced search"
 
 ### Web UI Phase 2
+
 - Search suggestions / autocomplete
 - Recent searches dropdown
 - Search result export (JSON, CSV)
@@ -245,16 +270,19 @@ Beyond the release pipeline, the getting-started experience needs polish:
 ## Long-term
 
 ### OCR Support
+
 Optional OCR for images and scanned PDFs via `tesseract` in PATH. Expensive
 operation; opt-in via `ocr = true` in config. Background processing with
 content-hash caching to avoid re-OCR.
 
 ### Multi-user & Authentication
+
 - Per-user accounts, token rotation, role-based access control (read-only/admin),
-audit logging.
+  audit logging.
 - Encryption of data archives (and index?)
 
 ### Advanced Integrations
+
 - Webhook notifications on new matches for saved searches
 - Index export (`find-server export --source <name> --format json`)
 - VS Code extension
@@ -265,6 +293,7 @@ audit logging.
 ## Ideas & Future Enhancements
 
 ### Web UI Ideas
+
 - [x] Folder path browsing
 - [x] Sources visibility — dropdown selector (v0.1.6)
 - [x] Word wrap toggle (v0.1.5)
@@ -277,6 +306,7 @@ audit logging.
 - [ ] Show images inlne when possible if remote-url works
 
 ### Additional Content Types
+
 - [x] PDF text extraction
 - [x] Image EXIF metadata
 - [x] Audio metadata (MP3, FLAC, M4A)
@@ -290,6 +320,7 @@ audit logging.
 - [ ] Email (mbox, PST) indexing
 
 ### Performance & Scalability
+
 - [x] Archive subfolder organization (v0.1.6)
 - [x] FTS5 contentless index + ZIP content storage
 - [ ] Distributed indexing (multiple scan clients per source)
@@ -297,7 +328,8 @@ audit logging.
 - [ ] Incremental FTS5 rebuilds
 
 ### Operations & Monitoring
-- [ ] Track stats on time to index each file, and report on them 
+
+- [ ] Track stats on time to index each file, and report on them
 - [ ] Index statistics dashboard
 - [ ] Health check endpoint
 - [ ] Slow query logging
@@ -305,6 +337,7 @@ audit logging.
 - [ ] Backup and restore utilities
 
 ### Developer Tools
+
 - [x] Docker Compose — v0.2.0
 - [ ] CLI autocomplete (bash, zsh, fish)
 - [ ] Python / JavaScript client library
@@ -315,6 +348,7 @@ audit logging.
 ## Contributing
 
 Have an idea not listed here? Consider:
+
 1. **Quick wins** → Open an issue or PR
 2. **Substantial features** → Discuss in an issue first
 3. **Major changes** → Create a plan in `docs/plans/NNN-feature-name.md`
