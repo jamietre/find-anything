@@ -2,3 +2,4 @@
 /config/
 /tmp/
 /test-data/
+*.log
