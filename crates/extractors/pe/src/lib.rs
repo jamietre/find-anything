@@ -4,6 +4,27 @@ use std::path::Path;
 use find_common::api::IndexLine;
 use find_common::config::ExtractorConfig;
 
+/// Extract version information from PE bytes.
+///
+/// Used by `find-extract-dispatch` for archive members. Does not include a
+/// filename line — the caller adds that.
+pub fn extract_from_bytes(bytes: &[u8], _name: &str, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+    let size_kb = bytes.len() / 1024;
+    if size_kb > cfg.max_size_kb {
+        return Ok(vec![]);
+    }
+    let version_info = extract_version_info(bytes)?;
+    Ok(version_info
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(|line| IndexLine {
+            line_number: 0,
+            content: line.to_string(),
+            archive_path: None,
+        })
+        .collect())
+}
+
 /// Extract version information from PE files (EXE, DLL, etc.).
 ///
 /// Supports:

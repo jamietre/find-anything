@@ -14,6 +14,20 @@ pub fn accepts(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Extract text from EPUB bytes.
+///
+/// Used by `find-extract-dispatch` for archive members. Writes to a temp file
+/// and delegates to `extract`.
+pub fn extract_from_bytes(bytes: &[u8], _name: &str, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+    use std::io::Write;
+    let mut tmp = tempfile::Builder::new()
+        .suffix(".epub")
+        .tempfile()?;
+    tmp.write_all(bytes)?;
+    tmp.flush()?;
+    extract(tmp.path(), cfg)
+}
+
 /// Extract text from an EPUB file.
 ///
 /// Parsing sequence:

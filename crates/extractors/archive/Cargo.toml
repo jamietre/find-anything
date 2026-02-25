@@ -13,9 +13,9 @@ path = "src/main.rs"
 
 [dependencies]
 find-common = { path = "../../common" }
-# Depend on other extractors to handle archive members
-find-extract-text = { path = "../text" }
-find-extract-pdf = { path = "../pdf" }
+# Unified dispatch handles all member extraction
+find-extract-dispatch = { path = "../dispatch" }
+# Still needed for accepts() and is_archive_ext()
 find-extract-media = { path = "../media" }
 
 anyhow = { workspace = true }
@@ -31,5 +31,4 @@ bzip2 = "0.4"
 xz2 = { version = "0.1", features = ["static"] }
 sevenz-rust2 = "0.20"
 
-# For writing media member bytes to a temp file before delegating to media extractor
 tempfile = "3"

@@ -170,6 +170,9 @@ pub async fn run_scan(
             }
         } else {
             // ── Non-archive extraction ───────────────────────────────────────
+            // dispatch_from_path handles MIME detection internally: it emits a
+            // [FILE:mime] line when no extractor matched the bytes, so we check
+            // for that line below to update the kind accordingly.
             let lines = match extract::extract(abs_path, &cfg) {
                 Ok(l) => l,
                 Err(e) => {
@@ -181,6 +184,22 @@ pub async fn run_scan(
                     }
                     vec![]
                 }
+            };
+            // Refine "unknown" or "text" kind using extracted content:
+            // - A [FILE:mime] line emitted by dispatch means binary → use mime_to_kind.
+            // - Text content lines (line_number > 0) present → promote to "text".
+            // - Neither → keep as-is (archive members use "unknown" when unrecognised).
+            let kind = if kind == "text" || kind == "unknown" {
+                if let Some(mime_line) = lines.iter().find(|l| l.line_number == 0 && l.content.starts_with("[FILE:mime] ")) {
+                    let mime = &mime_line.content["[FILE:mime] ".len()..];
+                    find_extract_dispatch::mime_to_kind(mime).to_string()
+                } else if lines.iter().any(|l| l.line_number > 0) {
+                    "text".to_string()
+                } else {
+                    kind
+                }
+            } else {
+                kind
             };
             let extract_ms = t0.elapsed().as_millis() as u64;
             let mut index_files = build_index_files(rel_path, mtime, size, kind, lines);

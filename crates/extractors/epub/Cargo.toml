@@ -19,3 +19,4 @@ serde_json = { workspace = true }
 
 zip = "2"
 quick-xml = "0.37"
+tempfile = "3"

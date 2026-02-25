@@ -11,6 +11,7 @@ members = [
     "crates/extractors/office",
     "crates/extractors/epub",
     "crates/extractors/pe",
+    "crates/extractors/dispatch",
     "crates/windows/service",
     "crates/windows/tray",
 ]

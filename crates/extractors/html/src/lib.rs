@@ -16,6 +16,17 @@ pub fn accepts(path: &Path) -> bool {
     )
 }
 
+/// Extract text content from HTML bytes.
+///
+/// Used by `find-extract-dispatch` for archive members and other in-memory sources.
+pub fn extract_from_bytes(bytes: &[u8], _name: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
+    if bytes.len() > cfg.max_size_kb * 1024 {
+        return vec![];
+    }
+    let src = String::from_utf8_lossy(bytes);
+    extract_from_str(&src)
+}
+
 /// Extract text content from an HTML file.
 ///
 /// Metadata lines (line_number = 0):

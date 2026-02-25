@@ -250,6 +250,7 @@ Beyond the release pipeline, the getting-started experience needs polish:
 
 ### Web UI Phase 2
 
+- Allow showing tree directly from the main page, e.g. without a search, same as if a search had already occurred. (UX ideas?)
 - Allow clicking on file path segments to navigate to that area in the left nav
 - Search suggestions / autocomplete
 - Recent searches dropdown

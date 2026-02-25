@@ -96,6 +96,23 @@ fn ext_verdict(path: &Path) -> Option<bool> {
     None
 }
 
+/// Extract text content from in-memory bytes.
+///
+/// Used by `find-extract-dispatch` for archive members and other in-memory sources.
+/// Does not include a filename line — the caller adds that.
+pub fn extract_from_bytes(bytes: &[u8], name: &str, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+    let is_markdown = {
+        let n = name.to_lowercase();
+        n.ends_with(".md") || n.ends_with(".markdown")
+    };
+    let content = String::from_utf8(bytes.to_vec())?;
+    if is_markdown {
+        Ok(extract_markdown_with_frontmatter(&content))
+    } else {
+        Ok(lines_from_str(&content, None))
+    }
+}
+
 /// Convert a string to IndexLines (used by archive extractor for text entries).
 pub fn lines_from_str(content: &str, archive_path: Option<String>) -> Vec<IndexLine> {
     content
@@ -145,9 +162,12 @@ fn is_binary_ext(ext: &str) -> bool {
         | "mp3" | "mp4" | "avi" | "mov" | "mkv" | "flac" | "wav" | "ogg"
         | "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
         | "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar"
-        | "exe" | "dll" | "so" | "dylib" | "class" | "jar"
+        | "exe" | "dll" | "so" | "dylib" | "sys" | "scr" | "efi"
+        | "class" | "jar" | "pyc" | "pyd"
         | "o" | "a" | "lib" | "obj" | "wasm"
-        | "db" | "sqlite" | "sqlite3"
+        | "deb" | "rpm" | "pkg" | "msi" | "snap" | "flatpak"
+        | "bin" | "img" | "iso" | "dmg" | "vmdk" | "vhd" | "qcow2"
+        | "db" | "sqlite" | "sqlite3" | "mdb"
         | "ttf" | "otf" | "woff" | "woff2"
     )
 }

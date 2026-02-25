@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::path::Path;
 
 use find_common::api::IndexLine;
@@ -39,6 +39,24 @@ pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexL
     }
 }
 
+/// Extract metadata from media bytes.
+///
+/// Writes bytes to a temp file with the correct extension and delegates to `extract`.
+/// Used by `find-extract-dispatch` for archive members.
+pub fn extract_from_bytes(bytes: &[u8], entry_name: &str, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+    use std::io::Write;
+    let ext = Path::new(entry_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let mut tmp = tempfile::Builder::new()
+        .suffix(&format!(".{}", ext))
+        .tempfile()?;
+    tmp.write_all(bytes)?;
+    tmp.flush()?;
+    extract(tmp.path(), cfg)
+}
+
 /// Check if a file is a media file based on extension.
 pub fn accepts(path: &Path) -> bool {
     if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -57,16 +75,12 @@ fn extract_image(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
     let file = File::open(path)?;
     let mut bufreader = BufReader::new(file);
 
-    match exif::Reader::new().read_from_container(&mut bufreader) {
+    let lines = match exif::Reader::new().read_from_container(&mut bufreader) {
         Ok(exif) => {
             let mut lines = Vec::new();
-
-            // Extract all EXIF fields
             for field in exif.fields() {
                 let tag = field.tag.to_string();
                 let value = field.display_value().to_string();
-
-                // Skip empty or binary values
                 if !value.is_empty() && !value.starts_with("[") {
                     lines.push(IndexLine {
                         archive_path: None,
@@ -75,14 +89,115 @@ fn extract_image(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
                     });
                 }
             }
+            lines
+        }
+        Err(_) => vec![],
+    };
 
-            Ok(lines)
+    if !lines.is_empty() {
+        return Ok(lines);
+    }
+
+    // Fallback: read native image header for basic dimensions/color info.
+    if let Some(basic) = extract_image_basic(path) {
+        return Ok(basic);
+    }
+
+    Ok(vec![IndexLine {
+        archive_path: None,
+        line_number: 0,
+        content: "[IMAGE] no metadata available".to_string(),
+    }])
+}
+
+fn extract_image_basic(path: &Path) -> Option<Vec<IndexLine>> {
+    let mut f = File::open(path).ok()?;
+    let mut buf = [0u8; 34];
+    let n = f.read(&mut buf).ok()?;
+    if n < 8 {
+        return None;
+    }
+
+    // PNG: \x89PNG\r\n\x1a\n
+    if buf.starts_with(b"\x89PNG\r\n\x1a\n") && n >= 26 {
+        let width  = u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]);
+        let height = u32::from_be_bytes([buf[20], buf[21], buf[22], buf[23]]);
+        let bit_depth  = buf[24];
+        let color_type = buf[25];
+        let color_name = match color_type {
+            0 => "Grayscale",
+            2 => "RGB",
+            3 => "Indexed",
+            4 => "Grayscale+Alpha",
+            6 => "RGBA",
+            _ => "Unknown",
+        };
+        return Some(vec![
+            make_image_line("dimensions", &format!("{}x{}", width, height)),
+            make_image_line("bit_depth",  &bit_depth.to_string()),
+            make_image_line("color",      color_name),
+        ]);
+    }
+
+    // GIF: GIF87a or GIF89a
+    if (buf.starts_with(b"GIF87a") || buf.starts_with(b"GIF89a")) && n >= 10 {
+        let width  = u16::from_le_bytes([buf[6], buf[7]]);
+        let height = u16::from_le_bytes([buf[8], buf[9]]);
+        return Some(vec![
+            make_image_line("dimensions", &format!("{}x{}", width, height)),
+        ]);
+    }
+
+    // WebP: RIFF....WEBP
+    if buf.starts_with(b"RIFF") && n >= 12 && &buf[8..12] == b"WEBP" {
+        if n >= 16 {
+            let sub_chunk = &buf[12..16];
+            if sub_chunk == b"VP8 " && n >= 30 {
+                let frame_tag = (buf[20] as u32) | ((buf[21] as u32) << 8) | ((buf[22] as u32) << 16);
+                if frame_tag & 1 == 0 && buf[23] == 0x9D && buf[24] == 0x01 && buf[25] == 0x2A {
+                    let width  = u16::from_le_bytes([buf[26], buf[27]]) & 0x3FFF;
+                    let height = u16::from_le_bytes([buf[28], buf[29]]) & 0x3FFF;
+                    return Some(vec![
+                        make_image_line("dimensions", &format!("{}x{}", width, height)),
+                    ]);
+                }
+            } else if sub_chunk == b"VP8L" && n >= 25 && buf[20] == 0x2F {
+                let packed = (buf[21] as u32) | ((buf[22] as u32) << 8) | ((buf[23] as u32) << 16) | ((buf[24] as u32) << 24);
+                let width  = (packed & 0x3FFF) + 1;
+                let height = ((packed >> 14) & 0x3FFF) + 1;
+                return Some(vec![
+                    make_image_line("dimensions", &format!("{}x{}", width, height)),
+                ]);
+            } else if sub_chunk == b"VP8X" && n >= 30 {
+                let width  = (buf[24] as u32) | ((buf[25] as u32) << 8) | ((buf[26] as u32) << 16);
+                let height = (buf[27] as u32) | ((buf[28] as u32) << 8) | ((buf[29] as u32) << 16);
+                return Some(vec![
+                    make_image_line("dimensions", &format!("{}x{}", width + 1, height + 1)),
+                ]);
+            }
         }
-        Err(_) => {
-            // Many images don't have EXIF data, or we can't read it
-            // This is normal, just return empty results
-            Ok(vec![])
-        }
+        return Some(vec![make_image_line("format", "WebP")]);
+    }
+
+    // BMP: BM
+    if buf.starts_with(b"BM") && n >= 30 {
+        let width     = i32::from_le_bytes([buf[18], buf[19], buf[20], buf[21]]).unsigned_abs();
+        let height    = i32::from_le_bytes([buf[22], buf[23], buf[24], buf[25]]).unsigned_abs();
+        let bit_count = u16::from_le_bytes([buf[28], buf[29]]);
+        return Some(vec![
+            make_image_line("dimensions", &format!("{}x{}", width, height)),
+            make_image_line("bit_depth",  &bit_count.to_string()),
+        ]);
+    }
+
+    None
+}
+
+fn make_image_line(key: &str, value: &str) -> IndexLine {
+    IndexLine {
+        archive_path: None,
+        line_number: 0,
+        content: format!("[IMAGE:{}] {}", key, value),
     }
 }
 

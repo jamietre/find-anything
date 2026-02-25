@@ -127,8 +127,9 @@ pub fn build_member_index_files(
         for l in &mut lines {
             l.archive_path = None;
         }
-        // Remove the extractor's filename line (member name only); replace with composite path.
-        lines.retain(|l| l.line_number != 0);
+        // Remove the extractor's filename line (content == member name) but keep
+        // metadata lines (EXIF, [FILE:mime], etc.) which also have line_number=0.
+        lines.retain(|l| !(l.line_number == 0 && l.content == member));
         lines.push(IndexLine {
             archive_path: None,
             line_number: 0,
@@ -138,7 +139,18 @@ pub fn build_member_index_files(
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("");
-        let member_kind = detect_kind_from_ext(ext).to_string();
+        let mut member_kind = detect_kind_from_ext(ext).to_string();
+        // Refine "unknown" or "text" kind using extracted content:
+        // - A [FILE:mime] line emitted by dispatch means binary → use mime_to_kind.
+        // - Text content lines (line_number > 0) present → promote to "text".
+        if member_kind == "text" || member_kind == "unknown" {
+            if let Some(mime_line) = lines.iter().find(|l| l.line_number == 0 && l.content.starts_with("[FILE:mime] ")) {
+                let mime = &mime_line.content["[FILE:mime] ".len()..];
+                member_kind = find_extract_dispatch::mime_to_kind(mime).to_string();
+            } else if lines.iter().any(|l| l.line_number > 0) {
+                member_kind = "text".to_string();
+            }
+        }
         result.push(IndexFile {
             path: composite_path,
             mtime,

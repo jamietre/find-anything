@@ -5,10 +5,10 @@ use anyhow::Result;
 
 /// Dispatch to the appropriate extractor based on file type.
 ///
-/// This replaces the old find_common::extract module with the new
-/// standalone extractor crates.
+/// Archives are handled by `find-extract-archive` (streaming path in scan.rs).
+/// All other files are routed through `find-extract-dispatch` which provides
+/// unified bytes-based dispatch with MIME fallback.
 pub fn extract(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
-    // Dispatch to extractors in priority order
     // Archives first (before text, since ZIPs would otherwise be detected as binary)
     // Archives are exempt from the whole-file size limit — they can be arbitrarily
     // large containers, and the per-member size limit inside the extractor handles
@@ -17,45 +17,7 @@ pub fn extract(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
         return find_extract_archive::extract(path, cfg);
     }
 
-    // Skip non-archive files that exceed the size limit
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.len() > cfg.max_size_kb as u64 * 1024 {
-            return Ok(vec![]);
-        }
-    }
-
-    if find_extract_pdf::accepts(path) {
-        return find_extract_pdf::extract(path, cfg);
-    }
-
-    if find_extract_media::accepts(path) {
-        return find_extract_media::extract(path, cfg);
-    }
-
-    // HTML before text (text's accepts() matches .html via extension list)
-    if find_extract_html::accepts(path) {
-        return find_extract_html::extract(path, cfg);
-    }
-
-    if find_extract_office::accepts(path) {
-        return find_extract_office::extract(path, cfg);
-    }
-
-    if find_extract_epub::accepts(path) {
-        return find_extract_epub::extract(path, cfg);
-    }
-
-    if find_extract_pe::accepts(path) {
-        return find_extract_pe::extract(path, cfg);
-    }
-
-    // Text extractor is last (most permissive, will accept many files)
-    if find_extract_text::accepts(path) {
-        return find_extract_text::extract(path, cfg);
-    }
-
-    // No extractor matched
-    Ok(vec![])
+    find_extract_dispatch::dispatch_from_path(path, cfg)
 }
 
 /// Detect the file kind string used in IndexFile.kind.
@@ -87,5 +49,5 @@ pub fn detect_kind(path: &Path) -> &'static str {
             return "video";
         }
     }
-    "text"
+    "unknown"
 }

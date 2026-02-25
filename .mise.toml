@@ -34,9 +34,13 @@ run = "cargo run -p find-server -- --config config/server.toml"
 [tasks.dev]
 description = "Start Rust API + Vite dev server (full dev environment with live reload)"
 run = """
-cargo watch -w crates -x 'run -p find-server -- --config config/server.toml' &
+# setsid puts cargo-watch in its own process group so that
+# "kill -TERM -$API_PID" reaches cargo-watch AND all its children
+# (cargo run, find-server).  Without this, kill only hits cargo-watch
+# and find-server keeps running, holding port 8765.
+setsid cargo watch -w crates -x 'run -p find-server -- --config config/server.toml' &
 API_PID=$!
-trap "kill $API_PID 2>/dev/null" EXIT INT TERM
+trap "kill -TERM -$API_PID 2>/dev/null" EXIT INT TERM
 pnpm --dir web dev
 """
 

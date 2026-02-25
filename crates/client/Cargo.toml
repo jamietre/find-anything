@@ -20,15 +20,14 @@ name = "find-admin"
 path = "src/admin_main.rs"
 
 [dependencies]
-find-common = { path = "../common" }
-find-extract-text = { path = "../extractors/text" }
-find-extract-pdf = { path = "../extractors/pdf" }
-find-extract-media = { path = "../extractors/media" }
-find-extract-archive = { path = "../extractors/archive" }
-find-extract-html    = { path = "../extractors/html" }
-find-extract-office  = { path = "../extractors/office" }
-find-extract-epub    = { path = "../extractors/epub" }
-find-extract-pe      = { path = "../extractors/pe" }
+find-common            = { path = "../common" }
+find-extract-dispatch  = { path = "../extractors/dispatch" }
+find-extract-archive   = { path = "../extractors/archive" }
+# media still needed directly for detect_kind (is_image_ext / is_audio_ext / is_video_ext)
+find-extract-media     = { path = "../extractors/media" }
+# pdf and pe still needed directly for detect_kind (accepts())
+find-extract-pdf       = { path = "../extractors/pdf" }
+find-extract-pe        = { path = "../extractors/pe" }
 anyhow      = { workspace = true }
 clap        = { workspace = true }
 serde       = { workspace = true }

@@ -17,6 +17,24 @@ pub fn accepts(path: &Path) -> bool {
     )
 }
 
+/// Extract text from Office document bytes.
+///
+/// Used by `find-extract-dispatch` for archive members. Writes to a temp file
+/// and delegates to `extract` (which needs a real path for some formats).
+pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+    use std::io::Write;
+    let ext = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("docx");
+    let mut tmp = tempfile::Builder::new()
+        .suffix(&format!(".{}", ext))
+        .tempfile()?;
+    tmp.write_all(bytes)?;
+    tmp.flush()?;
+    extract(tmp.path(), cfg)
+}
+
 /// Extract text from an Office document.
 ///
 /// - DOCX: paragraphs from word/document.xml + metadata from docProps/core.xml

@@ -1,0 +1,22 @@
+[package]
+name = "find-extract-dispatch"
+version = "0.2.5"
+edition = "2021"
+
+[lib]
+name = "find_extract_dispatch"
+path = "src/lib.rs"
+
+[dependencies]
+find-common        = { path = "../../common" }
+find-extract-text  = { path = "../text" }
+find-extract-pdf   = { path = "../pdf" }
+find-extract-media = { path = "../media" }
+find-extract-html  = { path = "../html" }
+find-extract-office = { path = "../office" }
+find-extract-epub  = { path = "../epub" }
+find-extract-pe    = { path = "../pe" }
+
+anyhow  = { workspace = true }
+tracing = { workspace = true }
+infer   = "0.19"

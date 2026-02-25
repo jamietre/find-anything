@@ -484,8 +484,9 @@ fn make_filename_line(name: &str) -> Vec<IndexLine> {
 
 /// Extract an archive member from raw bytes.
 ///
-/// Handles: single-file compressed (.gz/.bz2/.xz decompressed inline),
-/// PDF, media, and text.  Multi-file archives are NOT handled here — the
+/// Single-file compressed formats (.gz/.bz2/.xz) are decompressed inline and
+/// dispatched via `find_extract_dispatch`.  All other non-archive formats are
+/// dispatched directly.  Multi-file archives are NOT handled here — the
 /// caller routes those through `handle_nested_archive` before reaching
 /// this function.
 fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
@@ -497,7 +498,6 @@ fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, cfg: &ExtractorConfig)
         return lines;
     }
 
-    let member_path = Path::new(entry_name);
     let size_limit = cfg.max_size_kb * 1024;
 
     // ── Single-file compressed (.gz / .bz2 / .xz) ────────────────────────────
@@ -543,10 +543,17 @@ fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, cfg: &ExtractorConfig)
                 };
 
                 if let Some(inner_bytes) = decompressed {
-                    if let Ok(text) = String::from_utf8(inner_bytes) {
-                        let text_lines = find_extract_text::lines_from_str(&text, Some(entry_name.to_string()));
-                        lines.extend(text_lines);
-                    }
+                    // Dispatch decompressed bytes; use inner name (strip .gz/.bz2/.xz).
+                    let inner_name = Path::new(entry_name)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(entry_name);
+                    let content_lines = find_extract_dispatch::dispatch_from_bytes(&inner_bytes, inner_name, cfg);
+                    let with_path = content_lines.into_iter().map(|mut l| {
+                        l.archive_path = Some(entry_name.to_string());
+                        l
+                    });
+                    lines.extend(with_path);
                 }
                 return lines;
             }
@@ -556,70 +563,12 @@ fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, cfg: &ExtractorConfig)
         }
     }
 
-    // ── PDF ───────────────────────────────────────────────────────────────────
-    if find_extract_pdf::accepts(member_path) {
-        match find_extract_pdf::extract_from_bytes(&bytes, entry_name, cfg) {
-            Ok(pdf_lines) => {
-                let with_path = pdf_lines.into_iter().map(|mut l| {
-                    l.archive_path = Some(entry_name.to_string());
-                    l
-                });
-                lines.extend(with_path);
-            }
-            Err(e) => warn!("PDF extraction failed for '{}': {}", entry_name, e),
-        }
-        return lines;
-    }
-
-    // ── Media (image / audio / video) ─────────────────────────────────────────
-    if find_extract_media::accepts(member_path) {
-        match extract_media_from_bytes(&bytes, entry_name, cfg) {
-            Ok(media_lines) => {
-                let with_path = media_lines.into_iter().map(|mut l| {
-                    l.archive_path = Some(entry_name.to_string());
-                    l
-                });
-                lines.extend(with_path);
-            }
-            Err(e) => warn!("media extraction failed for '{}': {}", entry_name, e),
-        }
-        return lines;
-    }
-
-    // ── Text ──────────────────────────────────────────────────────────────────
-    if find_extract_text::accepts_bytes(member_path, &bytes) {
-        if let Ok(text) = String::from_utf8(bytes) {
-            let text_lines = find_extract_text::lines_from_str(&text, Some(entry_name.to_string()));
-            lines.extend(text_lines);
-        }
-    }
-
+    // ── All other formats: unified dispatch ───────────────────────────────────
+    let content_lines = find_extract_dispatch::dispatch_from_bytes(&bytes, entry_name, cfg);
+    let with_path = content_lines.into_iter().map(|mut l| {
+        l.archive_path = Some(entry_name.to_string());
+        l
+    });
+    lines.extend(with_path);
     lines
-}
-
-// ============================================================================
-// MEDIA EXTRACTION VIA TEMP FILE
-// ============================================================================
-
-/// Write archive member bytes to a temp file with the correct extension,
-/// then delegate to the media extractor which needs a real file path.
-fn extract_media_from_bytes(
-    bytes: &[u8],
-    entry_name: &str,
-    cfg: &ExtractorConfig,
-) -> Result<Vec<IndexLine>> {
-    use std::io::Write;
-
-    let ext = Path::new(entry_name)
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
-
-    let mut tmp = tempfile::Builder::new()
-        .suffix(&format!(".{}", ext))
-        .tempfile()?;
-    tmp.write_all(bytes)?;
-    tmp.flush()?;
-
-    find_extract_media::extract(tmp.path(), cfg)
 }
