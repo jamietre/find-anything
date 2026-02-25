@@ -277,6 +277,7 @@ async fn handle_update(
         delete_paths: vec![],
         base_url: base_url.map(|s| s.to_string()),
         scan_timestamp: None,
+        indexing_failures: vec![],
     })
     .await
 }
@@ -295,6 +296,7 @@ async fn handle_delete(
         delete_paths: vec![rel_path.to_string()],
         base_url: base_url.map(|s| s.to_string()),
         scan_timestamp: None,
+        indexing_failures: vec![],
     })
     .await
 }

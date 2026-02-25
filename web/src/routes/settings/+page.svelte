@@ -5,6 +5,7 @@
 	import type { SourceInfo } from '$lib/api';
 	import Preferences from '$lib/Preferences.svelte';
 	import StatsPanel from '$lib/StatsPanel.svelte';
+	import ErrorsPanel from '$lib/ErrorsPanel.svelte';
 	import About from '$lib/About.svelte';
 	import { onMount } from 'svelte';
 
@@ -31,6 +32,14 @@
 		} else {
 			goto('/');
 		}
+	}
+
+	function handleErrorNavigate(e: CustomEvent<{ source: string; path: string }>) {
+		const p = new URLSearchParams();
+		p.set('view', 'file');
+		p.set('fsource', e.detail.source);
+		p.set('path', e.detail.path);
+		goto(`/?${p.toString()}`);
 	}
 </script>
 
@@ -60,6 +69,13 @@
 			</button>
 			<button
 				class="nav-item"
+				class:active={activeSection === 'errors'}
+				on:click={() => setSection('errors')}
+			>
+				Errors
+			</button>
+			<button
+				class="nav-item"
 				class:active={activeSection === 'about'}
 				on:click={() => setSection('about')}
 			>
@@ -71,12 +87,18 @@
 			{#if activeSection === 'preferences'}
 				<h2 class="content-title">Preferences</h2>
 				<Preferences {sources} />
+			{:else if activeSection === 'stats'}
+				<h2 class="content-title">Index Statistics</h2>
+				<StatsPanel />
+			{:else if activeSection === 'errors'}
+				<h2 class="content-title">Indexing Errors</h2>
+				<ErrorsPanel on:navigate={handleErrorNavigate} />
 			{:else if activeSection === 'about'}
 				<h2 class="content-title">About</h2>
 				<About />
 			{:else}
-				<h2 class="content-title">Index Statistics</h2>
-				<StatsPanel />
+				<h2 class="content-title">Preferences</h2>
+				<Preferences {sources} />
 			{/if}
 		</main>
 	</div>

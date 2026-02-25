@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use find_common::api::{detect_kind_from_ext, BulkRequest, IndexFile, IndexLine};
+use find_common::api::{detect_kind_from_ext, BulkRequest, IndexFile, IndexingFailure, IndexLine};
 
 use crate::api::ApiClient;
 
@@ -101,16 +101,19 @@ pub async fn submit_batch(
     source_name: &str,
     base_url: Option<&str>,
     batch: &mut Vec<IndexFile>,
+    failures: &mut Vec<IndexingFailure>,
     delete_paths: Vec<String>,
     scan_timestamp: Option<i64>,
 ) -> Result<()> {
     let files = std::mem::take(batch);
+    let indexing_failures = std::mem::take(failures);
     api.bulk(&BulkRequest {
         source: source_name.to_string(),
         files,
         delete_paths,
         base_url: base_url.map(|s| s.to_string()),
         scan_timestamp,
+        indexing_failures,
     })
     .await
 }

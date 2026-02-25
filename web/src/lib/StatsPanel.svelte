@@ -162,6 +162,12 @@
 				<div class="card-value">{fmtRelativeTime(currentSource.last_scan)}</div>
 				<div class="card-label">last scan</div>
 			</div>
+			{#if (currentSource.indexing_error_count ?? 0) > 0}
+				<a class="card card-errors" href="/settings?section=errors" title="View indexing errors">
+					<div class="card-value error-value">⚠ {currentSource.indexing_error_count}</div>
+					<div class="card-label">errors</div>
+				</a>
+			{/if}
 		</div>
 
 		<!-- Global metrics (shown once, not per-source) -->
@@ -292,6 +298,22 @@
 		color: var(--text-muted);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
+	}
+
+	.card-errors {
+		border-color: rgba(230, 162, 60, 0.4);
+		background: rgba(230, 162, 60, 0.06);
+		text-decoration: none;
+		color: inherit;
+	}
+
+	.card-errors:hover {
+		border-color: rgba(230, 162, 60, 0.7);
+		background: rgba(230, 162, 60, 0.12);
+	}
+
+	.error-value {
+		color: #e6a23c;
 	}
 
 	/* Global metrics strip */

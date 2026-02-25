@@ -26,6 +26,7 @@
 	let mtime: number | null = null;
 	let size: number | null = null;
 	let rawContent = '';
+	let indexingError: string | null = null;
 
 	// Detect if file is markdown
 	$: isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
@@ -72,6 +73,7 @@
 			highlightedCode = highlightFile(contents, path);
 			mtime = data.mtime;
 			size = data.size;
+			indexingError = data.indexing_error ?? null;
 		} catch (e) {
 			error = String(e);
 		} finally {
@@ -115,6 +117,11 @@
 	{:else if error}
 		<div class="status error">{error}</div>
 	{:else}
+		{#if indexingError}
+			<div class="indexing-error-banner">
+				⚠ Indexing error: <span class="error-text">{indexingError}</span>
+			</div>
+		{/if}
 		<div class="toolbar">
 			<button class="toolbar-btn" on:click={toggleWordWrap} title="Toggle word wrap">
 				{wordWrap ? '⊟' : '⊞'} Wrap
@@ -277,6 +284,24 @@
 
 	.toolbar-btn:active {
 		transform: translateY(1px);
+	}
+
+	.indexing-error-banner {
+		padding: 8px 16px;
+		background: rgba(230, 162, 60, 0.12);
+		border-bottom: 1px solid rgba(230, 162, 60, 0.3);
+		color: #e6a23c;
+		font-size: 12px;
+		display: flex;
+		align-items: baseline;
+		gap: 6px;
+		flex-shrink: 0;
+	}
+
+	.error-text {
+		color: var(--text-muted);
+		font-family: var(--font-mono);
+		word-break: break-all;
 	}
 
 	/* Markdown rendering styles — child selectors use :global() because the

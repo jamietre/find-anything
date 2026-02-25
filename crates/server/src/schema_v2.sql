@@ -39,3 +39,12 @@ CREATE VIRTUAL TABLE IF NOT EXISTS lines_fts USING fts5(
 
 -- Note: No triggers - FTS5 population is managed manually by worker
 -- Worker will INSERT INTO lines_fts(rowid, content) after reading from ZIP
+
+CREATE TABLE IF NOT EXISTS indexing_errors (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    path       TEXT    NOT NULL UNIQUE,
+    error      TEXT    NOT NULL,
+    first_seen INTEGER NOT NULL,
+    last_seen  INTEGER NOT NULL,
+    count      INTEGER NOT NULL DEFAULT 1
+);

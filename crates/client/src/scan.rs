@@ -8,7 +8,7 @@ use tracing::{info, warn};
 use walkdir::WalkDir;
 
 use find_common::{
-    api::IndexFile,
+    api::{IndexFile, IndexingFailure},
     config::{ExtractorConfig, ScanConfig},
 };
 
@@ -18,6 +18,8 @@ use crate::extract;
 
 const BATCH_SIZE: usize = 200;
 const BATCH_BYTES: usize = 8 * 1024 * 1024; // 8 MB
+const MAX_FAILURES_PER_BATCH: usize = 100;
+const MAX_ERROR_LEN: usize = 500;
 
 pub async fn run_scan(
     api: &ApiClient,
@@ -82,6 +84,7 @@ pub async fn run_scan(
     let mut completed: usize = 0;
     let mut batch: Vec<IndexFile> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_bytes: usize = 0;
+    let mut failures: Vec<IndexingFailure> = Vec::new();
 
     let cfg = ExtractorConfig::from_scan(scan);
 
@@ -95,7 +98,12 @@ pub async fn run_scan(
         let lines = match extract::extract(abs_path, &cfg) {
             Ok(l) => l,
             Err(e) => {
-                warn!("extract {}: {e:#}", abs_path.display());
+                let msg = format!("{e:#}");
+                let truncated = truncate_error(&msg, MAX_ERROR_LEN);
+                warn!("extract {}: {}", abs_path.display(), truncated);
+                if failures.len() < MAX_FAILURES_PER_BATCH {
+                    failures.push(IndexingFailure { path: rel_path.clone(), error: truncated });
+                }
                 vec![]
             }
         };
@@ -118,7 +126,7 @@ pub async fn run_scan(
 
             if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
                 info!("submitting batch — {completed}/{total} files completed");
-                submit_batch(api, source_name, base_url, &mut batch, vec![], None).await?;
+                submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
                 batch_bytes = 0;
             }
         }
@@ -133,7 +141,7 @@ pub async fn run_scan(
     if !to_delete.is_empty() {
         info!("deleting {} removed files", to_delete.len());
     }
-    submit_batch(api, source_name, base_url, &mut batch, to_delete, Some(now)).await?;
+    submit_batch(api, source_name, base_url, &mut batch, &mut failures, to_delete, Some(now)).await?;
 
     info!("scan complete — {total} files indexed");
     Ok(())
@@ -221,5 +229,18 @@ fn mtime_of(path: &Path) -> Option<i64> {
 
 fn size_of(path: &Path) -> Option<i64> {
     path.metadata().ok().map(|m| m.len() as i64)
+}
+
+/// Truncate `s` to at most `max` bytes at a UTF-8 char boundary, appending `…` if truncated.
+fn truncate_error(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        return s.to_string();
+    }
+    // Walk back from `max` to find a valid char boundary.
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &s[..end])
 }
 

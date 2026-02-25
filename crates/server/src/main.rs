@@ -108,6 +108,7 @@ async fn main() -> Result<()> {
         .route("/api/v1/settings",       get(routes::get_settings))
         .route("/api/v1/metrics",        get(routes::get_metrics))
         .route("/api/v1/stats",          get(routes::get_stats))
+        .route("/api/v1/errors",         get(routes::get_errors))
         .route("/api/v1/tree",           get(routes::list_dir))
         .route("/api/v1/admin/inbox",       get(routes::inbox_status).delete(routes::inbox_clear))
         .route("/api/v1/admin/inbox/retry", post(routes::inbox_retry))

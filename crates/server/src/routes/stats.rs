@@ -92,13 +92,15 @@ pub async fn get_stats(
                         total_size: 0,
                         by_kind: Default::default(),
                         history: vec![],
+                        indexing_error_count: 0,
                     });
                 }
                 let conn = db::open(&db_path)?;
                 let last_scan = db::get_last_scan(&conn)?;
                 let (total_files, total_size, by_kind) = db::get_stats(&conn)?;
                 let history = db::get_scan_history(&conn, 100)?;
-                Ok(SourceStats { name: source_name, last_scan, total_files, total_size, by_kind, history })
+                let indexing_error_count = db::get_indexing_error_count(&conn)?;
+                Ok(SourceStats { name: source_name, last_scan, total_files, total_size, by_kind, history, indexing_error_count })
             })
         })
         .collect();

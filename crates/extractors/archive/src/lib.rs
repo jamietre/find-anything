@@ -174,16 +174,27 @@ fn extract_7z(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
         let name = entry.name().to_string();
         // Check uncompressed size before allocating — skip reading oversized members.
         if entry.size() as usize > size_limit {
+            // In a solid 7z block, each file's compressed data is concatenated.
+            // Skipping without consuming bytes would corrupt all subsequent files in
+            // the block (their BoundedReader would start at the wrong offset).
+            // Drain the reader to advance the stream, even though we discard the data.
+            let _ = std::io::copy(reader, &mut std::io::sink());
             lines.extend(extract_member_bytes(vec![], &name, cfg, 1));
             return Ok(true);
         }
         let mut bytes = Vec::new();
         if let Err(e) = reader.read_to_end(&mut bytes) {
-            let member_path = std::path::Path::new(&name);
-            if find_extract_media::accepts(member_path) {
-                tracing::debug!("7z: skipping binary entry '{}': {}", name, e);
+            let msg = e.to_string();
+            if msg.contains("ChecksumVerificationFailed") {
+                // Shouldn't happen after the drain fix above, but handle defensively.
+                warn!("7z: checksum mismatch for '{}': {}", name, e);
             } else {
-                warn!("7z: failed to read entry '{}': {}", name, e);
+                let member_path = std::path::Path::new(&name);
+                if find_extract_media::accepts(member_path) {
+                    tracing::debug!("7z: skipping binary entry '{}': {}", name, e);
+                } else {
+                    warn!("7z: failed to read entry '{}': {}", name, e);
+                }
             }
             // bytes stays empty — filename still indexed below
         }

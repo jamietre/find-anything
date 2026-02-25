@@ -112,6 +112,15 @@ pub struct IndexFile {
     pub extract_ms: Option<u64>,
 }
 
+/// One extraction failure reported by the client.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct IndexingFailure {
+    /// Relative path of the file that failed extraction.
+    pub path: String,
+    /// Error message, truncated to MAX_ERROR_LEN characters.
+    pub error: String,
+}
+
 /// POST /api/v1/bulk request body.
 /// Combines upserts, deletes, and scan-complete into a single async operation.
 #[derive(Debug, Serialize, Deserialize)]
@@ -128,6 +137,9 @@ pub struct BulkRequest {
     /// If present, update the last_scan timestamp for this source.
     #[serde(default)]
     pub scan_timestamp: Option<i64>,
+    /// Extraction failures encountered during this scan batch.
+    #[serde(default)]
+    pub indexing_failures: Vec<IndexingFailure>,
 }
 
 /// One search result.
@@ -183,6 +195,9 @@ pub struct FileResponse {
     pub total_lines: usize,
     pub mtime: Option<i64>,
     pub size: Option<i64>,
+    /// Extraction error message for this file, if one was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexing_error: Option<String>,
 }
 
 /// GET /api/v1/files response entry (for deletion detection / Ctrl+P).
@@ -282,6 +297,27 @@ pub struct ScanHistoryPoint {
     pub total_size: i64,
 }
 
+/// One row from the server's `indexing_errors` table.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IndexingError {
+    pub path: String,
+    pub error: String,
+    /// Unix timestamp (seconds) when this error was first seen.
+    pub first_seen: i64,
+    /// Unix timestamp (seconds) when this error was last seen.
+    pub last_seen: i64,
+    /// How many scans have reported this error.
+    pub count: i64,
+}
+
+/// `GET /api/v1/errors` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ErrorsResponse {
+    pub errors: Vec<IndexingError>,
+    /// Total number of error rows (for pagination).
+    pub total: usize,
+}
+
 /// Stats for one source, returned by `GET /api/v1/stats`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceStats {
@@ -291,6 +327,9 @@ pub struct SourceStats {
     pub total_size: i64,
     pub by_kind: std::collections::HashMap<String, KindStats>,
     pub history: Vec<ScanHistoryPoint>,
+    /// Number of files with recorded indexing errors.
+    #[serde(default)]
+    pub indexing_error_count: usize,
 }
 
 /// `GET /api/v1/stats` response.

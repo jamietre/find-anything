@@ -109,7 +109,25 @@ fn process_request(data_dir: &Path, request_path: &Path) -> Result<()> {
         process_file(&conn, &mut archive_mgr, file)?;
     }
 
-    // 3. Metadata
+    // 3. Indexing error tracking
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    // Clear errors for successfully (re-)indexed paths.
+    let upserted: Vec<String> = request.files.iter().map(|f| f.path.clone()).collect();
+    db::clear_errors_for_paths(&conn, &upserted)?;
+
+    // Clear errors for explicitly deleted paths.
+    db::clear_errors_for_paths(&conn, &request.delete_paths)?;
+
+    // Store new extraction failures reported by the client.
+    if !request.indexing_failures.is_empty() {
+        db::upsert_indexing_errors(&conn, &request.indexing_failures, now)?;
+    }
+
+    // 4. Metadata
     if let Some(ts) = request.scan_timestamp {
         db::update_last_scan(&conn, ts)?;
         db::append_scan_history(&conn, ts)?;

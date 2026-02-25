@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 
-use find_common::api::{ContextLine, DirEntry, FileRecord, IndexFile, KindStats, ScanHistoryPoint};
+use find_common::api::{ContextLine, DirEntry, FileRecord, IndexFile, IndexingError, IndexingFailure, KindStats, ScanHistoryPoint};
 
 use crate::archive::{ArchiveManager, ChunkRef};
 
@@ -14,7 +14,7 @@ use crate::archive::{ArchiveManager, ChunkRef};
 
 /// The current schema version. Stored in SQLite's built-in `user_version` pragma.
 /// Increment this whenever the schema changes incompatibly.
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
@@ -23,6 +23,7 @@ pub fn open(db_path: &Path) -> Result<Connection> {
     conn.execute_batch(include_str!("schema_v2.sql"))
         .context("initialising schema")?;
     migrate_v3(&conn).context("v3 migration")?;
+    migrate_v4(&conn).context("v4 migration")?;
     Ok(conn)
 }
 
@@ -36,7 +37,12 @@ fn check_schema_version(conn: &Connection, db_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // Known incompatible future version.
+    // v3 is migratable to v4 (only adds the indexing_errors table, no incompatible changes).
+    if version == 3 {
+        return Ok(());
+    }
+
+    // Known incompatible future version or very old version.
     if version != 0 {
         anyhow::bail!(
             "database schema is v{version} but this server requires v{SCHEMA_VERSION}. \
@@ -83,6 +89,25 @@ fn migrate_v3(conn: &Connection) -> Result<()> {
              by_kind     TEXT    NOT NULL
          );
          PRAGMA user_version = 3;",
+    )?;
+    Ok(())
+}
+
+fn migrate_v4(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= 4 {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS indexing_errors (
+             id         INTEGER PRIMARY KEY AUTOINCREMENT,
+             path       TEXT    NOT NULL UNIQUE,
+             error      TEXT    NOT NULL,
+             first_seen INTEGER NOT NULL,
+             last_seen  INTEGER NOT NULL,
+             count      INTEGER NOT NULL DEFAULT 1
+         );
+         PRAGMA user_version = 4;",
     )?;
     Ok(())
 }
@@ -738,6 +763,101 @@ pub fn get_scan_history(conn: &Connection, limit: usize) -> Result<Vec<ScanHisto
         })?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
+}
+
+// ── Indexing errors ───────────────────────────────────────────────────────────
+
+/// Insert or update indexing errors. On conflict (same path), updates the error
+/// message, `last_seen`, and increments `count`.
+pub fn upsert_indexing_errors(
+    conn: &Connection,
+    failures: &[IndexingFailure],
+    now: i64,
+) -> Result<()> {
+    if failures.is_empty() {
+        return Ok(());
+    }
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt = tx.prepare_cached(
+            "INSERT INTO indexing_errors (path, error, first_seen, last_seen, count)
+             VALUES (?1, ?2, ?3, ?3, 1)
+             ON CONFLICT(path) DO UPDATE SET
+               error     = excluded.error,
+               last_seen = excluded.last_seen,
+               count     = count + 1",
+        )?;
+        for f in failures {
+            stmt.execute(params![f.path, f.error, now])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Delete all error rows for the given paths.
+pub fn clear_errors_for_paths(conn: &Connection, paths: &[String]) -> Result<()> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    // SQLite doesn't support parameterised IN lists easily; use one DELETE per path.
+    let tx = conn.unchecked_transaction()?;
+    {
+        let mut stmt =
+            tx.prepare_cached("DELETE FROM indexing_errors WHERE path = ?1")?;
+        for p in paths {
+            stmt.execute(params![p])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+/// Return a page of indexing errors ordered by `last_seen` descending.
+pub fn get_indexing_errors(
+    conn: &Connection,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<IndexingError>> {
+    let mut stmt = conn.prepare(
+        "SELECT path, error, first_seen, last_seen, count
+         FROM indexing_errors
+         ORDER BY last_seen DESC
+         LIMIT ?1 OFFSET ?2",
+    )?;
+    let rows = stmt
+        .query_map(params![limit as i64, offset as i64], |row| {
+            Ok(IndexingError {
+                path:       row.get(0)?,
+                error:      row.get(1)?,
+                first_seen: row.get(2)?,
+                last_seen:  row.get(3)?,
+                count:      row.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+/// Return the total number of rows in `indexing_errors`.
+pub fn get_indexing_error_count(conn: &Connection) -> Result<usize> {
+    let count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM indexing_errors", [], |r| r.get(0))?;
+    Ok(count as usize)
+}
+
+/// Return the error message for a single path, if one exists.
+pub fn get_indexing_error(conn: &Connection, path: &str) -> Result<Option<String>> {
+    let result = conn.query_row(
+        "SELECT error FROM indexing_errors WHERE path = ?1",
+        params![path],
+        |row| row.get(0),
+    );
+    match result {
+        Ok(s) => Ok(Some(s)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(e.into()),
+    }
 }
 
 /// Produce the upper-bound key for a prefix range scan by incrementing the last byte.

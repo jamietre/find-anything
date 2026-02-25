@@ -64,12 +64,14 @@ pub async fn get_file(
 
         let lines = db::get_file_lines(&conn, &archive_mgr, &full_path)?;
         let total_lines = lines.len();
+        let indexing_error = db::get_indexing_error(&conn, &full_path)?;
         Ok::<_, anyhow::Error>(FileResponse {
             lines,
             file_kind: kind,
             total_lines,
             mtime,
             size,
+            indexing_error,
         })
     })
     .await

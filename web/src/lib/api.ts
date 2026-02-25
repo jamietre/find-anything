@@ -33,6 +33,7 @@ export interface FileResponse {
 	total_lines: number;
 	mtime: number | null;
 	size: number | null;
+	indexing_error?: string;
 }
 
 export interface ContextResponse {
@@ -236,6 +237,7 @@ export interface SourceStats {
 	total_size: number;
 	by_kind: Record<string, KindStats>;
 	history: ScanHistoryPoint[];
+	indexing_error_count: number;
 }
 
 export interface StatsResponse {
@@ -250,5 +252,34 @@ export interface StatsResponse {
 export async function getStats(): Promise<StatsResponse> {
 	const resp = await apiFetch('/api/v1/stats');
 	if (!resp.ok) throw new Error(`getStats: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}
+
+// ── Indexing errors ───────────────────────────────────────────────────────────
+
+export interface IndexingError {
+	path: string;
+	error: string;
+	first_seen: number;
+	last_seen: number;
+	count: number;
+}
+
+export interface ErrorsResponse {
+	errors: IndexingError[];
+	total: number;
+}
+
+export async function getErrors(
+	source: string,
+	limit = 200,
+	offset = 0,
+): Promise<ErrorsResponse> {
+	const url = new URL('/api/v1/errors', location.origin);
+	url.searchParams.set('source', source);
+	url.searchParams.set('limit', String(limit));
+	url.searchParams.set('offset', String(offset));
+	const resp = await apiFetch(url.toString());
+	if (!resp.ok) throw new Error(`getErrors: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
