@@ -42,6 +42,10 @@
 	});
 
 	async function loadContext() {
+		if (result.line_number === 0) {
+			contextLoaded = true;
+			return;
+		}
 		try {
 			const resp = await fetchContext(
 				result.source,
@@ -81,15 +85,23 @@
 		on:keydown={handleKeydown}
 		role="button"
 		tabindex="0"
-		title="Open file at line {result.line_number}"
+		title={result.line_number > 0 ? `Open file at line ${result.line_number}` : 'Open file'}
 	>
 		<span class="badge">{result.source}</span>
 		<span class="file-path">{displayPath(result)}</span>
-		<span class="line-ref">:{result.line_number}</span>
+		{#if result.line_number > 0}
+			<span class="line-ref">:{result.line_number}</span>
+		{/if}
 	</div>
 
 	<div class="context-lines">
-		{#if contextLines.length > 0}
+		{#if result.line_number === 0}
+			<!-- Filename / metadata match — show snippet without line number -->
+			<div class="line match">
+				<span class="arrow meta-arrow">▶</span>
+				<code class="lc">{result.snippet}</code>
+			</div>
+		{:else if contextLines.length > 0}
 			{#each contextLines as content, i}
 				{@const lineNum = contextStart + i}
 				{@const isMatch = i === contextMatchIndex}
@@ -215,6 +227,10 @@
 		text-overflow: ellipsis;
 		flex: 1;
 		min-width: 0;
+	}
+
+	.meta-arrow {
+		padding-left: 60px;
 	}
 
 	.placeholder {

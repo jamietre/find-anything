@@ -4,13 +4,6 @@ This document tracks the development roadmap for find-anything, from completed f
 
 ---
 
-## Bugs
-
-[ ] Duplicate line 0 in web UI in archive inner files:
-
-./.local/share/pnpm/store/v3/files/66/7f618f25c199073cfc77211ab2ea78ef80870d262f8d1a0ee83cb31029a365d94a347d42764e0609bce6860900523b69ed52015c280f208ecccf286d05b5e6
-jamiet.tar.gz::./.local/share/pnpm/store/v3/files/66/7f618f25c199073cfc77211ab2ea78ef80870d262f8d1a0ee83cb31029a365d94a347d42764e0609bce6860900523b69ed52015c280f208ecccf286d05b5e6
-
 ## Recently Completed
 
 ### ✅ Core Search & Indexing (v0.1)

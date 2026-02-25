@@ -27,6 +27,8 @@
 	let size: number | null = null;
 	let rawContent = '';
 	let indexingError: string | null = null;
+	/** Metadata lines (line_number === 0, excluding the path line itself). */
+	let metaLines: { content: string }[] = [];
 
 	// Detect if file is markdown
 	$: isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
@@ -67,8 +69,17 @@
 	onMount(async () => {
 		try {
 			const data = await getFile(source, path, archivePath ?? undefined);
-			const contents = data.lines.map((l) => l.content);
-			lineOffsets = data.lines.map((l) => l.line_number);
+
+			// Separate line_number=0 entries (path + metadata) from numbered content.
+			// The first zero-line is the file's own path — already shown in the path bar,
+			// so we skip it. Any remaining zero-lines are metadata (EXIF, ID3, etc.).
+			const zeroLines = data.lines.filter((l) => l.line_number === 0);
+			const contentLines = data.lines.filter((l) => l.line_number > 0);
+
+			metaLines = zeroLines.slice(1).map((l) => ({ content: l.content }));
+
+			const contents = contentLines.map((l) => l.content);
+			lineOffsets = contentLines.map((l) => l.line_number);
 			rawContent = contents.join('\n');
 			highlightedCode = highlightFile(contents, path);
 			mtime = data.mtime;
@@ -140,6 +151,13 @@
 				{/if}
 			</div>
 		</div>
+		{#if metaLines.length > 0}
+			<div class="meta-panel">
+				{#each metaLines as meta}
+					<div class="meta-row">{meta.content}</div>
+				{/each}
+			</div>
+		{/if}
 		<div class="code-container">
 			{#if markdownFormat && isMarkdown}
 				<div class="markdown-content">
@@ -284,6 +302,21 @@
 
 	.toolbar-btn:active {
 		transform: translateY(1px);
+	}
+
+	.meta-panel {
+		padding: 8px 16px;
+		background: var(--bg-secondary);
+		border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--text-muted);
+		flex-shrink: 0;
+	}
+
+	.meta-row {
+		padding: 2px 0;
+		line-height: 1.6;
 	}
 
 	.indexing-error-banner {

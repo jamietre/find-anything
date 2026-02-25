@@ -24,12 +24,21 @@ outputs = ["node_modules"]
 # ── Rust server ───────────────────────────────────────────────────────────────
 
 [tasks.server]
-description = "Start the server, auto-rebuild on source changes (requires cargo-watch)"
+description = "Start the Rust API server, auto-rebuild on source changes (requires cargo-watch)"
 run = "cargo watch -w crates -x 'run -p find-server -- --config config/server.toml'"
 
 [tasks.server-once]
-description = "Start the server (single run, no watching)"
+description = "Start the Rust API server (single run, no watching)"
 run = "cargo run -p find-server -- --config config/server.toml"
+
+[tasks.dev]
+description = "Start Rust API + Vite dev server (full dev environment with live reload)"
+run = """
+cargo watch -w crates -x 'run -p find-server -- --config config/server.toml' &
+API_PID=$!
+trap "kill $API_PID 2>/dev/null" EXIT INT TERM
+pnpm --dir web dev
+"""
 
 # ── Client / scanning ─────────────────────────────────────────────────────────
 
@@ -48,10 +57,6 @@ run = [
 ]
 
 # ── Web UI ────────────────────────────────────────────────────────────────────
-
-[tasks.web]
-description = "Start the web UI dev server (hot-reloads on change)"
-run = "pnpm --dir web dev"
 
 [tasks.build-release]
 description = "Build web UI then compile find-server release binary with embedded assets"
