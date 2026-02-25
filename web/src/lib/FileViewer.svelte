@@ -25,6 +25,7 @@
 	let lineOffsets: number[] = [];
 	let mtime: number | null = null;
 	let size: number | null = null;
+	let fileKind: string | null = null;
 	let rawContent = '';
 	let indexingError: string | null = null;
 	/** Metadata lines (line_number === 0, excluding the path line itself). */
@@ -84,6 +85,7 @@
 			highlightedCode = highlightFile(contents, path);
 			mtime = data.mtime;
 			size = data.size;
+			fileKind = data.file_kind ?? null;
 			indexingError = data.indexing_error ?? null;
 		} catch (e) {
 			error = String(e);
@@ -143,6 +145,9 @@
 				</button>
 			{/if}
 			<div class="metadata">
+				{#if fileKind}
+					<span class="meta-item kind-badge" title="File type">{fileKind}</span>
+				{/if}
 				{#if size !== null}
 					<span class="meta-item" title="File size">{formatSize(size)}</span>
 				{/if}
@@ -163,6 +168,8 @@
 				<div class="markdown-content">
 					{@html renderedMarkdown}
 				</div>
+			{:else if codeLines.length === 0 && metaLines.length === 0}
+				<div class="no-content">No text content or metadata available for this file.</div>
 			{:else}
 				<table class="code-table" cellspacing="0" cellpadding="0">
 					<tbody>
@@ -235,7 +242,9 @@
 	}
 
 	.td-ln {
+		width: 1%;
 		min-width: 52px;
+		white-space: nowrap;
 		padding: 0 12px 0 8px;
 		text-align: right;
 		color: var(--text-dim);
@@ -245,6 +254,7 @@
 
 	.td-arrow {
 		width: 16px;
+		white-space: nowrap;
 		color: var(--accent);
 		font-size: 10px;
 		user-select: none;
@@ -252,6 +262,7 @@
 	}
 
 	.td-code {
+		width: 100%;
 		padding: 0 16px 0 4px;
 		white-space: pre;
 		vertical-align: top;
@@ -282,6 +293,23 @@
 	.meta-item {
 		display: flex;
 		align-items: center;
+	}
+
+	.kind-badge {
+		text-transform: uppercase;
+		font-size: 10px;
+		letter-spacing: 0.05em;
+		background: var(--bg-hover);
+		border: 1px solid var(--border);
+		border-radius: 3px;
+		padding: 1px 6px;
+	}
+
+	.no-content {
+		padding: 24px;
+		color: var(--text-dim);
+		font-size: 13px;
+		text-align: center;
 	}
 
 	.toolbar-btn {

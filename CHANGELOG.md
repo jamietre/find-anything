@@ -12,25 +12,25 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Added
 - **File viewer metadata panel** — `line_number=0` entries that carry file metadata (EXIF tags, ID3 tags, etc.) are now shown in a dedicated panel above the code area, without line numbers; the file's own path line is omitted entirely since it is already displayed in the path bar
 - **Search result filename/metadata match display** — results matched by filename or metadata (`line_number=0`) no longer display `:0` in the result header and show the matched snippet directly without a line number column; context is not fetched for these results
-- **`mise server` full dev environment** — `mise server` now starts both the Rust API server (via cargo-watch) and the Vite dev server together, giving live reload for both Rust and Svelte/TypeScript changes; the old single-process task is available as `mise api`
-
-### Previously Added
+- **`mise dev` full dev environment** — `mise dev` now starts both the Rust API server (via cargo-watch) and the Vite dev server together, giving live reload for both Rust and Svelte/TypeScript changes
+- **File viewer code table layout** — fixed table column widths so the code column claims all available horizontal space; previously `table-layout: auto` distributed spare width across all columns, making the line-number column much wider than needed and pushing code content toward the centre
+- **Unified extraction dispatch** (`find-extract-dispatch` crate) — new crate that is the single source of truth for bytes-based content extraction; both the archive extractor and `find-client` now route all non-archive content through the same full pipeline (PDF → media → HTML → office → EPUB → PE → text → MIME fallback); archive members gain HTML, Office document, EPUB, and PE extraction that was previously only applied to regular files; eliminates a class of bugs where features added to the regular-file path were not reflected in archive-member extraction
 - **Indexing error reporting** — extraction failures are now tracked end-to-end: the client reports them in each bulk upload, the server stores them in a new `indexing_errors` table (schema v4), and the UI surfaces them in a new **Errors** panel in Settings; the file detail view shows an amber warning banner when a file had an extraction error; the Stats panel shows an error count badge per source
 - **`find-admin` binary** — unified administrative utility replacing `find-config`; subcommands: `config`, `stats`, `sources`, `check`, `inbox`, `inbox-clear`, `inbox-retry`
 - **Admin inbox endpoints** — `GET /api/v1/admin/inbox` (list pending/failed files), `DELETE /api/v1/admin/inbox?target=pending|failed|all`, `POST /api/v1/admin/inbox/retry`; all require bearer-token auth
 - **Disk usage stats** — statistics dashboard now shows SQLite DB size and ZIP archive size
-
-### Removed
-- **`find-config` binary** — replaced by `find-admin config`
-
-### Added
 - **`find-server --config` flag** — `find-server` now uses `--config <PATH>` (consistent with `find-scan`, `find-watch`, and `find-anything`); the flag defaults to `$XDG_CONFIG_HOME/find-anything/server.toml`, `/etc/find-anything/server.toml` when running as root, or `~/.config/find-anything/server.toml` otherwise; overridable with `FIND_ANYTHING_SERVER_CONFIG`
 - **CLI reference** — new `docs/cli.md` with comprehensive documentation for all binaries: `find-server`, `find-scan`, `find-watch`, `find-anything`, `find-admin` (all subcommands), full config references, and extractor binary table
 - **Startup schema check** — `find-server` now validates the schema version of every existing source database at startup and exits with a clear error if any are incompatible, rather than failing on the first query
 - **`find-admin inbox-show <name>`** — new subcommand that decodes and summarises a named inbox item (by filename, with or without `.gz`); searches the pending queue first, then failed; marks the result `[FAILED]` if found in the failed queue; accepts `--json` for raw output; implemented via a new `GET /api/v1/admin/inbox/show?name=<name>` endpoint
 - **Exclude patterns applied to archive members** — `scan.exclude` globs (e.g. `**/node_modules/**`, `**/target/**`) now filter archive members in the same way they filter filesystem paths; previously, archives containing excluded directories (such as Lambda deployment ZIPs with bundled `node_modules`) would index all their members regardless of the exclude config
 
+### Removed
+- **`find-config` binary** — replaced by `find-admin config`
+
 ### Fixed
+- **Archive members misidentified as `text`** — files inside archives with unknown or binary extensions (e.g. ELF executables, `.deb` packages, files with no extension) were previously labelled `text`; dispatch now always emits a `[FILE:mime]` line for binary content using `infer` with an `application/octet-stream` fallback; `detect_kind_from_ext` now returns `"unknown"` for unrecognised extensions instead of `"text"`; the scan pipeline promotes `"unknown"` to `"text"` only when content inspection confirms the bytes are text
+- **`mise dev` Ctrl+C not stopping server** — hitting Ctrl+C left `find-server` running and caused `address already in use` on the next start; `cargo-watch` is now launched via `setsid` so it leads its own process group, and the trap sends `SIGTERM` to the entire group (cargo-watch + cargo run + find-server) rather than just the top-level process
 - **Streaming archive extraction** — archive members are now processed one at a time via a bounded channel; lines for each member are freed after the batch is submitted, keeping memory usage proportional to one member rather than the whole archive; nested ZIP archives that fit within `max_temp_file_mb` are extracted in-memory (no disk I/O), larger ones spill to a temp file, and nested 7z archives always use a temp file (required by the 7z API); nested TAR variants are streamed directly with zero extra allocation
 - **Archive scan progress** — `find-scan` now logs `extracting archive <name> (N/M)` when it begins processing each archive, so long-running extractions are visible rather than appearing stuck at `0/M files completed`
 - **Archive batch progress log** — the mid-archive batch submission log now shows per-batch member count alongside the cumulative total (e.g. `102 members, 302 total`), making it clear when the 8 MB byte limit (rather than the 200-item count limit) triggered the flush
