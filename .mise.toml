@@ -35,11 +35,17 @@ run = "cargo run -p find-server -- config/server.toml"
 
 [tasks.scan]
 description = "Incremental scan of all configured sources"
-run = "cargo run -p find-client --bin find-scan -- --config config/client.toml"
+run = [
+  "cargo build --workspace",
+  "cargo run -p find-client --bin find-scan -- --config config/client.toml",
+]
 
 [tasks.scan-full]
 description = "Full (non-incremental) scan of all configured sources"
-run = "cargo run -p find-client --bin find-scan -- --config config/client.toml --full"
+run = [
+  "cargo build --workspace",
+  "cargo run -p find-client --bin find-scan -- --config config/client.toml --full",
+]
 
 # ── Web UI ────────────────────────────────────────────────────────────────────
 

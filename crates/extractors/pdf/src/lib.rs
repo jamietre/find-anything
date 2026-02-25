@@ -22,6 +22,21 @@ pub fn extract(path: &Path, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLi
 /// into multiple indexed lines, which makes long PDF paragraphs searchable and
 /// provides meaningful surrounding context.
 pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+    // Pre-check for encryption before calling pdf-extract.
+    // We scan the raw bytes for the PDF name token "/Encrypt" rather than loading
+    // the document with lopdf, because lopdf::Document::load_mem() itself triggers
+    // "corrupt deflate stream" warnings when it encounters encrypted content streams
+    // during structural parsing.  The /Encrypt name appears verbatim in the file
+    // structure of every encrypted PDF and is not present in unencrypted ones.
+    if bytes.windows(8).any(|w| w == b"/Encrypt") {
+        eprintln!("PDF is password-protected, content not indexed: {name}");
+        return Ok(vec![IndexLine {
+            archive_path: None,
+            line_number: 1,
+            content: "Content encrypted".to_string(),
+        }]);
+    }
+
     // pdf-extract can panic on malformed PDFs; catch_unwind turns that into
     // a recoverable error so the scan can continue with other files.
     //
