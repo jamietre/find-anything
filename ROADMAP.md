@@ -173,6 +173,28 @@ holding the full content in RAM.
 
 ---
 
+### 🟡 Improve 7z Archive Compatibility
+The current `sevenz-rust` crate produces `ChecksumVerificationFailed` errors for
+a significant number of entries in real-world `.7z` archives (observed: many image
+and some text files unreadable). Affected entries fall back to filename-only
+indexing — content is silently missing. Investigate alternatives:
+
+- **Check `sevenz-rust` options** — see if the crate exposes a flag to skip or
+  tolerate checksum failures and still return the (possibly corrupt) bytes; even
+  partial content is better than none for text files
+- **Shell out to system `7z`/`7za` binary** — spawn `7za e -so archive.7z member`
+  to stream a single member to stdout; most reliable since it uses the reference
+  implementation; requires `7z` in PATH (opt-in via config, e.g.
+  `[scan.archives] use_system_7z = true`)
+- **Evaluate `lzma-rs` or other crates** — survey the Rust ecosystem for 7z
+  libraries with better real-world compatibility
+- **Graceful partial extraction** — regardless of extractor chosen, always emit
+  the filename line for every member even when content extraction fails (current
+  behaviour), and log a per-entry warning at DEBUG level for binary types that are
+  expected to fail (images, video) to reduce log noise
+
+---
+
 ### 🟡 Archive Extractor Test Coverage
 Add automated tests for the archive extractor using fixture files checked into the
 repo:
