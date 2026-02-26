@@ -45,15 +45,13 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> an
     // the panic output (the default hook prints no context about which file
     // triggered the panic).
     let name_for_hook = name.to_string();
-    let _prev_hook = std::panic::take_hook();
+    let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        error!("pdf-extract panicked while processing: {name_for_hook}");
-        error!("{info}");
+        error!("PDF extraction panicked for {name_for_hook}: {info}");
     }));
     let bytes_clone = bytes.to_vec();
     let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes_clone));
-    // Restore default hook
-    let _prev = std::panic::take_hook();
+    std::panic::set_hook(prev_hook);
 
     let text = match result {
         Ok(Ok(t)) => t,
@@ -61,10 +59,7 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> an
             warn!("PDF extraction error for {name}: {e}");
             return Ok(vec![]);
         }
-        Err(_) => {
-            error!("PDF extraction panicked for {name} (see panic output above)");
-            return Ok(vec![]);
-        }
+        Err(_) => return Ok(vec![]),
     };
 
     let mut lines = Vec::new();
