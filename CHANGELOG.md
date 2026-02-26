@@ -16,7 +16,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 - **Clippy warnings** — fixed three clippy lints that were failing CI: `single_component_path_imports` in `scan.rs`, `collapsible_if` in `routes/admin.rs`, `collapsible_else_if` in `admin_main.rs`
 
-### Added (previously)
+### Added
 - **File viewer metadata panel** — `line_number=0` entries that carry file metadata (EXIF tags, ID3 tags, etc.) are now shown in a dedicated panel above the code area, without line numbers; the file's own path line is omitted entirely since it is already displayed in the path bar
 - **Search result filename/metadata match display** — results matched by filename or metadata (`line_number=0`) no longer display `:0` in the result header and show the matched snippet directly without a line number column; context is not fetched for these results
 - **`mise dev` full dev environment** — `mise dev` now starts both the Rust API server (via cargo-watch) and the Vite dev server together, giving live reload for both Rust and Svelte/TypeScript changes
