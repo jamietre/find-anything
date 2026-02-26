@@ -268,6 +268,14 @@ max_depth = 10    # max nesting depth (guards against zip bombs)
 [watch]
 debounce_ms   = 500               # ms of silence before processing events
 extractor_dir = "/usr/local/bin"  # optional; auto-detected if omitted
+
+[log]
+# Suppress noisy log messages matching any of these regular expressions.
+# Patterns are matched against "target: message" (e.g. "find_extract_pdf: ...").
+# Default suppresses high-volume glyph warnings from pdf-extract.
+ignore = [
+    "find_extract_pdf: unknown glyph name",
+]
 ```
 
 ---
