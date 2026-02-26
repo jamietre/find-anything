@@ -5,6 +5,7 @@ use tracing::warn;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     pub server: ServerConfig,
+    #[serde(default)]
     pub sources: Vec<SourceConfig>,
     #[serde(default)]
     pub scan: ScanConfig,
@@ -296,13 +297,19 @@ pub fn default_server_config_path() -> String {
 ///
 /// 1. `FIND_ANYTHING_CONFIG` environment variable (if set)
 /// 2. `$XDG_CONFIG_HOME/find-anything/client.toml` (if `XDG_CONFIG_HOME` is set)
-/// 3. `~/.config/find-anything/client.toml` (default)
+/// 3. `/etc/find-anything/client.toml` (when running as root, e.g. system service)
+/// 4. `~/.config/find-anything/client.toml` (default)
 pub fn default_config_path() -> String {
     if let Ok(p) = std::env::var("FIND_ANYTHING_CONFIG") {
         return p;
     }
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         return format!("{xdg}/find-anything/client.toml");
+    }
+    // Running as root → system-wide config location used by service units.
+    #[cfg(unix)]
+    if unsafe { libc::getuid() } == 0 {
+        return "/etc/find-anything/client.toml".into();
     }
     let home = std::env::var("HOME").unwrap_or_default();
     format!("{home}/.config/find-anything/client.toml")

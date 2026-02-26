@@ -31,6 +31,11 @@ crates/
     ├── text/                 # Plain text, source code, Markdown + frontmatter
     ├── pdf/                  # PDF text extraction (pdf-extract)
     ├── media/                # Image EXIF, audio tags, video metadata
+    ├── html/                 # HTML tag stripping, title/description metadata
+    ├── office/               # DOCX, XLSX, PPTX extraction
+    ├── epub/                 # EPUB spine + metadata extraction
+    ├── pe/                   # PE (Windows executable) metadata
+    ├── dispatch/             # Unified bytes-based dispatch — single source of truth
     └── archive/              # ZIP / TAR / GZ / BZ2 / XZ / 7Z + orchestration
 ```
 
@@ -42,25 +47,28 @@ Each extractor is **both a library and a standalone binary**:
 - **Binary** – standalone CLI for future use by `find-scan-watch` (subprocess mode)
 
 ```
-find-extract-text   [~2 MB]   gray_matter, serde_yaml, content_inspector
-find-extract-pdf    [~10 MB]  pdf-extract
-find-extract-media  [~15 MB]  kamadak-exif, id3, metaflac, mp4ameta, audio-video-metadata
-find-extract-archive [~6 MB]  zip, tar, flate2, bzip2, xz2, sevenz-rust
-                              + all three other extractor libs (for member delegation)
+find-extract-text    [~2 MB]   gray_matter, serde_yaml, content_inspector
+find-extract-pdf     [~10 MB]  pdf-extract
+find-extract-media   [~15 MB]  kamadak-exif, id3, metaflac, mp4ameta, audio-video-metadata
+find-extract-html    [~3 MB]   scraper (html5ever)
+find-extract-office  [~5 MB]   calamine, quick-xml
+find-extract-epub    [~3 MB]   quick-xml
+find-extract-pe      [~2 MB]   goblin
+find-extract-dispatch [~1 MB]  infer + all above extractor libs (unified dispatch)
+find-extract-archive  [~6 MB]  zip, tar, flate2, bzip2, xz2, sevenz-rust2
+                               + find-extract-dispatch (member delegation via dispatch)
 ```
 
 Dependency diagram (runtime linkage in `find-scan`):
 
 ```
-find-scan
-  ├─ find-common          (API types, config, fuzzy)
-  ├─ find-extract-text    (lib)
-  ├─ find-extract-pdf     (lib)
-  ├─ find-extract-media   (lib)
-  └─ find-extract-archive (lib)
-       ├─ find-extract-text  (delegates text members)
-       ├─ find-extract-pdf   (delegates PDF members, in-memory)
-       └─ find-extract-media (delegates media members, via tempfile)
+find-common
+    ↑
+find-extract-{text, pdf, media, html, office, epub, pe}
+    ↑
+find-extract-dispatch   ← single source of truth for bytes-based dispatch
+    ↑               ↑
+find-extract-archive   find-client (find-scan)
 
 find-server
   └─ find-common          (no extractors – lean binary)
@@ -152,22 +160,71 @@ Archive files (`kind="archive"`) expand in the tree like directories.
 
 ## Archive Extractor: Member Delegation
 
-The archive extractor acts as an **orchestrator** that delegates to other extractors
-based on each member's file type:
+The archive extractor acts as an **orchestrator**: it decompresses archive members one
+at a time and delegates each member's bytes to `find-extract-dispatch`, which applies
+the same priority-ordered extraction pipeline used for regular files.
 
 ```
 archive.zip
-  ├── report.pdf   → find_extract_pdf::extract_from_bytes()   (in-memory, no temp file)
-  ├── notes.txt    → find_extract_text::lines_from_str()       (in-memory)
-  ├── photo.jpg    → find_extract_media::extract()             (temp file, then delete)
+  ├── report.pdf   → dispatch_from_bytes() → find_extract_pdf
+  ├── notes.txt    → dispatch_from_bytes() → find_extract_text
+  ├── photo.jpg    → dispatch_from_bytes() → find_extract_media
+  ├── document.docx→ dispatch_from_bytes() → find_extract_office   ← same as regular files
+  ├── page.html    → dispatch_from_bytes() → find_extract_html      ← same as regular files
   ├── nested.zip   → recursive extraction (in-memory via Cursor)
-  └── data.log.gz  → decompress in-memory, index as text
+  ├── data.log.gz  → decompress in-memory, dispatch as text
+  └── qjs (ELF)   → dispatch_from_bytes() → MIME fallback → [FILE:mime] application/x-elf
 ```
+
+**Dispatch priority order** (identical for archive members and regular files):
+PDF → Media → HTML → Office → EPUB → PE → Text → MIME fallback
+
+**MIME fallback**: For unrecognised binary content, dispatch emits a `line_number=0` line
+`[FILE:mime] <mime>` (e.g. `application/x-elf`). The caller uses this to set the file's
+`kind` accurately instead of falling back to `"unknown"`.
 
 **Supported archive formats**: ZIP, TAR, TAR.GZ, TAR.BZ2, TAR.XZ, GZ, BZ2, XZ, 7Z
 
 **Depth limiting**: Controlled by `scan.archives.max_depth` (default: 10). When exceeded,
 only the filename is indexed and a warning is logged.
+
+---
+
+## Content Extraction: Memory Model
+
+**All extraction is fully in-memory.** There is no true byte-level streaming.
+
+| Path | Code | Memory behaviour |
+|------|------|-----------------|
+| Regular file | `dispatch_from_path` → `std::fs::read(path)` | Whole file buffered into `Vec<u8>` |
+| Archive member | `read_to_end(&mut bytes)` inside extractor loop | Whole member buffered into `Vec<u8>` |
+| Nested archive | Recursive `find_extract_archive::extract_from_bytes` | Member bytes already in `Vec<u8>` |
+
+"Streaming" in the current architecture means **iterating archive members one at a
+time** — while one member is being extracted, the rest of the archive has not been
+read. Each individual member is still fully buffered.
+
+### Memory cap (`max_size_kb`)
+
+`ExtractorConfig::max_size_kb` (derived from `scan.archives.max_member_size_mb` in
+`scan.toml`) is the per-member memory limit:
+
+- **Regular files**: skipped entirely if `fs::metadata().len() > max_size_kb * 1024`
+  (checked in `dispatch_from_path` before reading).
+- **Archive members**: guarded by `take(max_size_kb * 1024 + 1)` as a hard cap on
+  the actual `read_to_end` call, independent of what the archive header reports.
+  If a member exceeds the limit, only its filename line is indexed and the
+  remainder of the member stream is drained to keep the decompressor in sync.
+
+The `take()` guard is the critical safeguard against OOM. Some archive formats
+(notably solid 7z blocks) report `entry.size() = 0` for all entries, so a
+pre-read size check alone cannot prevent allocating the full decompressed member.
+
+### Future: streaming extractor API
+
+The intended long-term improvement is to allow extractors to accept `impl Read`
+in addition to `&[u8]`, so large members can be piped through without buffering.
+See the Roadmap section "Memory-Safe Archive Extraction (Streaming)".
 
 ---
 
@@ -287,8 +344,13 @@ content is returned verbatim in the JSON response.
 | `crates/extractors/text/src/lib.rs` | Text + Markdown frontmatter extraction |
 | `crates/extractors/pdf/src/lib.rs` | PDF extraction (with catch_unwind) |
 | `crates/extractors/media/src/lib.rs` | Image EXIF, audio tags, video metadata |
-| `crates/extractors/archive/src/lib.rs` | Archive extraction + orchestration |
-| `crates/client/src/extract.rs` | Dispatcher: routes files to extractor libs |
+| `crates/extractors/html/src/lib.rs` | HTML text extraction + metadata |
+| `crates/extractors/office/src/lib.rs` | DOCX / XLSX / PPTX extraction |
+| `crates/extractors/epub/src/lib.rs` | EPUB spine + metadata extraction |
+| `crates/extractors/pe/src/lib.rs` | PE (Windows executable) metadata |
+| `crates/extractors/dispatch/src/lib.rs` | Unified bytes-based dispatch + `mime_to_kind` |
+| `crates/extractors/archive/src/lib.rs` | Archive format iteration + orchestration |
+| `crates/client/src/extract.rs` | Top-level dispatcher: archive vs. dispatch_from_path |
 | `crates/client/src/scan.rs` | Filesystem walk, batch building, submission |
 | `crates/server/src/worker.rs` | Inbox polling loop + BulkRequest processing |
 | `crates/server/src/archive.rs` | ZIP archive management + chunk_lines() |

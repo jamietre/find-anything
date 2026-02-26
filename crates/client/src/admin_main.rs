@@ -9,7 +9,7 @@ mod api;
 #[derive(Parser)]
 #[command(name = "find-admin", about = "Administrative utilities for find-anything")]
 struct Args {
-    /// Path to client config file (default: ~/.config/find-anything/client.toml)
+    /// Path to client config file (default: /etc/find-anything/client.toml as root, else ~/.config/find-anything/client.toml)
     #[arg(long, global = true)]
     config: Option<String>,
     /// Output raw JSON instead of human-readable text

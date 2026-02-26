@@ -167,8 +167,15 @@ fn zip_from_archive<R: Read + std::io::Seek>(
             callback(make_filename_line(&name));
             continue;
         }
+        // Use take() as a hard memory bound: entry.size() can be wrong for
+        // streaming ZIPs with data descriptors, so guard the actual read too.
         let mut bytes = Vec::new();
-        if let Err(e) = entry.read_to_end(&mut bytes) {
+        let read_result = (&mut entry as &mut dyn Read).take((size_limit + 1) as u64).read_to_end(&mut bytes);
+        if bytes.len() > size_limit {
+            callback(make_filename_line(&name));
+            continue;
+        }
+        if let Err(e) = read_result {
             let member_path = std::path::Path::new(&name);
             if find_extract_media::accepts(member_path) {
                 tracing::debug!("zip: skipping binary entry '{}': {}", name, e);
@@ -215,8 +222,16 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cf
             callback(make_filename_line(&name));
             continue;
         }
+        // Use take() as a hard memory bound in case the header size was wrong.
+        // The tar crate drains remaining entry bytes on Entry::drop(), so a
+        // partial read here won't desync the stream.
         let mut bytes = Vec::new();
-        if let Err(e) = entry.read_to_end(&mut bytes) {
+        let read_result = (&mut entry as &mut dyn Read).take((size_limit + 1) as u64).read_to_end(&mut bytes);
+        if bytes.len() > size_limit {
+            callback(make_filename_line(&name));
+            continue;
+        }
+        if let Err(e) = read_result {
             let member_path = std::path::Path::new(&name);
             if find_extract_media::accepts(member_path) {
                 tracing::debug!("tar: skipping binary entry '{}': {}", name, e);
@@ -254,15 +269,30 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
             }
         }
 
-        // Check uncompressed size before allocating.
+        // Fast-path: skip known-oversized entries immediately.
+        // entry.size() can return 0 for some 7z entries (solid archives where the
+        // per-file size isn't stored in SubStreamsInfo, or "empty file" markers),
+        // so we also guard the actual read with take() below.
         if entry.size() as usize > size_limit {
             // Drain the reader to keep solid-block stream in sync.
             let _ = std::io::copy(reader, &mut std::io::sink());
             callback(make_filename_line(&name));
             return Ok(true);
         }
+        // Bound the read to size_limit+1 bytes regardless of what entry.size()
+        // reported.  If we hit the cap the entry was larger than the limit
+        // (entry.size() was 0 or wrong); drain remainder and skip content.
         let mut bytes = Vec::new();
-        if let Err(e) = reader.read_to_end(&mut bytes) {
+        let read_result = {
+            let mut limited = (&mut *reader).take((size_limit + 1) as u64);
+            limited.read_to_end(&mut bytes)
+        };
+        if bytes.len() > size_limit {
+            let _ = std::io::copy(reader, &mut std::io::sink());
+            callback(make_filename_line(&name));
+            return Ok(true);
+        }
+        if let Err(e) = read_result {
             let msg = e.to_string();
             if msg.contains("ChecksumVerificationFailed") {
                 // Shouldn't happen after the drain fix, but handle defensively.

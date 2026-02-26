@@ -11,7 +11,7 @@ use find_common::config::{default_config_path, parse_client_config};
 #[derive(Parser)]
 #[command(name = "find-scan", about = "Index files and submit to find-anything server")]
 struct Args {
-    /// Path to client config file (default: ~/.config/find-anything/client.toml)
+    /// Path to client config file (default: /etc/find-anything/client.toml as root, else ~/.config/find-anything/client.toml)
     #[arg(long)]
     config: Option<String>,
 
@@ -37,6 +37,11 @@ async fn main() -> Result<()> {
     let config = parse_client_config(&config_str)?;
 
     let client = api::ApiClient::new(&config.server.url, &config.server.token);
+
+    if config.sources.is_empty() {
+        tracing::info!("No sources configured — nothing to scan.");
+        return Ok(());
+    }
 
     // Scan all configured sources
     for source in &config.sources {

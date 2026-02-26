@@ -50,6 +50,10 @@ Current plan files are stored in `docs/plans/`:
 
 ## Architecture
 
+> **Full architecture reference**: `docs/ARCHITECTURE.md` — crate structure, dependency
+> graph, write/read paths, content storage, extraction memory model, server routes,
+> web UI structure, and key invariants. The sections below are a condensed summary.
+
 ### High-level overview
 
 find-anything is a two-process system:

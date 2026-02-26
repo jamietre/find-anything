@@ -155,6 +155,21 @@ RBAC is planned for a future release.
 
 ## Near-term Priorities
 
+### 🔴 Bug: Scan Should Delete Before Adding
+
+When `find-scan` processes a batch, files to be removed and files to be added/updated
+are submitted in the same `BulkRequest`. The server worker already processes deletes
+before upserts within a single request. However, when a scan spans multiple batches,
+a deletion in a later batch may arrive after an addition from an earlier batch —
+meaning a renamed file's new path could be indexed before the old path is cleaned up,
+or a re-indexed file could briefly have duplicate entries.
+
+Fix: ensure that when building batches, all deletions are flushed (and confirmed by
+the server) before the first addition batch is sent. This makes the scan
+delete-first at the batch boundary level, not just within a single bulk request.
+
+---
+
 ### 🔴 File Serving & Share URL Mapping (High Priority)
 
 Map source names to base URLs in `server.toml` and expose a server endpoint that
@@ -178,11 +193,22 @@ download any indexed file directly.
 
 ### 🟡 Memory-Safe Archive Extraction (Streaming)
 
-Currently archive members are fully buffered into a `Vec<u8>` before extraction.
-The per-member size pre-check prevents OOM for most cases, but a better long-term
-approach is streaming extraction so that even large members can be indexed without
-holding the full content in RAM.
+Currently all extraction is **fully in-memory**: `dispatch_from_path` calls
+`std::fs::read()` and archive members use `read_to_end()`. "Streaming" in the
+current code means iterating one archive member at a time, not true byte-level
+streaming — each individual member is still fully buffered into a `Vec<u8>`.
 
+**Partial fix applied**: All three archive extractors (ZIP, TAR, 7z) now use
+`take(size_limit + 1)` as a hard memory bound on reads, preventing OOM when an
+archive's size header reports 0 (a known issue with solid 7z blocks where
+`entry.size()` is set to 0 for all entries in the block).
+
+The longer-term improvement is to have extractors accept **either a stream or a
+byte slice** so large members can be indexed without holding the full content in RAM:
+
+- **Extractor API** — each extractor's `extract_from_*` accepts `impl Read` in
+  addition to `&[u8]`; the bytes path remains for callers that already have the
+  buffer (e.g. nested archive recursion)
 - **Streaming text extraction** — pipe member bytes directly into the line iterator
   without buffering the whole member; only the current line needs to be in memory
 - **Temp-file fallback** — for extractors that require a seekable file (PDF, Office

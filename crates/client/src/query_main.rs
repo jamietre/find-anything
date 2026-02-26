@@ -36,7 +36,7 @@ struct Args {
     #[arg(long)]
     no_color: bool,
 
-    /// Path to client config file (default: ~/.config/find-anything/client.toml)
+    /// Path to client config file (default: /etc/find-anything/client.toml as root, else ~/.config/find-anything/client.toml)
     #[arg(long)]
     config: Option<String>,
 }
