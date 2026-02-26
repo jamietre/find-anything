@@ -15,12 +15,13 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 use clap::Parser;
 
 use find_common::api::WorkerStatus;
 use find_common::config::{default_server_config_path, parse_server_config, ServerAppConfig};
+use find_common::logging::LogIgnoreFilter;
 
 #[derive(Parser)]
 #[command(name = "find-server", about = "find-anything index server")]
@@ -81,7 +82,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| "warn,find_server=info,tower_http=info".into()))
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_filter(LogIgnoreFilter))
         .init();
 
     let args = Args::parse();
@@ -90,6 +91,10 @@ async fn main() -> Result<()> {
     let config_str = std::fs::read_to_string(&config_path)
         .with_context(|| format!("reading config: {config_path}"))?;
     let config = parse_server_config(&config_str)?;
+
+    if let Err(e) = find_common::logging::set_ignore_patterns(&config.log.ignore) {
+        tracing::warn!("invalid log ignore pattern: {e}");
+    }
 
     let data_dir = PathBuf::from(&config.server.data_dir);
     std::fs::create_dir_all(data_dir.join("sources"))

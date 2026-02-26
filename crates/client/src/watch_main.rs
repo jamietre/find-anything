@@ -6,8 +6,10 @@ use anyhow::{Context, Result};
 use clap::Parser;
 #[cfg(windows)]
 use clap::Subcommand;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 use find_common::config::{default_config_path, parse_client_config};
+use find_common::logging::LogIgnoreFilter;
 #[cfg(windows)]
 use find_common::config::ClientConfig;
 
@@ -172,11 +174,10 @@ enum WindowsCommand {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "warn,find_watch=info".into()),
-        )
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "warn,find_watch=info".into()))
+        .with(tracing_subscriber::fmt::layer().with_filter(LogIgnoreFilter))
         .init();
 
     let args = Args::parse();
@@ -191,6 +192,10 @@ async fn main() -> Result<()> {
     let config_str = std::fs::read_to_string(&config_path)
         .with_context(|| format!("reading config {config_path}"))?;
     let config = parse_client_config(&config_str)?;
+
+    if let Err(e) = find_common::logging::set_ignore_patterns(&config.log.ignore) {
+        tracing::warn!("invalid log ignore pattern: {e}");
+    }
 
     watch::run_watch(&config).await
 }

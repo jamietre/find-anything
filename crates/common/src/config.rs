@@ -12,6 +12,8 @@ pub struct ClientConfig {
     pub scan: ScanConfig,
     #[serde(default)]
     pub watch: WatchConfig,
+    #[serde(default)]
+    pub log: LogConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -317,6 +319,8 @@ pub struct ServerAppConfig {
     pub server: ServerAppSettings,
     #[serde(default)]
     pub search: SearchSettings,
+    #[serde(default)]
+    pub log: LogConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -360,6 +364,23 @@ fn default_search_limit() -> usize { 50 }
 fn default_max_limit() -> usize { 500 }
 fn default_fts_candidate_limit() -> usize { 2000 }
 fn default_context_window() -> usize { 1 }
+
+// ── Log config ────────────────────────────────────────────────────────────────
+
+/// Logging configuration shared by client and server.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct LogConfig {
+    /// Regular-expression patterns for log messages to suppress.
+    /// Any event whose message contains a match for one of these patterns is
+    /// silently dropped before it reaches the output formatter.
+    /// Default: suppresses "unknown glyph name" noise from pdf-extract.
+    #[serde(default = "default_log_ignore")]
+    pub ignore: Vec<String>,
+}
+
+fn default_log_ignore() -> Vec<String> {
+    vec!["unknown glyph name".to_string()]
+}
 
 /// Resolves the server config path using the following priority:
 ///

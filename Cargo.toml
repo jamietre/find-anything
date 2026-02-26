@@ -27,6 +27,8 @@ serde_ignored   = "0.1"
 toml            = "0.8"
 tokio           = { version = "1", features = ["full"] }
 tracing         = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+regex           = "1"
 nucleo-matcher  = "0.3"
 walkdir         = "2"
 globset         = "0.4"
