@@ -210,6 +210,7 @@ fn default_debounce_ms() -> u64 {
 
 fn default_excludes() -> Vec<String> {
     vec![
+        // ── Development artefacts ─────────────────────────────────────────────
         "**/.git/**".into(),
         "**/node_modules/**".into(),
         "**/target/**".into(),
@@ -222,23 +223,63 @@ fn default_excludes() -> Vec<String> {
         "**/venv/**".into(),
         "**/*.pyc".into(),
         "**/*.class".into(),
-        // Synology NAS
+        // ── Version control ───────────────────────────────────────────────────
+        "**/.svn/**".into(),
+        "**/.hg/**".into(),
+        // ── Synology NAS ─────────────────────────────────────────────────────
         "**/#recycle/**".into(),
         "**/@eaDir/**".into(),
         "**/#snapshot/**".into(),
-        // Windows
-        "**/$RECYCLE.BIN/**".into(),
-        "**/System Volume Information/**".into(),
-        // macOS
+        // ── Linux virtual/runtime filesystems ────────────────────────────────
+        // No "**/" prefix: these are root-level only and we don't want to
+        // accidentally exclude a user's ~/proc or ~/tmp when they scan their
+        // home directory.  When scanning from /, "proc/**" matches /proc/…
+        // but not /home/user/proc/….
+        //
+        // /etc, /usr/lib/systemd, /usr/share and similar config-bearing paths
+        // are intentionally NOT excluded so that service unit files, sysctl
+        // settings, and other configuration is discoverable.
+        "proc/**".into(),    // virtual process filesystem — gigabytes of pseudo-files
+        "sys/**".into(),     // kernel sysfs — hardware/driver state, no real data
+        "dev/**".into(),     // device nodes — no searchable content
+        "run/**".into(),     // runtime (PIDs, sockets, volatile tempfiles)
+        "tmp/**".into(),     // temporary files
+        "var/tmp/**".into(), // persistent temporary files
+        "var/lock/**".into(), // lock files
+        "var/run/**".into(), // legacy symlink of /run on modern systems
+        // ── Linux binary directories ──────────────────────────────────────────
+        // Contain only executables / shared libraries; no text config lives here.
+        // Again no "**/" prefix so they only match at the scan root (i.e. / or
+        // a container rootfs), not inside a user's home checkout or data share.
+        "bin/**".into(),
+        "sbin/**".into(),
+        "lib/**".into(),
+        "lib64/**".into(),
+        "usr/bin/**".into(),
+        "usr/sbin/**".into(),
+        "usr/libexec/**".into(),
+        "usr/lib/debug/**".into(), // DWARF debug symbols — large, binary
+        // ── macOS ─────────────────────────────────────────────────────────────
         "**/__MACOSX/**".into(),
         "**/.Spotlight-V100/**".into(),
         "**/.Trashes/**".into(),
         "**/.fseventsd/**".into(),
-        // Linux
+        "**/Library/Caches/**".into(),
+        // ── Windows system directories ────────────────────────────────────────
+        // Use "**/" prefix because Windows trees appear nested inside backup
+        // shares (e.g. backups/2024/Windows/System32/…).  The two-level
+        // specificity avoids false positives on innocent directories.
+        "**/$RECYCLE.BIN/**".into(),
+        "**/System Volume Information/**".into(),
+        "**/Windows/System32/**".into(),
+        "**/Windows/SysWOW64/**".into(),
+        "**/Windows/WinSxS/**".into(),     // side-by-side assemblies — huge
+        "**/Windows/Installer/**".into(),
+        "**/Windows/SoftwareDistribution/**".into(), // Windows Update cache
+        "**/Windows/Temp/**".into(),
+        "**/AppData/Local/Temp/**".into(),
+        // ── Linux misc ────────────────────────────────────────────────────────
         "**/lost+found/**".into(),
-        // Version control
-        "**/.svn/**".into(),
-        "**/.hg/**".into(),
     ]
 }
 
