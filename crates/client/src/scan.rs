@@ -51,7 +51,7 @@ pub async fn run_scan(
     let local_files = walk_paths(paths, scan, &excludes);
     info!("walk complete: {} files found", local_files.len());
 
-    // Compute sets.
+    // Compute deletions (pure set diff — no I/O).
     let server_paths: HashSet<&str> = server_files.keys().map(|s| s.as_str()).collect();
     let local_paths: HashSet<&str> = local_files.keys().map(|s| s.as_str()).collect();
 
@@ -60,31 +60,15 @@ pub async fn run_scan(
         .map(|s| s.to_string())
         .collect();
 
-    let to_index: Vec<&PathBuf> = local_files
-        .iter()
-        .filter(|(rel_path, abs_path)| {
-            if full {
-                return true;
-            }
-            let server_mtime = server_files.get(*rel_path).copied();
-            let local_mtime  = mtime_of(abs_path).unwrap_or(0);
-            match server_mtime {
-                None     => true,              // new file not yet in index
-                Some(sm) => local_mtime > sm,  // file modified since last index
-            }
-        })
-        .map(|(_, abs)| abs)
-        .collect();
-
     info!(
-        "{} files to index, {} to delete",
-        to_index.len(),
-        to_delete.len()
+        "{} to delete; processing {} local files...",
+        to_delete.len(),
+        local_files.len(),
     );
 
-    // Index in batches.
-    let total = to_index.len();
-    let mut completed: usize = 0;
+    // Index in batches.  Mtime is checked per-file as we go — no upfront stat pass.
+    let mut indexed: usize = 0;
+    let mut skipped: usize = 0;
     let mut batch: Vec<IndexFile> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_bytes: usize = 0;
     let mut failures: Vec<IndexingFailure> = Vec::new();
@@ -95,7 +79,18 @@ pub async fn run_scan(
     let mut dir_scan_cache: HashMap<PathBuf, ScanConfig> = HashMap::new();
     let mut dir_excludes_cache: HashMap<PathBuf, GlobSet> = HashMap::new();
 
-    for abs_path in &to_index {
+    for (rel_path, abs_path) in &local_files {
+        // Check mtime before any further work so unchanged files are skipped cheaply.
+        let mtime = mtime_of(abs_path).unwrap_or(0);
+        if !full {
+            let server_mtime = server_files.get(rel_path.as_str()).copied();
+            match server_mtime {
+                None => {}                   // new file — index it
+                Some(sm) if mtime > sm => {} // modified — index it
+                Some(_) => { skipped += 1; continue; } // unchanged — skip
+            }
+        }
+
         // Resolve effective config for this file's directory (cached).
         let eff_scan = resolve_effective_scan(abs_path, paths, scan, &mut dir_scan_cache);
         let cfg = ExtractorConfig::from_scan(&eff_scan);
@@ -107,20 +102,18 @@ pub async fn run_scan(
         }
         let eff_excludes = &dir_excludes_cache[&dir];
 
-        let rel_path = relative_path(abs_path, paths);
-        let mtime = mtime_of(abs_path).unwrap_or(0);
         let size = size_of(abs_path).unwrap_or(0);
         let kind = extract::detect_kind(abs_path).to_string();
         let t0 = std::time::Instant::now();
 
-        completed += 1;
+        indexed += 1;
 
         if find_extract_archive::accepts(abs_path) {
             // ── Streaming archive extraction ─────────────────────────────────
             // Members are processed one at a time via a bounded channel so that
             // lines are freed after each member is converted to an IndexFile,
             // rather than holding the entire archive's content in memory.
-            info!("extracting archive {rel_path} ({completed}/{total})");
+            info!("extracting archive {rel_path} ({indexed} indexed so far)");
 
             // Submit the outer archive file first, before any member batches.
             // The server deletes stale inner members when it sees the outer file,
@@ -159,7 +152,7 @@ pub async fn run_scan(
                         continue;
                     }
                 }
-                for file in build_member_index_files(&rel_path, mtime, size, member_lines) {
+                for file in build_member_index_files(rel_path, mtime, size, member_lines) {
                     let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
                     batch_bytes += file_bytes;
                     members_submitted += 1;
@@ -218,7 +211,7 @@ pub async fn run_scan(
                 kind
             };
             let extract_ms = t0.elapsed().as_millis() as u64;
-            let mut index_files = build_index_files(rel_path, mtime, size, kind, lines);
+            let mut index_files = build_index_files(rel_path.clone(), mtime, size, kind, lines);
             if let Some(f) = index_files.first_mut() {
                 f.extract_ms = Some(extract_ms);
             }
@@ -227,7 +220,7 @@ pub async fn run_scan(
                 batch_bytes += file_bytes;
                 batch.push(file);
                 if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
-                    info!("submitting batch — {completed}/{total} files completed");
+                    info!("submitting batch — {indexed} files indexed so far");
                     submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
                     batch_bytes = 0;
                 }
@@ -235,7 +228,7 @@ pub async fn run_scan(
         }
 
         if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
-            info!("submitting batch — {completed}/{total} files completed");
+            info!("submitting batch — {indexed} files indexed so far");
             submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
             batch_bytes = 0;
         }
@@ -247,12 +240,13 @@ pub async fn run_scan(
         .unwrap_or_default()
         .as_secs() as i64;
 
-    if !to_delete.is_empty() {
-        info!("deleting {} removed files", to_delete.len());
+    let deleted = to_delete.len();
+    if deleted > 0 {
+        info!("deleting {deleted} removed files");
     }
     submit_batch(api, source_name, base_url, &mut batch, &mut failures, to_delete, Some(now)).await?;
 
-    info!("scan complete — {total} files indexed");
+    info!("scan complete — {indexed} indexed, {skipped} unchanged, {deleted} deleted");
     Ok(())
 }
 
