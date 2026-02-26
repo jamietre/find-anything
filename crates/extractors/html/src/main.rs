@@ -1,8 +1,18 @@
 use std::path::Path;
 use std::process;
 use find_common::config::ExtractorConfig;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "warn".into()))
+        .with(tracing_subscriber::fmt::layer()
+            .with_writer(std::io::stderr)
+            .without_time()
+            .with_ansi(false))
+        .init();
+
     let args: Vec<String> = std::env::args().collect();
 
     if args.len() < 2 {

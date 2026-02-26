@@ -7,7 +7,7 @@ use anyhow::Result;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, error, info, warn};
 
 use find_common::{
     api::{detect_kind_from_ext, BulkRequest, IndexLine},
@@ -403,21 +403,57 @@ async fn extract_via_subprocess(
     }
 
     match cmd.output().await {
-        Ok(out) if out.status.success() => {
-            serde_json::from_slice::<Vec<IndexLine>>(&out.stdout).unwrap_or_default()
-        }
         Ok(out) => {
-            warn!(
-                "extractor {} exited {:?} for {}",
-                binary,
-                out.status.code(),
-                abs_path.display()
-            );
-            vec![]
+            relay_subprocess_logs(&out.stderr, &binary, abs_path);
+            if out.status.success() {
+                serde_json::from_slice::<Vec<IndexLine>>(&out.stdout).unwrap_or_default()
+            } else {
+                warn!(
+                    "extractor {} exited {:?} for {}",
+                    binary,
+                    out.status.code(),
+                    abs_path.display()
+                );
+                vec![]
+            }
         }
         Err(e) => {
             warn!("failed to run extractor {}: {e:#}", binary);
             vec![]
+        }
+    }
+}
+
+/// Re-emit subprocess stderr lines through our tracing subscriber so they
+/// appear in find-watch output at the correct level and pass through the
+/// same log-ignore filters as in-process events.
+///
+/// tracing-subscriber fmt (no time, no ANSI) formats lines as:
+///   `{LEVEL} {target}: {message}`
+/// We parse the level prefix and re-emit accordingly.
+fn relay_subprocess_logs(stderr: &[u8], binary: &str, file: &Path) {
+    let text = String::from_utf8_lossy(stderr);
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Parse the level prefix emitted by tracing-subscriber fmt.
+        // Typical format: "WARN target: message" or "ERROR target: message".
+        let rest = line.trim_start_matches(|c: char| !c.is_alphanumeric());
+        if let Some(msg) = rest.strip_prefix("ERROR ") {
+            error!(target: "subprocess", binary, file = %file.display(), "{msg}");
+        } else if let Some(msg) = rest.strip_prefix("WARN ") {
+            warn!(target: "subprocess", binary, file = %file.display(), "{msg}");
+        } else if let Some(msg) = rest.strip_prefix("INFO ") {
+            info!(target: "subprocess", binary, file = %file.display(), "{msg}");
+        } else if let Some(msg) = rest.strip_prefix("DEBUG ") {
+            debug!(target: "subprocess", binary, file = %file.display(), "{msg}");
+        } else if let Some(msg) = rest.strip_prefix("TRACE ") {
+            debug!(target: "subprocess", binary, file = %file.display(), "{msg}");
+        } else {
+            // Unknown format — emit as warn so it's not silently dropped.
+            warn!(target: "subprocess", binary, file = %file.display(), "{line}");
         }
     }
 }

@@ -18,3 +18,4 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 scraper = "0.21"
+tracing-subscriber = { workspace = true }

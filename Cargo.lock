@@ -1354,6 +1354,7 @@ dependencies = [
  "tar",
  "tempfile",
  "tracing",
+ "tracing-subscriber",
  "xz2",
  "zip",
 ]
@@ -1385,6 +1386,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing-subscriber",
  "zip",
 ]
 
@@ -1397,6 +1399,7 @@ dependencies = [
  "scraper",
  "serde",
  "serde_json",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1413,6 +1416,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1426,6 +1430,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tracing-subscriber",
  "zip",
 ]
 
@@ -1439,6 +1444,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1450,6 +1456,7 @@ dependencies = [
  "pelite",
  "serde",
  "serde_json",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1463,6 +1470,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "tracing-subscriber",
 ]
 
 [[package]]

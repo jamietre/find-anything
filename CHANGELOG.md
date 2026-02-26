@@ -10,6 +10,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ## [Unreleased]
 
 ### Added
+- **Subprocess log integration** — standalone extractor binaries (`find-extract-pdf`, `find-extract-archive`, etc.) now initialise a `tracing-subscriber` logger writing to stderr (no timestamps, no ANSI, level filter from `RUST_LOG`, default `warn`); `find-watch` captures subprocess stderr and re-emits each line through its own tracing subscriber at the matching level with `binary` and `file` context fields, so extractor warnings pass through the same `log.ignore` filters as in-process events
 - **Content deduplication** — files with identical content are stored only once; subsequent files with the same blake3 hash are recorded as aliases pointing to the canonical entry; search results show a `+N duplicates` badge that expands to reveal all duplicate paths; when the canonical file is deleted, the first alias is automatically promoted (chunk references reused, no ZIP rewrite); schema bumped to v5 (`content_hash`, `canonical_file_id` columns on `files` table)
 - **pdf-extract path operator bounds checks** — the seven PDF path-construction operators (`w`, `m`, `l`, `c`, `v`, `y`, `re`) now guard against malformed PDFs that provide fewer operands than required; previously caused `index out of bounds` panics; now logs a warning and skips the operator so text extraction continues
 
