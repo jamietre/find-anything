@@ -201,14 +201,14 @@ find-admin sources
 
 ---
 
-### find-admin stats
+### find-admin status
 
 Print per-source statistics: file count, total size, last scan time, and a
 breakdown by file kind.
 
 ```sh
-find-admin stats
-find-admin stats --json
+find-admin status
+find-admin status --json
 ```
 
 ---
