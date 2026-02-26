@@ -66,11 +66,19 @@ run = [
 description = "Build web UI then compile find-server release binary with embedded assets"
 run = ["pnpm --dir web run build", "cargo build --release -p find-server"]
 
+[tasks.build-arm]
+description = "Build all binaries for ARM7 NAS using cross (matches CI, avoids glibc version mismatch)"
+run = ["pnpm --dir web run build", "cross build --release --target armv7-unknown-linux-gnueabihf"]
+
 # ── Checks ────────────────────────────────────────────────────────────────────
 
 [tasks.check]
 description = "Type-check all Rust crates and the web UI"
 run = ["cargo check --workspace", "pnpm --dir web check"]
+
+[tasks.clippy]
+description = "Run clippy lints (matches CI — fails on warnings)"
+run = "cargo clippy --workspace -- -D warnings"
 
 # ── Admin ─────────────────────────────────────────────────────────────────────
 

@@ -16,7 +16,7 @@ use crate::api::ApiClient;
 use crate::batch::{build_index_files, build_member_index_files, submit_batch};
 use crate::extract;
 
-use find_extract_archive;
+use find_extract_archive as _;
 
 const BATCH_SIZE: usize = 200;
 const BATCH_BYTES: usize = 8 * 1024 * 1024; // 8 MB

@@ -118,14 +118,12 @@ async fn main() -> Result<()> {
             let sources = client.get_sources().await.context("fetching sources")?;
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&sources)?);
+            } else if sources.is_empty() {
+                println!("No sources indexed.");
             } else {
-                if sources.is_empty() {
-                    println!("No sources indexed.");
-                } else {
-                    for (i, s) in sources.iter().enumerate() {
-                        let base = s.base_url.as_deref().unwrap_or("none");
-                        println!("  {}. {}  (base_url: {})", i + 1, s.name, base);
-                    }
+                for (i, s) in sources.iter().enumerate() {
+                    let base = s.base_url.as_deref().unwrap_or("none");
+                    println!("  {}. {}  (base_url: {})", i + 1, s.name, base);
                 }
             }
         }

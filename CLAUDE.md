@@ -219,6 +219,14 @@ call chain.
 
 **Do not automatically commit changes.** Always wait for explicit user instruction before running `git commit`. Complete the implementation and verify it works first; the user will ask to commit when ready.
 
+**Before pushing or committing Rust changes, run clippy:**
+
+```sh
+mise run clippy
+```
+
+This matches the CI check (`cargo clippy --workspace -- -D warnings`). Fix all warnings before committing — clippy failures will fail the CI build.
+
 ---
 
 ### Search result keys and load-more dedup (prevent duplicate-key regressions)

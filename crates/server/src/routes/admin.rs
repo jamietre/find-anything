@@ -113,10 +113,10 @@ pub async fn inbox_clear(
             let mut count = 0;
             for entry in rd.filter_map(|e| e.ok()) {
                 let path = entry.path();
-                if path.extension().map(|x| x == "gz").unwrap_or(false) {
-                    if std::fs::remove_file(&path).is_ok() {
-                        count += 1;
-                    }
+                if path.extension().map(|x| x == "gz").unwrap_or(false)
+                    && std::fs::remove_file(&path).is_ok()
+                {
+                    count += 1;
                 }
             }
             count
