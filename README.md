@@ -274,7 +274,7 @@ extractor_dir = "/usr/local/bin"  # optional; auto-detected if omitted
 # Patterns are matched against "target: message" (e.g. "find_extract_pdf: ...").
 # Default suppresses high-volume glyph warnings from pdf-extract.
 ignore = [
-    "find_extract_pdf: unknown glyph name",
+    "pdf_extract: unknown glyph name",
 ]
 ```
 

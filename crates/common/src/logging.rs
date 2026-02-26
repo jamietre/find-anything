@@ -51,9 +51,13 @@ impl<S: Subscriber> tracing_subscriber::layer::Filter<S> for LogIgnoreFilter {
         }
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
-        // Match against "target: message" so patterns can be scoped to a
-        // specific crate (e.g. "find_extract_pdf: unknown glyph name").
-        let candidate = format!("{}: {}", event.metadata().target(), visitor.message);
+        // For log-bridged events (from the `log` crate), tracing-log sets
+        // metadata().target() to the fixed string "log" and stores the
+        // original crate target in the "log.target" field.  Use the field
+        // value when present so patterns like "pdf_extract: unknown glyph
+        // name" work correctly against log records from external crates.
+        let target = visitor.log_target.as_deref().unwrap_or_else(|| event.metadata().target());
+        let candidate = format!("{target}: {}", visitor.message);
         !patterns.iter().any(|p| p.is_match(&candidate))
     }
 }
@@ -63,18 +67,24 @@ impl<S: Subscriber> tracing_subscriber::layer::Filter<S> for LogIgnoreFilter {
 #[derive(Default)]
 struct MessageVisitor {
     message: String,
+    /// Set for log-bridged events: the original crate target from the `log.target` field.
+    log_target: Option<String>,
 }
 
 impl Visit for MessageVisitor {
     fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
-        if field.name() == "message" {
-            self.message = value.to_string();
+        match field.name() {
+            "message" => self.message = value.to_string(),
+            "log.target" => self.log_target = Some(value.to_string()),
+            _ => {}
         }
     }
 
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-        if field.name() == "message" {
-            self.message = format!("{value:?}");
+        match field.name() {
+            "message" => self.message = format!("{value:?}"),
+            "log.target" => self.log_target = Some(format!("{value:?}")),
+            _ => {}
         }
     }
 }

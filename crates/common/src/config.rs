@@ -379,7 +379,7 @@ pub struct LogConfig {
 }
 
 fn default_log_ignore() -> Vec<String> {
-    vec!["find_extract_pdf: unknown glyph name".to_string()]
+    vec!["pdf_extract: unknown glyph name".to_string()]
 }
 
 /// Resolves the server config path using the following priority:
