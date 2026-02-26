@@ -370,6 +370,22 @@ pub struct SourceStats {
     pub indexing_error_count: usize,
 }
 
+/// Current processing state of the inbox worker.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum WorkerStatus {
+    /// Worker is idle — no requests in flight.
+    Idle,
+    /// Worker is actively indexing a file.
+    Processing {
+        /// Source name being indexed.
+        source: String,
+        /// Relative path of the file currently being processed.
+        file: String,
+    },
+}
+
+
 /// `GET /api/v1/stats` response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatsResponse {
@@ -381,6 +397,8 @@ pub struct StatsResponse {
     pub db_size_bytes: u64,
     /// Total on-disk size of all ZIP content archives (bytes).
     pub archive_size_bytes: u64,
+    /// Current state of the inbox worker.
+    pub worker_status: WorkerStatus,
 }
 
 // ── Inbox admin types ─────────────────────────────────────────────────────────

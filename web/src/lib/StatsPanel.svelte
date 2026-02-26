@@ -181,6 +181,14 @@
 			{#if stats.failed_requests > 0}
 				<span class="failed">{stats.failed_requests} failed</span>
 			{/if}
+			{#if stats.worker_status.state === 'processing'}
+				<span class="worker-processing" title="{stats.worker_status.source}: {stats.worker_status.file}">
+					<span class="worker-dot"></span>
+					indexing {stats.worker_status.source}/{stats.worker_status.file.split('/').pop()}
+				</span>
+			{:else}
+				<span class="worker-idle">idle</span>
+			{/if}
 		</div>
 
 		<!-- By Kind -->
@@ -331,6 +339,37 @@
 
 	.failed {
 		color: #f85149;
+	}
+
+	.worker-idle {
+		color: var(--text-muted);
+		opacity: 0.6;
+	}
+
+	.worker-processing {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		color: #58a6ff;
+		max-width: 260px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.worker-dot {
+		display: inline-block;
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: #58a6ff;
+		flex-shrink: 0;
+		animation: pulse 1.2s ease-in-out infinite;
+	}
+
+	@keyframes pulse {
+		0%, 100% { opacity: 1; }
+		50%       { opacity: 0.3; }
 	}
 
 	/* Section title */

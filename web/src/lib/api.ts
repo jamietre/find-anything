@@ -240,6 +240,10 @@ export interface SourceStats {
 	indexing_error_count: number;
 }
 
+export type WorkerStatus =
+	| { state: 'idle' }
+	| { state: 'processing'; source: string; file: string };
+
 export interface StatsResponse {
 	sources: SourceStats[];
 	inbox_pending: number;
@@ -247,6 +251,7 @@ export interface StatsResponse {
 	total_archives: number;
 	db_size_bytes: number;
 	archive_size_bytes: number;
+	worker_status: WorkerStatus;
 }
 
 export async function getStats(): Promise<StatsResponse> {

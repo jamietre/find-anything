@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{extract::State, http::HeaderMap, response::IntoResponse, Json};
 use tokio::task::spawn_blocking;
 
-use find_common::api::{SourceStats, StatsResponse};
+use find_common::api::{SourceStats, StatsResponse, WorkerStatus};
 
 use crate::{db, AppState};
 
@@ -114,5 +114,19 @@ pub async fn get_stats(
     }
     sources.sort_by(|a, b| a.name.cmp(&b.name));
 
-    Json(StatsResponse { sources, inbox_pending, failed_requests, total_archives, db_size_bytes, archive_size_bytes }).into_response()
+    let worker_status = state.worker_status
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or(WorkerStatus::Idle);
+
+    Json(StatsResponse {
+        sources,
+        inbox_pending,
+        failed_requests,
+        total_archives,
+        db_size_bytes,
+        archive_size_bytes,
+        worker_status,
+    })
+    .into_response()
 }

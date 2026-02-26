@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use tracing::warn;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -50,6 +51,16 @@ pub struct ScanConfig {
     /// Set to 0 to disable wrapping. Default: 120.
     #[serde(default = "default_max_line_length")]
     pub max_line_length: usize,
+
+    /// Name of the marker file that signals a directory (and all descendants)
+    /// should be excluded from indexing. Default: ".noindex".
+    #[serde(default = "default_noindex_file")]
+    pub noindex_file: String,
+
+    /// Name of the per-directory config file that overrides scan settings for
+    /// a subtree. Default: ".index".
+    #[serde(default = "default_index_file")]
+    pub index_file: String,
 }
 
 impl Default for ScanConfig {
@@ -61,6 +72,77 @@ impl Default for ScanConfig {
             include_hidden: false,
             archives: ArchiveConfig::default(),
             max_line_length: default_max_line_length(),
+            noindex_file: default_noindex_file(),
+            index_file: default_index_file(),
+        }
+    }
+}
+
+impl ScanConfig {
+    /// Produce a new `ScanConfig` by applying a per-directory override.
+    ///
+    /// - `exclude` is **additive**: patterns are appended to the parent list.
+    /// - All other fields are **replacement**: the innermost value wins.
+    /// - `noindex_file` and `index_file` are never overridden (global-only).
+    pub fn apply_override(&self, ov: &ScanOverride) -> ScanConfig {
+        let mut result = self.clone();
+        if let Some(extra) = &ov.exclude {
+            result.exclude.extend(extra.iter().cloned());
+        }
+        if let Some(v) = ov.max_file_size_mb {
+            result.max_file_size_mb = v;
+        }
+        if let Some(v) = ov.include_hidden {
+            result.include_hidden = v;
+        }
+        if let Some(v) = ov.follow_symlinks {
+            result.follow_symlinks = v;
+        }
+        if let Some(v) = ov.max_line_length {
+            result.max_line_length = v;
+        }
+        if let Some(arch_ov) = &ov.archives {
+            if let Some(v) = arch_ov.enabled {
+                result.archives.enabled = v;
+            }
+            if let Some(v) = arch_ov.max_depth {
+                result.archives.max_depth = v;
+            }
+        }
+        result
+    }
+}
+
+/// Partial scan config read from a per-directory `.index` file.
+/// All fields are optional; `None` means "inherit from parent config".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ScanOverride {
+    /// Additional exclude patterns (appended to parent list, never removed).
+    pub exclude: Option<Vec<String>>,
+    pub max_file_size_mb: Option<u64>,
+    pub include_hidden: Option<bool>,
+    pub follow_symlinks: Option<bool>,
+    pub archives: Option<ArchiveOverride>,
+    pub max_line_length: Option<usize>,
+}
+
+/// Archive-specific fields for a `ScanOverride`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ArchiveOverride {
+    pub enabled: Option<bool>,
+    pub max_depth: Option<usize>,
+}
+
+/// Load and parse a `.index` override file from `dir`.
+/// Returns `None` if the file is absent, unreadable, or unparseable.
+pub fn load_dir_override(dir: &Path, index_filename: &str) -> Option<ScanOverride> {
+    let path = dir.join(index_filename);
+    let content = std::fs::read_to_string(&path).ok()?;
+    match toml::from_str::<ScanOverride>(&content) {
+        Ok(ov) => Some(ov),
+        Err(e) => {
+            warn!("invalid {} file at {}: {e}", index_filename, path.display());
+            None
         }
     }
 }
@@ -164,6 +246,14 @@ fn default_max_file_size_mb() -> u64 {
 
 fn default_max_line_length() -> usize {
     120
+}
+
+fn default_noindex_file() -> String {
+    ".noindex".into()
+}
+
+fn default_index_file() -> String {
+    ".index".into()
 }
 
 fn default_true() -> bool {
@@ -371,6 +461,70 @@ mod tests {
                 .unwrap();
         assert_eq!(w.debounce_ms, 200);
         assert_eq!(w.extractor_dir.as_deref(), Some("/usr/local/bin"));
+    }
+
+    #[test]
+    fn scan_config_default_control_file_names() {
+        let s = ScanConfig::default();
+        assert_eq!(s.noindex_file, ".noindex");
+        assert_eq!(s.index_file, ".index");
+    }
+
+    #[test]
+    fn scan_override_exclude_is_additive() {
+        let base = ScanConfig {
+            exclude: vec!["**/.git/**".into()],
+            ..ScanConfig::default()
+        };
+        let ov = ScanOverride {
+            exclude: Some(vec!["*.log".into()]),
+            ..ScanOverride::default()
+        };
+        let result = base.apply_override(&ov);
+        assert_eq!(result.exclude, vec!["**/.git/**", "*.log"]);
+    }
+
+    #[test]
+    fn scan_override_replaces_scalar_fields() {
+        let base = ScanConfig::default();
+        let ov = ScanOverride {
+            include_hidden: Some(true),
+            max_file_size_mb: Some(99),
+            ..ScanOverride::default()
+        };
+        let result = base.apply_override(&ov);
+        assert!(result.include_hidden);
+        assert_eq!(result.max_file_size_mb, 99);
+        // noindex_file/index_file are inherited unchanged
+        assert_eq!(result.noindex_file, ".noindex");
+    }
+
+    #[test]
+    fn scan_override_archive_fields() {
+        let base = ScanConfig::default();
+        let ov = ScanOverride {
+            archives: Some(ArchiveOverride { enabled: Some(false), max_depth: Some(2) }),
+            ..ScanOverride::default()
+        };
+        let result = base.apply_override(&ov);
+        assert!(!result.archives.enabled);
+        assert_eq!(result.archives.max_depth, 2);
+        assert_eq!(result.archives.max_temp_file_mb, 500); // unchanged
+    }
+
+    #[test]
+    fn scan_override_toml_parses() {
+        let toml = r#"
+include_hidden = true
+exclude = ["*.tmp"]
+
+[archives]
+enabled = false
+"#;
+        let ov: ScanOverride = toml::from_str(toml).unwrap();
+        assert_eq!(ov.include_hidden, Some(true));
+        assert_eq!(ov.exclude, Some(vec!["*.tmp".into()]));
+        assert_eq!(ov.archives.as_ref().unwrap().enabled, Some(false));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use walkdir::WalkDir;
 
 use find_common::{
     api::{IndexFile, IndexLine, IndexingFailure},
-    config::{ExtractorConfig, ScanConfig},
+    config::{load_dir_override, ExtractorConfig, ScanConfig},
 };
 
 use crate::api::ApiClient;
@@ -31,7 +31,7 @@ pub async fn run_scan(
     base_url: Option<&str>,
     full: bool,
 ) -> Result<()> {
-    // Build exclusion GlobSet once.
+    // Build global exclusion GlobSet for the walk phase.
     let excludes = build_globset(&scan.exclude)?;
 
     // Fetch what the server already knows about this source.
@@ -88,9 +88,24 @@ pub async fn run_scan(
     let mut batch_bytes: usize = 0;
     let mut failures: Vec<IndexingFailure> = Vec::new();
 
-    let cfg = ExtractorConfig::from_scan(scan);
+    // Per-directory caches: keyed by directory path.
+    // Each directory's effective ScanConfig (after applying ancestor .index overrides)
+    // is computed once and reused for all files in that directory.
+    let mut dir_scan_cache: HashMap<PathBuf, ScanConfig> = HashMap::new();
+    let mut dir_excludes_cache: HashMap<PathBuf, GlobSet> = HashMap::new();
 
     for abs_path in &to_index {
+        // Resolve effective config for this file's directory (cached).
+        let eff_scan = resolve_effective_scan(abs_path, paths, scan, &mut dir_scan_cache);
+        let cfg = ExtractorConfig::from_scan(&eff_scan);
+
+        // Get (or build) the GlobSet for this directory's effective excludes.
+        let dir = abs_path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
+        if !dir_excludes_cache.contains_key(&dir) {
+            dir_excludes_cache.insert(dir.clone(), build_globset(&eff_scan.exclude)?);
+        }
+        let eff_excludes = &dir_excludes_cache[&dir];
+
         let rel_path = relative_path(abs_path, paths);
         let mtime = mtime_of(abs_path).unwrap_or(0);
         let size = size_of(abs_path).unwrap_or(0);
@@ -134,12 +149,12 @@ pub async fn run_scan(
 
             let mut members_submitted: usize = 0;
             while let Some(member_lines) = rx.recv().await {
-                // Apply exclude patterns to archive members.
+                // Apply effective exclude patterns to archive members.
                 // archive_path may be "inner.zip::path/to/file.js" for nested archives;
                 // take the last segment (actual file path) for glob matching.
                 if let Some(ap) = member_lines.first().and_then(|l| l.archive_path.as_deref()) {
                     let file_path = ap.rsplit("::").next().unwrap_or(ap);
-                    if excludes.is_match(file_path) {
+                    if eff_excludes.is_match(file_path) {
                         continue;
                     }
                 }
@@ -255,6 +270,79 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     Ok(builder.build()?)
 }
 
+/// Walk ancestor directories from `file_path` up to the nearest source root,
+/// applying any `.index` override files found. Returns the effective `ScanConfig`
+/// for this file. Results are cached by directory so each directory's `.index`
+/// is parsed at most once per scan session.
+fn resolve_effective_scan(
+    file_path: &Path,
+    roots: &[String],
+    global: &ScanConfig,
+    dir_cache: &mut HashMap<PathBuf, ScanConfig>,
+) -> ScanConfig {
+    let dir = match file_path.parent() {
+        Some(d) => d.to_path_buf(),
+        None => return global.clone(),
+    };
+
+    if let Some(cached) = dir_cache.get(&dir) {
+        return cached.clone();
+    }
+
+    // Find which root this file lives under (pick the longest matching root).
+    let root = roots
+        .iter()
+        .filter_map(|r| {
+            let rp = Path::new(r);
+            if dir.starts_with(rp) {
+                Some(rp.to_path_buf())
+            } else {
+                None
+            }
+        })
+        .max_by_key(|rp| rp.as_os_str().len());
+
+    let Some(root) = root else {
+        return global.clone();
+    };
+
+    // Collect ancestors from root down to dir (inclusive), root first.
+    let mut ancestors: Vec<PathBuf> = Vec::new();
+    let mut cur = dir.as_path();
+    loop {
+        ancestors.push(cur.to_path_buf());
+        if cur == root {
+            break;
+        }
+        match cur.parent() {
+            Some(p) => cur = p,
+            None => break,
+        }
+    }
+    ancestors.reverse(); // root → dir order
+
+    // Find the deepest ancestor already in the cache to avoid redundant work.
+    let mut eff = global.clone();
+    let mut start_idx = 0;
+    for (i, ancestor) in ancestors.iter().enumerate().rev() {
+        if let Some(cached) = dir_cache.get(ancestor) {
+            eff = cached.clone();
+            start_idx = i + 1;
+            break;
+        }
+    }
+
+    // Apply .index overrides for uncached ancestors and populate the cache.
+    for ancestor in &ancestors[start_idx..] {
+        if let Some(ov) = load_dir_override(ancestor, &global.index_file) {
+            eff = eff.apply_override(&ov);
+        }
+        dir_cache.insert(ancestor.clone(), eff.clone());
+    }
+
+    eff
+}
+
 /// Returns a map of relative_path → absolute_path for all files under `paths`.
 fn walk_paths(
     paths: &[String],
@@ -269,13 +357,25 @@ fn walk_paths(
             .follow_links(scan.follow_symlinks)
             .into_iter()
             .filter_entry(|e| {
+                let name = e.file_name().to_str().unwrap_or("");
+
+                // Control files are never indexed and never used to trigger descent.
+                if name == scan.noindex_file || name == scan.index_file {
+                    return false;
+                }
+
+                // .noindex check: if a directory contains the noindex marker file,
+                // skip that directory and all its descendants. This check runs before
+                // the hidden-file filter so that a ".noindex" marker (which starts
+                // with ".") is always detected even when include_hidden = false.
+                if e.file_type().is_dir() && e.path().join(&scan.noindex_file).exists() {
+                    tracing::debug!("skipping {} (.noindex present)", e.path().display());
+                    return false;
+                }
+
                 // Hidden files
-                if !scan.include_hidden {
-                    if let Some(name) = e.file_name().to_str() {
-                        if name.starts_with('.') && e.depth() > 0 {
-                            return false;
-                        }
-                    }
+                if !scan.include_hidden && name.starts_with('.') && e.depth() > 0 {
+                    return false;
                 }
                 // Exclusion globs (match relative to root)
                 if let Ok(rel) = e.path().strip_prefix(root) {

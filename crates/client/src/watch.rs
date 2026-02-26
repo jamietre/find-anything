@@ -11,7 +11,7 @@ use tracing::{info, warn};
 
 use find_common::{
     api::{detect_kind_from_ext, BulkRequest, IndexLine},
-    config::{ClientConfig, SourceConfig},
+    config::{load_dir_override, ClientConfig, ScanConfig, SourceConfig},
 };
 
 use crate::api::ApiClient;
@@ -40,7 +40,6 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
         info!("  source {:?}: {:?}", src.name, src.paths);
     }
 
-    let excludes = build_globset(&config.scan.exclude)?;
     let debounce_ms = config.watch.debounce_ms;
 
     // Channel: notify (blocking thread) → tokio event loop.
@@ -100,13 +99,28 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
                 continue;
             }
 
-            // Find which source this file belongs to.
-            let Some((source_name, rel_path)) = find_source(&abs_path, &source_map) else {
+            // Find which source this file belongs to (also returns the source root).
+            let Some((source_name, rel_path, source_root)) = find_source(&abs_path, &source_map) else {
                 continue;
             };
 
-            // Apply exclusion globs.
-            if is_excluded(&abs_path, &source_map, &excludes) {
+            // Resolve per-directory effective config: check for .noindex and .index files
+            // on the ancestor chain. No caching is needed for watch (events are infrequent).
+            let (eff_scan, skip) = resolve_watch_config(&abs_path, &source_root, &config.scan);
+            if skip {
+                tracing::debug!("skipping {} (in .noindex subtree)", abs_path.display());
+                continue;
+            }
+
+            // Apply per-directory exclusion globs.
+            let eff_excludes = match build_globset(&eff_scan.exclude) {
+                Ok(gs) => gs,
+                Err(e) => {
+                    warn!("invalid exclude pattern for {}: {e:#}", abs_path.display());
+                    continue;
+                }
+            };
+            if is_excluded(&abs_path, &source_map, &eff_excludes) {
                 continue;
             }
 
@@ -125,7 +139,8 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
                         &abs_path,
                         &rel_path,
                         base_url,
-                        config,
+                        &eff_scan,
+                        &config.watch.extractor_dir,
                     )
                     .await
                     {
@@ -157,9 +172,9 @@ fn build_source_map(sources: &[SourceConfig]) -> SourceMap {
     map
 }
 
-/// Return (source_name, rel_path) for a given absolute path.
+/// Return `(source_name, rel_path, source_root)` for a given absolute path.
 /// Picks the most-specific (longest) matching root.
-fn find_source(path: &Path, map: &SourceMap) -> Option<(String, String)> {
+fn find_source(path: &Path, map: &SourceMap) -> Option<(String, String, PathBuf)> {
     let mut best: Option<(&PathBuf, &String, &String)> = None;
     for (root, name, root_str) in map {
         if path.starts_with(root)
@@ -174,7 +189,7 @@ fn find_source(path: &Path, map: &SourceMap) -> Option<(String, String)> {
             .unwrap()
             .to_string_lossy()
             .to_string();
-        (name.clone(), rel)
+        (name.clone(), rel, root.clone())
     })
 }
 
@@ -247,6 +262,58 @@ fn accumulate(pending: &mut HashMap<PathBuf, AccumulatedKind>, res: notify::Resu
     }
 }
 
+// ── Per-directory config resolution ──────────────────────────────────────────
+
+/// Walk from `file_path` up to `source_root`, applying `.index` overrides and
+/// checking for `.noindex` markers.
+///
+/// Returns `(effective_scan_config, skip)`. If `skip` is true, the file is
+/// inside a `.noindex` subtree and should be ignored. No cache is maintained
+/// since watch events are infrequent (a few filesystem stat calls per event is
+/// acceptable).
+fn resolve_watch_config(
+    file_path: &Path,
+    source_root: &Path,
+    global: &ScanConfig,
+) -> (ScanConfig, bool) {
+    // Collect ancestor directories from source_root down to file's parent.
+    let start = match file_path.parent() {
+        Some(p) if p.starts_with(source_root) => p,
+        _ => return (global.clone(), false),
+    };
+
+    let mut ancestors: Vec<PathBuf> = Vec::new();
+    let mut cur = start;
+    loop {
+        ancestors.push(cur.to_path_buf());
+        if cur == source_root {
+            break;
+        }
+        match cur.parent() {
+            Some(p) => cur = p,
+            None => break,
+        }
+    }
+    ancestors.reverse(); // source_root → file's parent
+
+    // Check for .noindex from root down: if any ancestor has it, skip.
+    for dir in &ancestors {
+        if dir.join(&global.noindex_file).exists() {
+            return (global.clone(), true);
+        }
+    }
+
+    // Apply .index overrides from root → file's parent.
+    let mut eff = global.clone();
+    for dir in &ancestors {
+        if let Some(ov) = load_dir_override(dir, &global.index_file) {
+            eff = eff.apply_override(&ov);
+        }
+    }
+
+    (eff, false)
+}
+
 // ── File handling ─────────────────────────────────────────────────────────────
 
 async fn handle_update(
@@ -255,11 +322,12 @@ async fn handle_update(
     abs_path: &Path,
     rel_path: &str,
     base_url: Option<&str>,
-    config: &ClientConfig,
+    eff_scan: &ScanConfig,
+    extractor_dir: &Option<String>,
 ) -> Result<()> {
     info!("update: {}", rel_path);
 
-    let lines = extract_via_subprocess(abs_path, config).await;
+    let lines = extract_via_subprocess(abs_path, eff_scan, extractor_dir).await;
 
     let mtime = mtime_of(abs_path).unwrap_or(0);
     let size = size_of(abs_path).unwrap_or(0);
@@ -303,11 +371,15 @@ async fn handle_delete(
 
 // ── Subprocess extraction ─────────────────────────────────────────────────────
 
-async fn extract_via_subprocess(abs_path: &Path, config: &ClientConfig) -> Vec<IndexLine> {
-    let binary = extractor_binary_for(abs_path, &config.watch.extractor_dir);
-    let max_size_kb = (config.scan.max_file_size_mb * 1024).to_string();
-    let max_depth = config.scan.archives.max_depth.to_string();
-    let max_line_length = config.scan.max_line_length.to_string();
+async fn extract_via_subprocess(
+    abs_path: &Path,
+    scan: &ScanConfig,
+    extractor_dir: &Option<String>,
+) -> Vec<IndexLine> {
+    let binary = extractor_binary_for(abs_path, extractor_dir);
+    let max_size_kb = (scan.max_file_size_mb * 1024).to_string();
+    let max_depth = scan.archives.max_depth.to_string();
+    let max_line_length = scan.max_line_length.to_string();
 
     let ext = abs_path
         .extension()

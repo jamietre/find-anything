@@ -19,6 +19,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use clap::Parser;
 
+use find_common::api::WorkerStatus;
 use find_common::config::{default_server_config_path, parse_server_config, ServerAppConfig};
 
 #[derive(Parser)]
@@ -70,6 +71,9 @@ async fn serve_static(uri: axum::http::Uri) -> impl IntoResponse {
 pub struct AppState {
     pub config: ServerAppConfig,
     pub data_dir: PathBuf,
+    /// Shared worker status: idle or processing a specific file.
+    /// Updated by the inbox worker; read by the stats route.
+    pub worker_status: Arc<std::sync::Mutex<WorkerStatus>>,
 }
 
 #[tokio::main]
@@ -98,12 +102,17 @@ async fn main() -> Result<()> {
         .context("schema version check failed — delete the listed database(s) and re-run `find-scan --full`")?;
 
     let bind = config.server.bind.clone();
-    let state = Arc::new(AppState { config, data_dir: data_dir.clone() });
+    let worker_status = Arc::new(std::sync::Mutex::new(WorkerStatus::Idle));
+    let state = Arc::new(AppState {
+        config,
+        data_dir: data_dir.clone(),
+        worker_status: Arc::clone(&worker_status),
+    });
 
-    // Spawn the async inbox worker.
+    // Spawn the async inbox worker, sharing the status handle.
     let worker_data_dir = data_dir.clone();
     tokio::spawn(async move {
-        if let Err(e) = worker::start_inbox_worker(worker_data_dir).await {
+        if let Err(e) = worker::start_inbox_worker(worker_data_dir, worker_status).await {
             tracing::error!("Inbox worker failed: {e}");
         }
     });

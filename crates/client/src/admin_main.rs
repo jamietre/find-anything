@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use colored::Colorize;
 
+use find_common::api::WorkerStatus;
 use find_common::config::{default_config_path, parse_client_config};
 
 mod api;
@@ -110,6 +111,11 @@ async fn main() -> Result<()> {
                 println!("Inbox:    {} pending, {} failed", stats.inbox_pending, stats.failed_requests);
                 println!("Archives: {} ZIP files ({})", stats.total_archives, format_bytes(stats.archive_size_bytes));
                 println!("DB size:  {}", format_bytes(stats.db_size_bytes));
+                match &stats.worker_status {
+                    WorkerStatus::Idle => println!("Worker:   idle"),
+                    WorkerStatus::Processing { source, file } =>
+                        println!("Worker:   {} processing {}/{}", "●".cyan(), source, file),
+                }
             }
         }
 

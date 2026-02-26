@@ -6,16 +6,18 @@ use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use find_common::api::BulkRequest;
+use find_common::api::{BulkRequest, WorkerStatus};
 
 use crate::archive::{self, ArchiveManager, ChunkRef};
 use crate::db;
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
+type StatusHandle = std::sync::Arc<std::sync::Mutex<WorkerStatus>>;
+
 /// Start the inbox worker that processes index requests asynchronously.
 /// Polls the inbox directory every second for new `.gz` files.
-pub async fn start_inbox_worker(data_dir: PathBuf) -> Result<()> {
+pub async fn start_inbox_worker(data_dir: PathBuf, status: StatusHandle) -> Result<()> {
     let inbox_dir = data_dir.join("inbox");
     tokio::fs::create_dir_all(&inbox_dir).await?;
 
@@ -41,19 +43,31 @@ pub async fn start_inbox_worker(data_dir: PathBuf) -> Result<()> {
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if path.extension() == Some(OsStr::new("gz")) {
-                process_request_async(&data_dir, &path, &failed_dir).await;
+                process_request_async(&data_dir, &path, &failed_dir, status.clone()).await;
             }
         }
     }
 }
 
-async fn process_request_async(data_dir: &Path, request_path: &Path, failed_dir: &Path) {
+async fn process_request_async(
+    data_dir: &Path,
+    request_path: &Path,
+    failed_dir: &Path,
+    status: StatusHandle,
+) {
+    let status_reset = status.clone(); // held outside the closure to ensure Idle on any exit path
+
     let result = tokio::task::spawn_blocking({
         let data_dir = data_dir.to_path_buf();
         let request_path = request_path.to_path_buf();
-        move || process_request(&data_dir, &request_path)
+        move || process_request(&data_dir, &request_path, &status)
     })
     .await;
+
+    // Ensure idle is set even if process_request errored or panicked.
+    if let Ok(mut guard) = status_reset.lock() {
+        *guard = WorkerStatus::Idle;
+    }
 
     match result {
         Ok(Ok(())) => {
@@ -80,7 +94,7 @@ async fn process_request_async(data_dir: &Path, request_path: &Path, failed_dir:
     }
 }
 
-fn process_request(data_dir: &Path, request_path: &Path) -> Result<()> {
+fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle) -> Result<()> {
     tracing::info!("Processing request: {}", request_path.display());
 
     // Decompress and parse request
@@ -104,8 +118,14 @@ fn process_request(data_dir: &Path, request_path: &Path) -> Result<()> {
         db::delete_files(&conn, &mut archive_mgr, &request.delete_paths)?;
     }
 
-    // 2. Upserts
+    // 2. Upserts — update status per file so the UI shows what is being indexed
     for file in &request.files {
+        if let Ok(mut guard) = status.lock() {
+            *guard = WorkerStatus::Processing {
+                source: request.source.clone(),
+                file: file.path.clone(),
+            };
+        }
         process_file(&conn, &mut archive_mgr, file)?;
     }
 
