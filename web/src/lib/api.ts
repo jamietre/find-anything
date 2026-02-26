@@ -20,6 +20,8 @@ export interface SearchResult {
 	snippet: string;
 	score: number;
 	context_lines: ContextLine[];
+	/** Other paths with identical content (deduplication aliases). */
+	aliases?: string[];
 }
 
 export interface SearchResponse {

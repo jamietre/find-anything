@@ -148,6 +148,10 @@ pub struct IndexFile {
     /// Set on the outer file; None for inner archive members.
     #[serde(default)]
     pub extract_ms: Option<u64>,
+    /// blake3 hex hash of the file's raw bytes, used for content deduplication.
+    /// None for files that could not be hashed (too large, permission error, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_hash: Option<String>,
 }
 
 /// One extraction failure reported by the client.
@@ -195,6 +199,10 @@ pub struct SearchResult {
     /// Full URL to access the resource (if base_url configured for source).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resource_url: Option<String>,
+    /// Other paths with identical content (deduplication aliases).
+    /// Empty when there are no duplicates; omitted from JSON.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
 }
 
 /// GET /api/v1/search response.

@@ -173,25 +173,13 @@ pub async fn search(
                 // Score only as many candidates as needed for this page.
                 let candidates = db::fts_candidates(&conn, &archive_mgr, &fts_query, scoring_limit, fts_phrase)?;
 
-                let results: Vec<SearchResult> = match mode.as_str() {
+                // Build (SearchResult, file_id) pairs for alias lookup.
+                let result_pairs: Vec<(SearchResult, i64)> = match mode.as_str() {
                     "exact" => {
                         // FTS5 trigram is already a substring match — candidates are the answer.
-                        candidates.into_iter().map(|c| SearchResult {
-                            source: source_name.clone(),
-                            path: c.file_path.clone(),
-                            archive_path: c.archive_path,
-                            line_number: c.line_number,
-                            snippet: c.content,
-                            score: 0,
-                            context_lines: vec![],
-                            resource_url: make_resource_url(&base_url, &c.file_path),
-                        }).collect()
-                    }
-                    "regex" => {
-                        let re = regex::RegexBuilder::new(&query).case_insensitive(true).build()?;
-                        candidates.into_iter()
-                            .filter(|c| re.is_match(&c.content))
-                            .map(|c| SearchResult {
+                        candidates.into_iter().map(|c| {
+                            let file_id = c.file_id;
+                            (SearchResult {
                                 source: source_name.clone(),
                                 path: c.file_path.clone(),
                                 archive_path: c.archive_path,
@@ -200,6 +188,27 @@ pub async fn search(
                                 score: 0,
                                 context_lines: vec![],
                                 resource_url: make_resource_url(&base_url, &c.file_path),
+                                aliases: vec![],
+                            }, file_id)
+                        }).collect()
+                    }
+                    "regex" => {
+                        let re = regex::RegexBuilder::new(&query).case_insensitive(true).build()?;
+                        candidates.into_iter()
+                            .filter(|c| re.is_match(&c.content))
+                            .map(|c| {
+                                let file_id = c.file_id;
+                                (SearchResult {
+                                    source: source_name.clone(),
+                                    path: c.file_path.clone(),
+                                    archive_path: c.archive_path,
+                                    line_number: c.line_number,
+                                    snippet: c.content,
+                                    score: 0,
+                                    context_lines: vec![],
+                                    resource_url: make_resource_url(&base_url, &c.file_path),
+                                    aliases: vec![],
+                                }, file_id)
                             })
                             .collect()
                     }
@@ -207,7 +216,8 @@ pub async fn search(
                         let mut scorer = FuzzyScorer::new(&query);
                         candidates.into_iter()
                             .filter_map(|c| {
-                                scorer.score(&c.content).map(|score| SearchResult {
+                                let file_id = c.file_id;
+                                scorer.score(&c.content).map(|score| (SearchResult {
                                     source: source_name.clone(),
                                     path: c.file_path.clone(),
                                     archive_path: c.archive_path,
@@ -216,11 +226,26 @@ pub async fn search(
                                     score,
                                     context_lines: vec![],
                                     resource_url: make_resource_url(&base_url, &c.file_path),
-                                })
+                                    aliases: vec![],
+                                }, file_id))
                             })
                             .collect()
                     }
                 };
+
+                // Look up aliases for all canonical file IDs in the result set.
+                let canonical_ids: Vec<i64> = result_pairs.iter().map(|(_, id)| *id).collect();
+                let aliases_map = db::fetch_aliases_for_canonical_ids(&conn, &canonical_ids)?;
+
+                let results: Vec<SearchResult> = result_pairs
+                    .into_iter()
+                    .map(|(mut r, id)| {
+                        if let Some(aliases) = aliases_map.get(&id) {
+                            r.aliases = aliases.clone();
+                        }
+                        r
+                    })
+                    .collect();
 
                 Ok((source_total, results))
             })

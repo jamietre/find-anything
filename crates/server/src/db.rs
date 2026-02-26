@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use find_common::api::{ContextLine, DirEntry, FileRecord, IndexFile, IndexingError, IndexingFailure, KindStats, ScanHistoryPoint};
 
@@ -14,7 +14,7 @@ use crate::archive::{ArchiveManager, ChunkRef};
 
 /// The current schema version. Stored in SQLite's built-in `user_version` pragma.
 /// Increment this whenever the schema changes incompatibly.
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
@@ -24,6 +24,7 @@ pub fn open(db_path: &Path) -> Result<Connection> {
         .context("initialising schema")?;
     migrate_v3(&conn).context("v3 migration")?;
     migrate_v4(&conn).context("v4 migration")?;
+    migrate_v5(&conn).context("v5 migration")?;
     Ok(conn)
 }
 
@@ -37,8 +38,8 @@ fn check_schema_version(conn: &Connection, db_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // v3 is migratable to v4 (only adds the indexing_errors table, no incompatible changes).
-    if version == 3 {
+    // v3 and v4 are migratable forward via the migration chain.
+    if version == 3 || version == 4 {
         return Ok(());
     }
 
@@ -108,6 +109,23 @@ fn migrate_v4(conn: &Connection) -> Result<()> {
              count      INTEGER NOT NULL DEFAULT 1
          );
          PRAGMA user_version = 4;",
+    )?;
+    Ok(())
+}
+
+fn migrate_v5(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= 5 {
+        return Ok(());
+    }
+    conn.execute_batch(
+        "ALTER TABLE files ADD COLUMN content_hash TEXT;
+         ALTER TABLE files ADD COLUMN canonical_file_id INTEGER REFERENCES files(id) ON DELETE SET NULL;
+         CREATE INDEX IF NOT EXISTS files_content_hash ON files(content_hash)
+             WHERE content_hash IS NOT NULL;
+         CREATE INDEX IF NOT EXISTS files_canonical ON files(canonical_file_id)
+             WHERE canonical_file_id IS NOT NULL;
+         PRAGMA user_version = 5;",
     )?;
     Ok(())
 }
@@ -200,59 +218,230 @@ pub fn delete_files(
 ) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
 
-    // Collect chunk refs before the rows are gone, including all inner archive members.
-    let refs = collect_chunk_refs(&tx, paths)?;
-
-    // Delete rows for the outer path AND all inner archive members (path LIKE 'x::%').
-    // ON DELETE CASCADE removes associated lines automatically.
     for path in paths {
-        tx.execute(
-            "DELETE FROM files WHERE path = ?1 OR path LIKE ?2",
-            params![path, format!("{}::%", path)],
-        )?;
+        delete_one_path(&tx, archive_mgr, path)?;
     }
 
-    // Rewrite affected ZIPs. If this fails the transaction is dropped,
-    // rolling back the SQLite deletes automatically.
-    archive_mgr.remove_chunks(refs)?;
-
-    // ZIP rewrite succeeded — safe to commit.
     tx.commit()?;
     Ok(())
 }
 
-/// Collect chunk refs for all lines belonging to the given outer paths and their members.
-fn collect_chunk_refs(
+/// Delete one path (outer file + all inner archive members), with canonical promotion.
+fn delete_one_path(
     tx: &rusqlite::Transaction,
-    paths: &[String],
+    archive_mgr: &mut crate::archive::ArchiveManager,
+    path: &str,
+) -> Result<()> {
+    // Look up the outer file's id and canonical_file_id.
+    let outer: Option<(i64, Option<i64>)> = tx.query_row(
+        "SELECT id, canonical_file_id FROM files WHERE path = ?1",
+        params![path],
+        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<i64>>(1)?)),
+    ).optional()?;
+
+    let Some((outer_id, outer_canonical_id)) = outer else {
+        return Ok(()); // nothing to delete
+    };
+
+    // Delete all inner archive members first (path LIKE 'x::%').
+    // These are bulk-deleted without canonical promotion (they self-heal on next scan).
+    let inner_refs = collect_chunk_refs_for_pattern(tx, &format!("{}::%", path))?;
+    tx.execute(
+        "DELETE FROM files WHERE path LIKE ?1",
+        params![format!("{}::%", path)],
+    )?;
+    if !inner_refs.is_empty() {
+        archive_mgr.remove_chunks(inner_refs)?;
+    }
+
+    // Now delete the outer file itself.
+    if outer_canonical_id.is_some() {
+        // Outer file is an alias — cheap deletion, no chunks to remove.
+        tx.execute("DELETE FROM files WHERE id = ?1", params![outer_id])?;
+    } else {
+        // Outer file is canonical — check for aliases that need promotion.
+        let aliases: Vec<(i64, String)> = {
+            let mut stmt = tx.prepare(
+                "SELECT id, path FROM files WHERE canonical_file_id = ?1 ORDER BY id",
+            )?;
+            let v: Vec<(i64, String)> = stmt.query_map(params![outer_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            v
+        };
+
+        if aliases.is_empty() {
+            // No aliases — normal deletion: remove chunks then delete the row.
+            let refs = collect_chunk_refs_for_file(tx, outer_id)?;
+            delete_fts_for_file(tx, archive_mgr, outer_id)?;
+            tx.execute("DELETE FROM files WHERE id = ?1", params![outer_id])?;
+            if !refs.is_empty() {
+                archive_mgr.remove_chunks(refs)?;
+            }
+        } else {
+            // Canonical promotion: promote the first alias to canonical.
+            let (new_canonical_id, _new_canonical_path) = &aliases[0];
+            let new_canonical_id = *new_canonical_id;
+
+            // Fetch the canonical's lines before deletion.
+            struct LineRow {
+                id: i64,
+                line_number: i64,
+                chunk_archive: String,
+                chunk_name: String,
+                line_offset: i64,
+            }
+            let old_lines: Vec<LineRow> = {
+                let mut stmt = tx.prepare(
+                    "SELECT id, line_number, chunk_archive, chunk_name, line_offset_in_chunk
+                     FROM lines WHERE file_id = ?1 ORDER BY line_number",
+                )?;
+                let v: Vec<LineRow> = stmt.query_map(params![outer_id], |row| Ok(LineRow {
+                    id:           row.get(0)?,
+                    line_number:  row.get(1)?,
+                    chunk_archive: row.get(2)?,
+                    chunk_name:   row.get(3)?,
+                    line_offset:  row.get(4)?,
+                }))?
+                .collect::<rusqlite::Result<_>>()?;
+                v
+            };
+
+            // Read content for each line (needed to re-insert FTS entries).
+            let mut chunk_cache: HashMap<(String, String), Vec<String>> = HashMap::new();
+            let mut line_contents: Vec<(LineRow, String)> = Vec::new();
+            for line_row in old_lines {
+                let key = (line_row.chunk_archive.clone(), line_row.chunk_name.clone());
+                if !chunk_cache.contains_key(&key) {
+                    let chunk_ref = ChunkRef { archive_name: key.0.clone(), chunk_name: key.1.clone() };
+                    let text = archive_mgr.read_chunk(&chunk_ref).unwrap_or_default();
+                    chunk_cache.insert(key.clone(), text.lines().map(|l| l.to_string()).collect());
+                }
+                let content = chunk_cache[&key].get(line_row.line_offset as usize).cloned().unwrap_or_default();
+                line_contents.push((line_row, content));
+            }
+
+            // Delete FTS entries for the old canonical's lines (contentless FTS5 requires manual delete).
+            for (line_row, content) in &line_contents {
+                tx.execute(
+                    "INSERT INTO lines_fts(lines_fts, rowid, content) VALUES('delete', ?1, ?2)",
+                    params![line_row.id, content],
+                )?;
+            }
+
+            // Delete the old canonical's files row (CASCADE removes its lines).
+            tx.execute("DELETE FROM files WHERE id = ?1", params![outer_id])?;
+
+            // Promote the first alias to canonical.
+            tx.execute(
+                "UPDATE files SET canonical_file_id = NULL WHERE id = ?1",
+                params![new_canonical_id],
+            )?;
+            // Re-point remaining aliases to the new canonical.
+            for (alias_id, _) in aliases.iter().skip(1) {
+                tx.execute(
+                    "UPDATE files SET canonical_file_id = ?1 WHERE id = ?2",
+                    params![new_canonical_id, alias_id],
+                )?;
+            }
+
+            // Insert lines for the new canonical (reusing old chunk refs).
+            for (line_row, content) in &line_contents {
+                let new_line_id: i64 = tx.query_row(
+                    "INSERT INTO lines (file_id, line_number, chunk_archive, chunk_name, line_offset_in_chunk)
+                     VALUES (?1, ?2, ?3, ?4, ?5)
+                     RETURNING id",
+                    params![
+                        new_canonical_id,
+                        line_row.line_number,
+                        line_row.chunk_archive,
+                        line_row.chunk_name,
+                        line_row.line_offset,
+                    ],
+                    |row| row.get(0),
+                )?;
+                tx.execute(
+                    "INSERT INTO lines_fts(rowid, content) VALUES (?1, ?2)",
+                    params![new_line_id, content],
+                )?;
+            }
+            // No ZIP rewrite — old chunk files remain valid under new line references.
+        }
+    }
+
+    Ok(())
+}
+
+/// Collect chunk refs for a file by ID.
+fn collect_chunk_refs_for_file(
+    tx: &rusqlite::Transaction,
+    file_id: i64,
+) -> Result<Vec<crate::archive::ChunkRef>> {
+    let mut stmt = tx.prepare(
+        "SELECT DISTINCT chunk_archive, chunk_name FROM lines WHERE file_id = ?1",
+    )?;
+    let refs = stmt.query_map(params![file_id], |row| {
+        Ok(crate::archive::ChunkRef { archive_name: row.get(0)?, chunk_name: row.get(1)? })
+    })?
+    .collect::<rusqlite::Result<_>>()?;
+    Ok(refs)
+}
+
+/// Collect chunk refs for all files matching a LIKE pattern.
+fn collect_chunk_refs_for_pattern(
+    tx: &rusqlite::Transaction,
+    like_pat: &str,
 ) -> Result<Vec<crate::archive::ChunkRef>> {
     let mut refs = Vec::new();
-    for path in paths {
-        // Collect file_ids for the outer file and all inner members (path::*).
-        let mut id_stmt = tx.prepare(
-            "SELECT id FROM files WHERE path = ?1 OR path LIKE ?2",
-        )?;
-        let file_ids: Vec<i64> = id_stmt
-            .query_map(params![path, format!("{}::%", path)], |row| row.get(0))?
+    let file_ids: Vec<i64> = {
+        let mut stmt = tx.prepare("SELECT id FROM files WHERE path LIKE ?1")?;
+        let ids: Vec<i64> = stmt.query_map(params![like_pat], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
-
-        for fid in file_ids {
-            let mut stmt = tx.prepare(
-                "SELECT DISTINCT chunk_archive, chunk_name FROM lines WHERE file_id = ?1",
-            )?;
-            let chunk_refs = stmt.query_map(params![fid], |row| {
-                Ok(crate::archive::ChunkRef {
-                    archive_name: row.get(0)?,
-                    chunk_name: row.get(1)?,
-                })
-            })?;
-            for r in chunk_refs {
-                refs.push(r?);
-            }
-        }
+        ids
+    };
+    for fid in file_ids {
+        refs.extend(collect_chunk_refs_for_file(tx, fid)?);
     }
     Ok(refs)
 }
+
+/// Delete FTS entries for all lines belonging to a file.
+fn delete_fts_for_file(
+    tx: &rusqlite::Transaction,
+    archive_mgr: &crate::archive::ArchiveManager,
+    file_id: i64,
+) -> Result<()> {
+    struct LineRef { id: i64, chunk_archive: String, chunk_name: String, line_offset: i64 }
+    let line_refs: Vec<LineRef> = {
+        let mut stmt = tx.prepare(
+            "SELECT id, chunk_archive, chunk_name, line_offset_in_chunk FROM lines WHERE file_id = ?1",
+        )?;
+        let refs: Vec<LineRef> = stmt.query_map(params![file_id], |row| Ok(LineRef {
+            id: row.get(0)?,
+            chunk_archive: row.get(1)?,
+            chunk_name: row.get(2)?,
+            line_offset: row.get(3)?,
+        }))?
+        .collect::<rusqlite::Result<_>>()?;
+        refs
+    };
+
+    let mut chunk_cache: HashMap<(String, String), Vec<String>> = HashMap::new();
+    for lr in &line_refs {
+        let key = (lr.chunk_archive.clone(), lr.chunk_name.clone());
+        if !chunk_cache.contains_key(&key) {
+            let chunk_ref = ChunkRef { archive_name: key.0.clone(), chunk_name: key.1.clone() };
+            let text = archive_mgr.read_chunk(&chunk_ref).unwrap_or_default();
+            chunk_cache.insert(key.clone(), text.lines().map(|l| l.to_string()).collect());
+        }
+        let content = chunk_cache[&key].get(lr.line_offset as usize).cloned().unwrap_or_default();
+        tx.execute(
+            "INSERT INTO lines_fts(lines_fts, rowid, content) VALUES('delete', ?1, ?2)",
+            params![lr.id, content],
+        )?;
+    }
+    Ok(())
+}
+
 
 // ── Scan timestamp ────────────────────────────────────────────────────────────
 
@@ -317,6 +506,8 @@ pub struct CandidateRow {
     pub archive_path: Option<String>,
     pub line_number: usize,
     pub content: String,
+    /// The file's row ID in the `files` table (used for alias lookup).
+    pub file_id: i64,
 }
 
 /// FTS5 trigram pre-filter.  Returns up to `limit` candidate rows.
@@ -373,11 +564,12 @@ pub fn fts_candidates(
         chunk_archive: String,
         chunk_name: String,
         line_offset: usize,
+        file_id: i64,
     }
 
     let mut stmt = conn.prepare(
         "SELECT f.path, f.kind, l.line_number,
-                l.chunk_archive, l.chunk_name, l.line_offset_in_chunk
+                l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id
          FROM lines_fts
          JOIN lines l ON l.id = lines_fts.rowid
          JOIN files f ON f.id = l.file_id
@@ -394,6 +586,7 @@ pub fn fts_candidates(
                 chunk_archive: row.get(3)?,
                 chunk_name:   row.get(4)?,
                 line_offset:  row.get::<_, i64>(5)? as usize,
+                file_id:      row.get(6)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -420,10 +613,37 @@ pub fn fts_candidates(
             archive_path,
             line_number:  row.line_number,
             content,
+            file_id:      row.file_id,
         });
     }
 
     Ok(results)
+}
+
+/// Fetch alias paths grouped by their canonical file ID.
+/// Returns a map of canonical_id → list of alias paths.
+pub fn fetch_aliases_for_canonical_ids(
+    conn: &Connection,
+    canonical_ids: &[i64],
+) -> Result<HashMap<i64, Vec<String>>> {
+    let mut map: HashMap<i64, Vec<String>> = HashMap::new();
+    if canonical_ids.is_empty() {
+        return Ok(map);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT canonical_file_id, path FROM files
+         WHERE canonical_file_id = ?1
+         ORDER BY path",
+    )?;
+    for &cid in canonical_ids {
+        let paths: Vec<String> = stmt
+            .query_map(params![cid], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        if !paths.is_empty() {
+            map.insert(cid, paths);
+        }
+    }
+    Ok(map)
 }
 
 /// Split a potentially composite path ("zip::member") into (outer_path, archive_path).

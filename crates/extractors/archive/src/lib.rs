@@ -11,8 +11,16 @@ use xz2::read::XzDecoder;
 use find_common::api::IndexLine;
 use find_common::config::ExtractorConfig;
 
+/// One batch of lines for a single archive member, with its content hash.
+pub struct MemberBatch {
+    pub lines: Vec<IndexLine>,
+    /// blake3 hex hash of the member's raw bytes (decompressed from the archive).
+    /// None for filename-only entries (too large, nested archives, or single-compressed).
+    pub content_hash: Option<String>,
+}
+
 // Internal callback alias for brevity.
-type CB<'a> = &'a mut dyn FnMut(Vec<IndexLine>);
+type CB<'a> = &'a mut dyn FnMut(MemberBatch);
 
 /// Returns true if any path component starts with `.` (and is not `.` or `..`).
 /// Used to skip hidden members (e.g. `.terraform/`, `.git/`) when
@@ -30,7 +38,7 @@ fn has_hidden_component(name: &str) -> bool {
 /// Use `extract` if you need a `Vec<IndexLine>` instead of a callback.
 pub fn extract_streaming<F>(path: &Path, cfg: &ExtractorConfig, callback: &mut F) -> Result<()>
 where
-    F: FnMut(Vec<IndexLine>),
+    F: FnMut(MemberBatch),
 {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let kind = detect_kind_from_name(name).context("not a recognized archive")?;
@@ -43,7 +51,7 @@ where
 /// member lines in memory simultaneously.
 pub fn extract(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
     let mut lines = Vec::new();
-    extract_streaming(path, cfg, &mut |member_lines| lines.extend(member_lines))?;
+    extract_streaming(path, cfg, &mut |batch| lines.extend(batch.lines))?;
     Ok(lines)
 }
 
@@ -164,7 +172,7 @@ fn zip_from_archive<R: Read + std::io::Seek>(
 
         // Check uncompressed size before allocating — skip reading oversized members.
         if entry.size() as usize > size_limit {
-            callback(make_filename_line(&name));
+            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None });
             continue;
         }
         // Use take() as a hard memory bound: entry.size() can be wrong for
@@ -172,7 +180,7 @@ fn zip_from_archive<R: Read + std::io::Seek>(
         let mut bytes = Vec::new();
         let read_result = (&mut entry as &mut dyn Read).take((size_limit + 1) as u64).read_to_end(&mut bytes);
         if bytes.len() > size_limit {
-            callback(make_filename_line(&name));
+            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None });
             continue;
         }
         if let Err(e) = read_result {
@@ -183,7 +191,8 @@ fn zip_from_archive<R: Read + std::io::Seek>(
                 warn!("zip: failed to read entry '{}': {}", name, e);
             }
         }
-        callback(extract_member_bytes(bytes, &name, display_prefix, cfg));
+        let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
+        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash });
     }
     Ok(())
 }
@@ -219,7 +228,7 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cf
         // Check uncompressed size before allocating — skip reading oversized members.
         let entry_size = entry.header().size().unwrap_or(0) as usize;
         if entry_size > size_limit {
-            callback(make_filename_line(&name));
+            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None });
             continue;
         }
         // Use take() as a hard memory bound in case the header size was wrong.
@@ -228,7 +237,7 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cf
         let mut bytes = Vec::new();
         let read_result = (&mut entry as &mut dyn Read).take((size_limit + 1) as u64).read_to_end(&mut bytes);
         if bytes.len() > size_limit {
-            callback(make_filename_line(&name));
+            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None });
             continue;
         }
         if let Err(e) = read_result {
@@ -239,7 +248,8 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cf
                 warn!("tar: failed to read entry '{}': {}", name, e);
             }
         }
-        callback(extract_member_bytes(bytes, &name, display_prefix, cfg));
+        let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
+        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash });
     }
     Ok(())
 }
@@ -276,7 +286,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
         if entry.size() as usize > size_limit {
             // Drain the reader to keep solid-block stream in sync.
             let _ = std::io::copy(reader, &mut std::io::sink());
-            callback(make_filename_line(&name));
+            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None });
             return Ok(true);
         }
         // Bound the read to size_limit+1 bytes regardless of what entry.size()
@@ -289,7 +299,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
         };
         if bytes.len() > size_limit {
             let _ = std::io::copy(reader, &mut std::io::sink());
-            callback(make_filename_line(&name));
+            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None });
             return Ok(true);
         }
         if let Err(e) = read_result {
@@ -307,7 +317,8 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
             }
             // bytes stays empty — filename still indexed below
         }
-        callback(extract_member_bytes(bytes, &name, display_prefix, cfg));
+        let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
+        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash });
         Ok(true)
     })?;
 
@@ -316,7 +327,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
 
 /// Extract a single-file compressed archive (bare .gz, .bz2, .xz).
 /// Decompresses up to `cfg.max_size_kb` bytes and indexes the inner content.
-fn single_compressed<R: Read>(reader: R, path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
+fn single_compressed<R: Read>(reader: R, path: &Path, cfg: &ExtractorConfig) -> Result<MemberBatch> {
     let inner_name = path
         .file_stem()
         .and_then(|s| s.to_str())
@@ -327,10 +338,14 @@ fn single_compressed<R: Read>(reader: R, path: &Path, cfg: &ExtractorConfig) -> 
     let mut bytes = Vec::new();
     reader.take(size_limit as u64 + 1).read_to_end(&mut bytes)?;
     if bytes.len() > size_limit {
-        return Ok(make_filename_line(&inner_name));
+        return Ok(MemberBatch { lines: make_filename_line(&inner_name), content_hash: None });
     }
 
-    Ok(extract_member_bytes(bytes, &inner_name, path.to_str().unwrap_or(""), cfg))
+    let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
+    Ok(MemberBatch {
+        lines: extract_member_bytes(bytes, &inner_name, path.to_str().unwrap_or(""), cfg),
+        content_hash,
+    })
 }
 
 // ============================================================================
@@ -360,7 +375,7 @@ fn handle_nested_archive(
     callback: CB<'_>,
 ) {
     // Always emit the filename of the nested archive itself.
-    callback(make_filename_line(outer_name));
+    callback(MemberBatch { lines: make_filename_line(outer_name), content_hash: None });
 
     if cfg.max_depth == 0 {
         warn!(
@@ -379,8 +394,8 @@ fn handle_nested_archive(
 
     // Wrapper callback that prefixes inner archive_paths with `outer_name::`.
     let outer_prefix = outer_name.to_string();
-    let mut prefixed = |inner_lines: Vec<IndexLine>| {
-        let p: Vec<IndexLine> = inner_lines
+    let mut prefixed = |inner_batch: MemberBatch| {
+        let p: Vec<IndexLine> = inner_batch.lines
             .into_iter()
             .map(|mut l| {
                 let inner = l.archive_path.as_deref().unwrap_or("");
@@ -392,7 +407,7 @@ fn handle_nested_archive(
                 l
             })
             .collect();
-        callback(p);
+        callback(MemberBatch { lines: p, content_hash: inner_batch.content_hash });
     };
 
     // Use `reader` as `&mut dyn Read` throughout so that tar_streaming<GzDecoder<&mut dyn Read>>

@@ -32,7 +32,7 @@ pub fn build_index_files(
             line_number: 0,
             content: rel_path.clone(),
         });
-        return vec![IndexFile { path: rel_path, mtime, size, kind, lines: all_lines, extract_ms: None }];
+        return vec![IndexFile { path: rel_path, mtime, size, kind, lines: all_lines, extract_ms: None, content_hash: None }];
     }
 
     // Group by archive_path.
@@ -62,6 +62,7 @@ pub fn build_index_files(
         kind: kind.clone(),
         lines: outer_lines,
         extract_ms: None,
+        content_hash: None,
     });
 
     // One IndexFile per archive member, with composite path "zip::member".
@@ -92,6 +93,7 @@ pub fn build_index_files(
             kind: member_kind,
             lines: content_lines,
             extract_ms: None,
+            content_hash: None,
         });
     }
 
@@ -112,6 +114,7 @@ pub fn build_member_index_files(
     mtime: i64,
     size: i64,
     member_lines: Vec<IndexLine>,
+    content_hash: Option<String>,
 ) -> Vec<IndexFile> {
     let mut groups: std::collections::HashMap<String, Vec<IndexLine>> = std::collections::HashMap::new();
     for line in member_lines {
@@ -158,6 +161,7 @@ pub fn build_member_index_files(
             kind: member_kind,
             lines,
             extract_ms: None,
+            content_hash: content_hash.clone(),
         });
     }
     result

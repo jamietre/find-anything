@@ -75,6 +75,8 @@
 	function displayPath(r: SearchResult): string {
 		return r.archive_path ? `${r.path}::${r.archive_path}` : r.path;
 	}
+
+	let aliasesExpanded = false;
 </script>
 
 <article class="result" bind:this={el}>
@@ -92,7 +94,22 @@
 		{#if result.line_number > 0}
 			<span class="line-ref">:{result.line_number}</span>
 		{/if}
+		{#if result.aliases && result.aliases.length > 0}
+			<!-- svelte-ignore a11y-click-events-have-key-events -->
+			<span
+				class="alias-badge"
+				title={aliasesExpanded ? 'Hide duplicate paths' : 'Show duplicate paths'}
+				on:click|stopPropagation={() => (aliasesExpanded = !aliasesExpanded)}
+			>+{result.aliases.length} duplicate{result.aliases.length === 1 ? '' : 's'}</span>
+		{/if}
 	</div>
+	{#if aliasesExpanded && result.aliases && result.aliases.length > 0}
+		<div class="aliases">
+			{#each result.aliases as alias}
+				<div class="alias-path">{alias}</div>
+			{/each}
+		</div>
+	{/if}
 
 	<div class="context-lines">
 		{#if result.line_number === 0}
@@ -252,5 +269,38 @@
 		border-radius: 3px;
 		background: var(--border);
 		opacity: 0.5;
+	}
+
+	.alias-badge {
+		margin-left: auto;
+		padding: 1px 7px;
+		border-radius: 20px;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		color: var(--text-dim);
+		font-size: 11px;
+		flex-shrink: 0;
+		cursor: pointer;
+	}
+
+	.alias-badge:hover {
+		border-color: var(--accent-muted);
+		color: var(--text);
+	}
+
+	.aliases {
+		background: var(--bg-secondary);
+		border-top: 1px solid var(--border);
+		padding: 4px 12px 6px;
+	}
+
+	.alias-path {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		color: var(--text-dim);
+		padding: 2px 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 </style>

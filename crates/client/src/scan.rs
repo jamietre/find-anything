@@ -16,7 +16,7 @@ use crate::api::ApiClient;
 use crate::batch::{build_index_files, build_member_index_files, submit_batch};
 use crate::extract;
 
-use find_extract_archive as _;
+
 
 const BATCH_SIZE: usize = 200;
 const BATCH_BYTES: usize = 8 * 1024 * 1024; // 8 MB
@@ -115,6 +115,13 @@ pub async fn run_scan(
             // rather than holding the entire archive's content in memory.
             info!("extracting archive {rel_path} ({indexed} indexed so far)");
 
+            // Hash the outer archive file for dedup (only if within size limit).
+            let outer_hash = if size <= (cfg.max_size_kb * 1024) as i64 {
+                std::fs::read(abs_path).ok().map(|bytes| blake3::hash(&bytes).to_hex().to_string())
+            } else {
+                None
+            };
+
             // Submit the outer archive file first, before any member batches.
             // The server deletes stale inner members when it sees the outer file,
             // so it must arrive before member batches — not after them.
@@ -125,34 +132,36 @@ pub async fn run_scan(
                 kind,
                 lines: vec![IndexLine { archive_path: None, line_number: 0, content: rel_path.clone() }],
                 extract_ms: None,
+                content_hash: outer_hash,
             };
             batch.push(outer_file);
             submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
             batch_bytes = 0;
 
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<IndexLine>>(16);
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<find_extract_archive::MemberBatch>(16);
             let abs_clone: std::path::PathBuf = (*abs_path).clone(); // owned — required by spawn_blocking 'static
             let cfg_clone = cfg;
 
             let extract_task = tokio::task::spawn_blocking(move || {
-                find_extract_archive::extract_streaming(&abs_clone, &cfg_clone, &mut |member_lines| {
+                find_extract_archive::extract_streaming(&abs_clone, &cfg_clone, &mut |batch| {
                     // blocking_send provides backpressure; ignore errors (scan cancelled).
-                    let _ = tx.blocking_send(member_lines);
+                    let _ = tx.blocking_send(batch);
                 })
             });
 
             let mut members_submitted: usize = 0;
-            while let Some(member_lines) = rx.recv().await {
+            while let Some(member_batch) = rx.recv().await {
                 // Apply effective exclude patterns to archive members.
                 // archive_path may be "inner.zip::path/to/file.js" for nested archives;
                 // take the last segment (actual file path) for glob matching.
-                if let Some(ap) = member_lines.first().and_then(|l| l.archive_path.as_deref()) {
+                if let Some(ap) = member_batch.lines.first().and_then(|l| l.archive_path.as_deref()) {
                     let file_path = ap.rsplit("::").next().unwrap_or(ap);
                     if eff_excludes.is_match(file_path) {
                         continue;
                     }
                 }
-                for file in build_member_index_files(rel_path, mtime, size, member_lines) {
+                let content_hash = member_batch.content_hash;
+                for file in build_member_index_files(rel_path, mtime, size, member_batch.lines, content_hash) {
                     let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
                     batch_bytes += file_bytes;
                     members_submitted += 1;
@@ -211,9 +220,16 @@ pub async fn run_scan(
                 kind
             };
             let extract_ms = t0.elapsed().as_millis() as u64;
+            // Hash raw file bytes for dedup (only if within size limit).
+            let content_hash = if size <= (cfg.max_size_kb * 1024) as i64 {
+                std::fs::read(abs_path).ok().map(|bytes| blake3::hash(&bytes).to_hex().to_string())
+            } else {
+                None
+            };
             let mut index_files = build_index_files(rel_path.clone(), mtime, size, kind, lines);
             if let Some(f) = index_files.first_mut() {
                 f.extract_ms = Some(extract_ms);
+                f.content_hash = content_hash;
             }
             for file in index_files {
                 let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();

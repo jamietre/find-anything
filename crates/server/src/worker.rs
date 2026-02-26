@@ -164,6 +164,11 @@ fn process_file(
     archive_mgr: &mut ArchiveManager,
     file: &find_common::api::IndexFile,
 ) -> Result<()> {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
     // If this is an outer archive file being re-indexed, delete stale inner members
     // first. They'll be re-submitted as separate IndexFile entries in the same batch.
     // We detect "outer archive" by kind == "archive" and no "::" in the path.
@@ -198,6 +203,45 @@ fn process_file(
             rusqlite::params![like_pat],
         )?;
     }
+
+    // ── Dedup check ────────────────────────────────────────────────────────
+    // If the file has a content hash and another canonical with the same hash
+    // exists, record this file as an alias and skip chunk/lines/FTS writes.
+    if let Some(hash) = &file.content_hash {
+        let canonical_id: Option<i64> = conn.query_row(
+            "SELECT id FROM files
+             WHERE content_hash = ?1
+               AND canonical_file_id IS NULL
+               AND path != ?2
+             LIMIT 1",
+            rusqlite::params![hash, file.path],
+            |row| row.get(0),
+        ).optional()?;
+
+        if let Some(canonical_id) = canonical_id {
+            // Register as alias — no chunks/lines/FTS written.
+            conn.execute(
+                "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, canonical_file_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(path) DO UPDATE SET
+                   mtime            = excluded.mtime,
+                   size             = excluded.size,
+                   kind             = excluded.kind,
+                   extract_ms       = excluded.extract_ms,
+                   content_hash     = excluded.content_hash,
+                   canonical_file_id = excluded.canonical_file_id",
+                rusqlite::params![
+                    file.path, file.mtime, file.size, file.kind,
+                    now_secs,
+                    file.extract_ms.map(|ms| ms as i64),
+                    hash,
+                    canonical_id,
+                ],
+            )?;
+            return Ok(());
+        }
+    }
+    // ── End dedup check ────────────────────────────────────────────────────
 
     // Remove old chunks for this specific file before writing new ones.
     let existing_id: Option<i64> = conn.query_row(
@@ -237,23 +281,23 @@ fn process_file(
         chunk_ref_map.insert(chunk.chunk_number, chunk_ref.clone());
     }
 
-    // Upsert file record. indexed_at is set on first insert and not overwritten on conflict.
-    let now_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
+    // Upsert file record as canonical (canonical_file_id = NULL).
+    // indexed_at is set on first insert and not overwritten on conflict.
     conn.execute(
-        "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, canonical_file_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
          ON CONFLICT(path) DO UPDATE SET
-           mtime      = excluded.mtime,
-           size       = excluded.size,
-           kind       = excluded.kind,
-           extract_ms = excluded.extract_ms",
+           mtime             = excluded.mtime,
+           size              = excluded.size,
+           kind              = excluded.kind,
+           extract_ms        = excluded.extract_ms,
+           content_hash      = excluded.content_hash,
+           canonical_file_id = NULL",
         rusqlite::params![
             file.path, file.mtime, file.size, file.kind,
             now_secs,
             file.extract_ms.map(|ms| ms as i64),
+            file.content_hash.as_deref(),
         ],
     )?;
 
@@ -271,14 +315,6 @@ fn process_file(
     // inflated. Actual search results are correct because the JOIN with `lines` filters them
     // out, but pagination may misbehave if the client uses `total` to decide whether to
     // fetch more pages.
-    //
-    // Fix: add a `content TEXT` column to the `lines` table (schema v4 migration) and
-    // AFTER DELETE / AFTER INSERT triggers that maintain `lines_fts` automatically:
-    //   CREATE TRIGGER lines_ad AFTER DELETE ON lines BEGIN
-    //     INSERT INTO lines_fts(lines_fts, rowid, content) VALUES('delete', old.id, old.content);
-    //   END;
-    // The migration must also rebuild the FTS5 index from the stored content column, which
-    // means all existing databases will need a `find-scan --full` after upgrading.
     conn.execute("DELETE FROM lines WHERE file_id = ?1", rusqlite::params![file_id])?;
 
     // Build lookup: line_number → original line for FTS5 content
