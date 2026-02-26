@@ -1,0 +1,115 @@
+# Default client configuration — embedded into the binary at compile time.
+#
+# This file is the single source of truth for all built-in client defaults.
+# It is embedded via include_str! in config.rs and never deployed alongside
+# the binary — the values are baked in at compile time.
+#
+# Rules:
+#   - Every field referenced by a default_* function MUST be present here.
+#   - All fields must be explicit; no serde(default) is applied when this
+#     file is parsed, so omitting a field will cause a startup panic.
+
+# ── Scan ─────────────────────────────────────────────────────────────────────
+
+[scan]
+max_file_size_mb  = 10
+max_line_length   = 120
+follow_symlinks   = false
+include_hidden    = false
+noindex_file      = ".noindex"
+index_file        = ".index"
+
+exclude = [
+    # ── Development artefacts ─────────────────────────────────────────────
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/target/**",
+    "**/__pycache__/**",
+    "**/.next/**",
+    "**/dist/**",
+    "**/.cache/**",
+    "**/.tox/**",
+    "**/.venv/**",
+    "**/venv/**",
+    "**/*.pyc",
+    "**/*.class",
+
+    # ── Version control ───────────────────────────────────────────────────
+    "**/.svn/**",
+    "**/.hg/**",
+
+    # ── Synology NAS ─────────────────────────────────────────────────────
+    "**/#recycle/**",
+    "**/@eaDir/**",
+    "**/#snapshot/**",
+
+    # ── Linux virtual/runtime filesystems ────────────────────────────────
+    # No "**/" prefix: these are root-level only.  "proc/**" matches /proc/…
+    # when scanning from / but not ~/proc when scanning a home directory.
+    # /etc, /usr/lib/systemd, /usr/share and other config-bearing paths are
+    # intentionally absent so service units, sysctl settings, etc. remain
+    # discoverable.
+    "proc/**",     # virtual process filesystem — no real data
+    "sys/**",      # kernel sysfs — hardware/driver state
+    "dev/**",      # device nodes — no searchable content
+    "run/**",      # runtime (PIDs, sockets, volatile tempfiles)
+    "tmp/**",      # temporary files
+    "var/tmp/**",  # persistent temporary files
+    "var/lock/**", # lock files
+    "var/run/**",  # legacy symlink of /run on modern systems
+
+    # ── Linux binary directories ──────────────────────────────────────────
+    # Contain only executables / shared libraries; no text config lives here.
+    # No "**/" prefix for the same root-level-only reason as above.
+    "bin/**",
+    "sbin/**",
+    "lib/**",
+    "lib64/**",
+    "usr/bin/**",
+    "usr/sbin/**",
+    "usr/libexec/**",
+    "usr/lib/debug/**",  # DWARF debug symbols — large, binary
+
+    # ── macOS ─────────────────────────────────────────────────────────────
+    "**/__MACOSX/**",
+    "**/.Spotlight-V100/**",
+    "**/.Trashes/**",
+    "**/.fseventsd/**",
+    "**/Library/Caches/**",
+
+    # ── Windows system directories ────────────────────────────────────────
+    # "**/" prefix because Windows trees appear nested in backup shares
+    # (e.g. backups/2024/Windows/System32/…).
+    "**/$RECYCLE.BIN/**",
+    "**/System Volume Information/**",
+    "**/Windows/System32/**",
+    "**/Windows/SysWOW64/**",
+    "**/Windows/WinSxS/**",                  # side-by-side assemblies — huge
+    "**/Windows/Installer/**",
+    "**/Windows/SoftwareDistribution/**",    # Windows Update cache
+    "**/Windows/Temp/**",
+    "**/AppData/Local/Temp/**",
+
+    # ── Linux misc ────────────────────────────────────────────────────────
+    "**/lost+found/**",
+]
+
+[scan.archives]
+enabled          = true
+max_depth        = 10
+max_temp_file_mb = 500
+
+# ── Watch ────────────────────────────────────────────────────────────────────
+
+[watch]
+debounce_ms = 500
+
+# ── Log ──────────────────────────────────────────────────────────────────────
+
+[log]
+ignore = [
+    # Suppress high-volume glyph warnings from the pdf-extract crate.
+    # These fire for every unrecognised glyph name in a non-standard font
+    # and are harmless — the glyph is skipped and extraction continues.
+    "pdf_extract: unknown glyph name",
+]

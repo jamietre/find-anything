@@ -1,0 +1,33 @@
+# Default server configuration — embedded into the binary at compile time.
+#
+# This file is the single source of truth for all built-in server defaults.
+# It is embedded via include_str! in config.rs and never deployed alongside
+# the binary — the values are baked in at compile time.
+#
+# Rules:
+#   - Every field referenced by a default_* function MUST be present here.
+#   - All fields must be explicit; no serde(default) is applied when this
+#     file is parsed, so omitting a field will cause a startup panic.
+
+# ── Server ───────────────────────────────────────────────────────────────────
+
+[server]
+bind = "127.0.0.1:8080"
+
+# ── Search ───────────────────────────────────────────────────────────────────
+
+[search]
+default_limit       = 50
+max_limit           = 500
+fts_candidate_limit = 2000
+context_window      = 1
+
+# ── Log ──────────────────────────────────────────────────────────────────────
+
+[log]
+ignore = [
+    # Suppress high-volume glyph warnings from the pdf-extract crate.
+    # These fire for every unrecognised glyph name in a non-standard font
+    # and are harmless — the glyph is skipped and extraction continues.
+    "pdf_extract: unknown glyph name",
+]

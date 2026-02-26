@@ -1,7 +1,84 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::OnceLock;
 use tracing::warn;
+
+// ── Built-in defaults (embedded from TOML at compile time) ───────────────────
+
+/// Private structs used only for parsing the embedded defaults files.
+/// They have NO serde(default) attributes to prevent circular calls back into
+/// the default_* functions while the OnceLock is being initialised.
+#[derive(Deserialize)]
+struct ClientDefaults {
+    scan: ScanDefaults,
+    watch: WatchDefaults,
+    log: LogDefaults,
+}
+
+#[derive(Deserialize)]
+struct ScanDefaults {
+    exclude: Vec<String>,
+    max_file_size_mb: u64,
+    max_line_length: usize,
+    noindex_file: String,
+    index_file: String,
+    archives: ArchiveDefaults,
+}
+
+#[derive(Deserialize)]
+struct ArchiveDefaults {
+    max_depth: usize,
+    max_temp_file_mb: usize,
+}
+
+#[derive(Deserialize)]
+struct WatchDefaults {
+    debounce_ms: u64,
+}
+
+#[derive(Deserialize)]
+struct LogDefaults {
+    ignore: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct ServerDefaults {
+    server: ServerSettingsDefaults,
+    search: SearchDefaults,
+    // log.ignore shares the same default_log_ignore() function as the client;
+    // both files have identical values.  Parsed by serde but not stored here.
+}
+
+#[derive(Deserialize)]
+struct ServerSettingsDefaults {
+    bind: String,
+}
+
+#[derive(Deserialize)]
+struct SearchDefaults {
+    default_limit: usize,
+    max_limit: usize,
+    fts_candidate_limit: usize,
+    context_window: usize,
+}
+
+static CLIENT_DEFAULTS: OnceLock<ClientDefaults> = OnceLock::new();
+static SERVER_DEFAULTS: OnceLock<ServerDefaults> = OnceLock::new();
+
+fn client_defaults() -> &'static ClientDefaults {
+    CLIENT_DEFAULTS.get_or_init(|| {
+        toml::from_str(include_str!("defaults_client.toml"))
+            .expect("built-in defaults_client.toml is invalid — this is a compile-time bug")
+    })
+}
+
+fn server_defaults() -> &'static ServerDefaults {
+    SERVER_DEFAULTS.get_or_init(|| {
+        toml::from_str(include_str!("defaults_server.toml"))
+            .expect("built-in defaults_server.toml is invalid — this is a compile-time bug")
+    })
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
@@ -175,13 +252,8 @@ impl Default for ArchiveConfig {
     }
 }
 
-fn default_max_archive_depth() -> usize {
-    10
-}
-
-fn default_max_archive_temp_file_mb() -> usize {
-    500
-}
+fn default_max_archive_depth() -> usize    { client_defaults().scan.archives.max_depth }
+fn default_max_archive_temp_file_mb() -> usize { client_defaults().scan.archives.max_temp_file_mb }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchConfig {
@@ -204,104 +276,13 @@ impl Default for WatchConfig {
     }
 }
 
-fn default_debounce_ms() -> u64 {
-    500
-}
-
-fn default_excludes() -> Vec<String> {
-    vec![
-        // ── Development artefacts ─────────────────────────────────────────────
-        "**/.git/**".into(),
-        "**/node_modules/**".into(),
-        "**/target/**".into(),
-        "**/__pycache__/**".into(),
-        "**/.next/**".into(),
-        "**/dist/**".into(),
-        "**/.cache/**".into(),
-        "**/.tox/**".into(),
-        "**/.venv/**".into(),
-        "**/venv/**".into(),
-        "**/*.pyc".into(),
-        "**/*.class".into(),
-        // ── Version control ───────────────────────────────────────────────────
-        "**/.svn/**".into(),
-        "**/.hg/**".into(),
-        // ── Synology NAS ─────────────────────────────────────────────────────
-        "**/#recycle/**".into(),
-        "**/@eaDir/**".into(),
-        "**/#snapshot/**".into(),
-        // ── Linux virtual/runtime filesystems ────────────────────────────────
-        // No "**/" prefix: these are root-level only and we don't want to
-        // accidentally exclude a user's ~/proc or ~/tmp when they scan their
-        // home directory.  When scanning from /, "proc/**" matches /proc/…
-        // but not /home/user/proc/….
-        //
-        // /etc, /usr/lib/systemd, /usr/share and similar config-bearing paths
-        // are intentionally NOT excluded so that service unit files, sysctl
-        // settings, and other configuration is discoverable.
-        "proc/**".into(),    // virtual process filesystem — gigabytes of pseudo-files
-        "sys/**".into(),     // kernel sysfs — hardware/driver state, no real data
-        "dev/**".into(),     // device nodes — no searchable content
-        "run/**".into(),     // runtime (PIDs, sockets, volatile tempfiles)
-        "tmp/**".into(),     // temporary files
-        "var/tmp/**".into(), // persistent temporary files
-        "var/lock/**".into(), // lock files
-        "var/run/**".into(), // legacy symlink of /run on modern systems
-        // ── Linux binary directories ──────────────────────────────────────────
-        // Contain only executables / shared libraries; no text config lives here.
-        // Again no "**/" prefix so they only match at the scan root (i.e. / or
-        // a container rootfs), not inside a user's home checkout or data share.
-        "bin/**".into(),
-        "sbin/**".into(),
-        "lib/**".into(),
-        "lib64/**".into(),
-        "usr/bin/**".into(),
-        "usr/sbin/**".into(),
-        "usr/libexec/**".into(),
-        "usr/lib/debug/**".into(), // DWARF debug symbols — large, binary
-        // ── macOS ─────────────────────────────────────────────────────────────
-        "**/__MACOSX/**".into(),
-        "**/.Spotlight-V100/**".into(),
-        "**/.Trashes/**".into(),
-        "**/.fseventsd/**".into(),
-        "**/Library/Caches/**".into(),
-        // ── Windows system directories ────────────────────────────────────────
-        // Use "**/" prefix because Windows trees appear nested inside backup
-        // shares (e.g. backups/2024/Windows/System32/…).  The two-level
-        // specificity avoids false positives on innocent directories.
-        "**/$RECYCLE.BIN/**".into(),
-        "**/System Volume Information/**".into(),
-        "**/Windows/System32/**".into(),
-        "**/Windows/SysWOW64/**".into(),
-        "**/Windows/WinSxS/**".into(),     // side-by-side assemblies — huge
-        "**/Windows/Installer/**".into(),
-        "**/Windows/SoftwareDistribution/**".into(), // Windows Update cache
-        "**/Windows/Temp/**".into(),
-        "**/AppData/Local/Temp/**".into(),
-        // ── Linux misc ────────────────────────────────────────────────────────
-        "**/lost+found/**".into(),
-    ]
-}
-
-fn default_max_file_size_mb() -> u64 {
-    10
-}
-
-fn default_max_line_length() -> usize {
-    120
-}
-
-fn default_noindex_file() -> String {
-    ".noindex".into()
-}
-
-fn default_index_file() -> String {
-    ".index".into()
-}
-
-fn default_true() -> bool {
-    true
-}
+fn default_debounce_ms() -> u64      { client_defaults().watch.debounce_ms }
+fn default_excludes() -> Vec<String> { client_defaults().scan.exclude.clone() }
+fn default_max_file_size_mb() -> u64 { client_defaults().scan.max_file_size_mb }
+fn default_max_line_length() -> usize { client_defaults().scan.max_line_length }
+fn default_noindex_file() -> String  { client_defaults().scan.noindex_file.clone() }
+fn default_index_file() -> String    { client_defaults().scan.index_file.clone() }
+fn default_true() -> bool            { true }
 
 /// Configuration passed to extractor functions.
 ///
@@ -372,9 +353,7 @@ pub struct ServerAppSettings {
     pub token: String,
 }
 
-fn default_bind() -> String {
-    "127.0.0.1:8080".into()
-}
+fn default_bind() -> String { server_defaults().server.bind.clone() }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchSettings {
@@ -401,10 +380,10 @@ impl Default for SearchSettings {
     }
 }
 
-fn default_search_limit() -> usize { 50 }
-fn default_max_limit() -> usize { 500 }
-fn default_fts_candidate_limit() -> usize { 2000 }
-fn default_context_window() -> usize { 1 }
+fn default_search_limit() -> usize    { server_defaults().search.default_limit }
+fn default_max_limit() -> usize       { server_defaults().search.max_limit }
+fn default_fts_candidate_limit() -> usize { server_defaults().search.fts_candidate_limit }
+fn default_context_window() -> usize  { server_defaults().search.context_window }
 
 // ── Log config ────────────────────────────────────────────────────────────────
 
@@ -419,9 +398,7 @@ pub struct LogConfig {
     pub ignore: Vec<String>,
 }
 
-fn default_log_ignore() -> Vec<String> {
-    vec!["pdf_extract: unknown glyph name".to_string()]
-}
+fn default_log_ignore() -> Vec<String> { client_defaults().log.ignore.clone() }
 
 /// Resolves the server config path using the following priority:
 ///
@@ -500,6 +477,14 @@ pub fn parse_server_config(toml_str: &str) -> Result<ServerAppConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Verify that both embedded defaults files parse without error.
+    /// Catches TOML syntax mistakes and missing required fields at test time.
+    #[test]
+    fn embedded_defaults_parse() {
+        let _c = client_defaults();
+        let _s = server_defaults();
+    }
 
     #[test]
     fn watch_config_default_values() {
