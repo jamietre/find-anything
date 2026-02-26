@@ -341,22 +341,22 @@ content-hash caching to avoid re-OCR.
 ### Extractor Log Verbosity
 
 - [ ] **Suppress pdf-extract noise by default** — the hardened fork now emits `warn!`
-  for every unrecognised font encoding, colorspace, or glyph name; on a large corpus
-  this is very chatty. By default, `find-client` (and `find-watch`) should suppress
-  `WARN` and below from the `pdf_extract` crate (or from all extractor sub-processes).
-  Options: set `RUST_LOG` when spawning extractor processes; or filter by crate path
-  in the `env_logger` / `tracing` initialisation in `find-client`.
+      for every unrecognised font encoding, colorspace, or glyph name; on a large corpus
+      this is very chatty. By default, `find-client` (and `find-watch`) should suppress
+      `WARN` and below from the `pdf_extract` crate (or from all extractor sub-processes).
+      Options: set `RUST_LOG` when spawning extractor processes; or filter by crate path
+      in the `env_logger` / `tracing` initialisation in `find-client`.
 - [ ] **Per-extractor log level config** — add an optional `scan.extractor_log_level`
-  (or per-extractor overrides) so operators can dial up verbosity for debugging a
-  specific extractor without flooding logs from others; default should be `error` or
-  `off` for third-party library crates
+      (or per-extractor overrides) so operators can dial up verbosity for debugging a
+      specific extractor without flooding logs from others; default should be `error` or
+      `off` for third-party library crates
 
 ### Indexing Control
 
 - [x] **`.noindex` / `.index` per-directory control** — `.noindex` marker skips a directory
-  and all descendants; `.index` TOML file overrides scan settings for a subtree (excludes,
-  size limit, hidden files, archive depth, etc.); both filenames configurable via
-  `scan.noindex_file` / `scan.index_file`
+      and all descendants; `.index` TOML file overrides scan settings for a subtree (excludes,
+      size limit, hidden files, archive depth, etc.); both filenames configurable via
+      `scan.noindex_file` / `scan.index_file`
 
 ### Performance & Scalability
 
@@ -366,20 +366,20 @@ content-hash caching to avoid re-OCR.
 - [ ] Database partitioning for large sources (>100GB)
 - [ ] Incremental FTS5 rebuilds
 - [ ] **Optimize file-list transfer for large sources** — at scan start, `find-scan`
-  fetches the full server file list via `GET /api/v1/files` to detect deletions and
-  changed mtimes. The response is held in memory as a `HashMap<String, i64>` alongside
-  the local `HashMap<String, PathBuf>` built by the filesystem walk. At ~140 bytes/entry
-  for the server map and ~200 bytes/entry for the local map, 1 M files costs roughly
-  340 MB peak; 10 M files ~3.4 GB. At current NAS scale (~23 K files, ~8 MB total) this
-  is negligible. Two improvements make sense if the source grows significantly:
-  (1) **Drop `kind` from `FileRecord`** — the client discards it immediately; removing
-  it from the API response and the `SELECT` saves ~15–20% of payload and parse cost for
-  free. (2) **Server-side diff** — instead of sending the full file list to the client,
-  the client posts a compact `path → mtime` map and the server returns only the paths
-  to delete and those needing re-indexing; this eliminates both client-side HashMaps
-  and the full JSON body entirely, reducing peak client memory from O(n) to O(batch).
-  The server-side diff is a non-trivial API change (new endpoint, server reads the local
-  map from the request body) so is deferred until there is a concrete need.
+      fetches the full server file list via `GET /api/v1/files` to detect deletions and
+      changed mtimes. The response is held in memory as a `HashMap<String, i64>` alongside
+      the local `HashMap<String, PathBuf>` built by the filesystem walk. At ~140 bytes/entry
+      for the server map and ~200 bytes/entry for the local map, 1 M files costs roughly
+      340 MB peak; 10 M files ~3.4 GB. At current NAS scale (~23 K files, ~8 MB total) this
+      is negligible. Two improvements make sense if the source grows significantly:
+      (1) **Drop `kind` from `FileRecord`** — the client discards it immediately; removing
+      it from the API response and the `SELECT` saves ~15–20% of payload and parse cost for
+      free. (2) **Server-side diff** — instead of sending the full file list to the client,
+      the client posts a compact `path → mtime` map and the server returns only the paths
+      to delete and those needing re-indexing; this eliminates both client-side HashMaps
+      and the full JSON body entirely, reducing peak client memory from O(n) to O(batch).
+      The server-side diff is a non-trivial API change (new endpoint, server reads the local
+      map from the request body) so is deferred until there is a concrete need.
 
 ### Operations & Monitoring
 

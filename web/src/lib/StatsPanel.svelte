@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { getStats } from '$lib/api';
 	import type { SourceStats, StatsResponse } from '$lib/api';
 
@@ -10,7 +10,24 @@
 
 	$: currentSource = stats?.sources.find((s) => s.name === selectedSource) ?? stats?.sources[0] ?? null;
 
-	onMount(() => { fetchStats(); });
+	let interval: ReturnType<typeof setInterval> | null = null;
+
+	onMount(() => {
+		fetchStats().then(scheduleRefresh);
+	});
+
+	onDestroy(() => {
+		if (interval) clearInterval(interval);
+	});
+
+	function scheduleRefresh() {
+		if (interval) clearInterval(interval);
+		const delay = stats?.worker_status?.state === 'processing' ? 2000 : 30_000;
+		interval = setInterval(async () => {
+			await fetchStats();
+			scheduleRefresh();
+		}, delay);
+	}
 
 	async function fetchStats() {
 		loading = true;
