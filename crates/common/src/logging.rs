@@ -51,7 +51,10 @@ impl<S: Subscriber> tracing_subscriber::layer::Filter<S> for LogIgnoreFilter {
         }
         let mut visitor = MessageVisitor::default();
         event.record(&mut visitor);
-        !patterns.iter().any(|p| p.is_match(&visitor.message))
+        // Match against "target: message" so patterns can be scoped to a
+        // specific crate (e.g. "find_extract_pdf: unknown glyph name").
+        let candidate = format!("{}: {}", event.metadata().target(), visitor.message);
+        !patterns.iter().any(|p| p.is_match(&candidate))
     }
 }
 
