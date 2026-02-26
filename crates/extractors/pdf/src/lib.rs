@@ -1,6 +1,7 @@
 use std::path::Path;
 use find_common::api::IndexLine;
 use find_common::config::ExtractorConfig;
+use tracing::{warn, error};
 
 /// Extract text content from PDF files.
 ///
@@ -29,7 +30,7 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> an
     // during structural parsing.  The /Encrypt name appears verbatim in the file
     // structure of every encrypted PDF and is not present in unencrypted ones.
     if bytes.windows(8).any(|w| w == b"/Encrypt") {
-        eprintln!("PDF is password-protected, content not indexed: {name}");
+        warn!("PDF is password-protected, content not indexed: {name}");
         return Ok(vec![IndexLine {
             archive_path: None,
             line_number: 1,
@@ -46,8 +47,8 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> an
     let name_for_hook = name.to_string();
     let _prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        eprintln!("pdf-extract panicked while processing: {name_for_hook}");
-        eprintln!("{info}");
+        error!("pdf-extract panicked while processing: {name_for_hook}");
+        error!("{info}");
     }));
     let bytes_clone = bytes.to_vec();
     let result = std::panic::catch_unwind(|| pdf_extract::extract_text_from_mem(&bytes_clone));
@@ -57,11 +58,11 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> an
     let text = match result {
         Ok(Ok(t)) => t,
         Ok(Err(e)) => {
-            eprintln!("PDF extraction error for {name}: {e}");
+            warn!("PDF extraction error for {name}: {e}");
             return Ok(vec![]);
         }
         Err(_) => {
-            eprintln!("PDF extraction panicked for {name} (see panic output above)");
+            error!("PDF extraction panicked for {name} (see panic output above)");
             return Ok(vec![]);
         }
     };

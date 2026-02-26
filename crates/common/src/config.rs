@@ -137,6 +137,23 @@ fn default_excludes() -> Vec<String> {
         "**/venv/**".into(),
         "**/*.pyc".into(),
         "**/*.class".into(),
+        // Synology NAS
+        "**/#recycle/**".into(),
+        "**/@eaDir/**".into(),
+        "**/#snapshot/**".into(),
+        // Windows
+        "**/$RECYCLE.BIN/**".into(),
+        "**/System Volume Information/**".into(),
+        // macOS
+        "**/__MACOSX/**".into(),
+        "**/.Spotlight-V100/**".into(),
+        "**/.Trashes/**".into(),
+        "**/.fseventsd/**".into(),
+        // Linux
+        "**/lost+found/**".into(),
+        // Version control
+        "**/.svn/**".into(),
+        "**/.hg/**".into(),
     ]
 }
 

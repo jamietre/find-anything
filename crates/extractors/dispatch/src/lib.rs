@@ -109,8 +109,8 @@ pub fn dispatch_from_path(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<Inde
     }
 
     let bytes = std::fs::read(path)?;
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-    Ok(dispatch_from_bytes(&bytes, name, cfg))
+    let name = path.to_string_lossy();
+    Ok(dispatch_from_bytes(&bytes, &name, cfg))
 }
 
 /// Map a MIME type string to a file kind string.

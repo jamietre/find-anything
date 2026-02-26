@@ -9,9 +9,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+- **PDF ZapfDingbats panic** — forked `pdf-extract` as `jamietre/pdf-extract` and fixed four `unwrap()` panics on unknown glyph names; the critical fix is in the core-font with-encoding path, which now tries both the Adobe Glyph List and the ZapfDingbats table before skipping silently; the other three sites use `unwrap_or(0)`; also replaced the permanently-silent `dlog!` macro with `log::debug!` so debug output is available to consumers that initialise a logger
+- **PDF extraction hardened against malformed documents** — ~35 additional bad-input panic sites in the forked `pdf-extract` replaced with `warn!` + safe fallback so as much text as possible is returned even from broken PDFs; areas covered: UTF-16 decode (lossy instead of panic), unknown font encoding names (fall back to PDFDocEncoding), Type1/CFF font parse failures (skip with warning), Differences array unexpected types (skip entry), missing encoding/unicode fallback in `decode_char` (return empty string), Type0/CID font missing DescendantFonts or Encoding (fall back to Identity-H), ToUnicode CMap parse failures (skip map), malformed colorspace arrays (fall back to DeviceRGB), content stream decode failure (skip page), and bad operator operands (skip operator); `show_text` no longer panics when no font is selected
+
 ### Added
 - **`mise run clippy` task** — runs `cargo clippy --workspace -- -D warnings` matching the CI check; CLAUDE.md updated to require clippy passes before committing Rust changes
 - **`mise run build-arm` task** — cross-compiles all binaries for ARM7 (armv7-unknown-linux-gnueabihf) using `cross`, matching the CI release build and avoiding glibc version mismatches on NAS deployments
+- **`mise run build-server` task** — builds web UI then compiles all binaries for x86_64 release
+- **`DEVELOPMENT.md`** — new developer guide covering prerequisites, mise tasks, native and ARM7 build instructions (`cross` usage explained), linting, CI/release matrix, and project structure
+- **Expanded default excludes** — added OS/platform-specific patterns: Synology (`#recycle`, `@eaDir`, `#snapshot`), Windows (`$RECYCLE.BIN`, `System Volume Information`), macOS (`__MACOSX`, `.Spotlight-V100`, `.Trashes`, `.fseventsd`), Linux (`lost+found`), and VCS (`svn`, `.hg`)
+- **Full paths in extraction error messages** — PDF and other extraction errors now log the full file path (e.g. `/data/archive.zip::Contract.pdf`) instead of just the filename, making it easier to locate the problematic file
 
 ### Fixed
 - **Clippy warnings** — fixed three clippy lints that were failing CI: `single_component_path_imports` in `scan.rs`, `collapsible_if` in `routes/admin.rs`, `collapsible_else_if` in `admin_main.rs`

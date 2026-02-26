@@ -107,14 +107,14 @@ fn is_multifile_archive(kind: &ArchiveKind) -> bool {
 fn dispatch_streaming(path: &Path, kind: &ArchiveKind, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
     match kind {
         ArchiveKind::Zip      => zip_streaming(path, cfg, callback),
-        ArchiveKind::TarGz    => tar_streaming(tar::Archive::new(GzDecoder::new(File::open(path)?)), cfg, callback),
-        ArchiveKind::TarBz2   => tar_streaming(tar::Archive::new(BzDecoder::new(File::open(path)?)), cfg, callback),
-        ArchiveKind::TarXz    => tar_streaming(tar::Archive::new(XzDecoder::new(File::open(path)?)), cfg, callback),
-        ArchiveKind::Tar      => tar_streaming(tar::Archive::new(File::open(path)?), cfg, callback),
+        ArchiveKind::TarGz    => tar_streaming(tar::Archive::new(GzDecoder::new(File::open(path)?)), path.to_str().unwrap_or(""), cfg, callback),
+        ArchiveKind::TarBz2   => tar_streaming(tar::Archive::new(BzDecoder::new(File::open(path)?)), path.to_str().unwrap_or(""), cfg, callback),
+        ArchiveKind::TarXz    => tar_streaming(tar::Archive::new(XzDecoder::new(File::open(path)?)), path.to_str().unwrap_or(""), cfg, callback),
+        ArchiveKind::Tar      => tar_streaming(tar::Archive::new(File::open(path)?), path.to_str().unwrap_or(""), cfg, callback),
         ArchiveKind::Gz       => { callback(single_compressed(GzDecoder::new(File::open(path)?), path, cfg)?); Ok(()) }
         ArchiveKind::Bz2      => { callback(single_compressed(BzDecoder::new(File::open(path)?), path, cfg)?); Ok(()) }
         ArchiveKind::Xz       => { callback(single_compressed(XzDecoder::new(File::open(path)?), path, cfg)?); Ok(()) }
-        ArchiveKind::SevenZip => sevenz_streaming(path, cfg, callback),
+        ArchiveKind::SevenZip => sevenz_streaming(path, path.to_str().unwrap_or(""), cfg, callback),
     }
 }
 
@@ -125,7 +125,7 @@ fn dispatch_streaming(path: &Path, kind: &ArchiveKind, cfg: &ExtractorConfig, ca
 fn zip_streaming(path: &Path, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
     let file = File::open(path)?;
     let archive = zip::ZipArchive::new(file).context("opening zip")?;
-    zip_from_archive(archive, cfg, callback)
+    zip_from_archive(archive, path.to_str().unwrap_or(""), cfg, callback)
 }
 
 /// Core ZIP extractor, generic over any `Read + Seek` source.
@@ -134,6 +134,7 @@ fn zip_streaming(path: &Path, cfg: &ExtractorConfig, callback: CB<'_>) -> Result
 /// (via a `Cursor<Vec<u8>>` read from an outer archive member).
 fn zip_from_archive<R: Read + std::io::Seek>(
     mut archive: zip::ZipArchive<R>,
+    display_prefix: &str,
     cfg: &ExtractorConfig,
     callback: CB<'_>,
 ) -> Result<()> {
@@ -175,12 +176,12 @@ fn zip_from_archive<R: Read + std::io::Seek>(
                 warn!("zip: failed to read entry '{}': {}", name, e);
             }
         }
-        callback(extract_member_bytes(bytes, &name, cfg));
+        callback(extract_member_bytes(bytes, &name, display_prefix, cfg));
     }
     Ok(())
 }
 
-fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
+fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
     let size_limit = cfg.max_size_kb * 1024;
 
     for entry_result in archive.entries().context("reading tar entries")? {
@@ -223,12 +224,12 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, cfg: &ExtractorConfig, c
                 warn!("tar: failed to read entry '{}': {}", name, e);
             }
         }
-        callback(extract_member_bytes(bytes, &name, cfg));
+        callback(extract_member_bytes(bytes, &name, display_prefix, cfg));
     }
     Ok(())
 }
 
-fn sevenz_streaming(path: &Path, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
+fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
     let mut sz = sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::empty())?;
     let size_limit = cfg.max_size_kb * 1024;
 
@@ -276,7 +277,7 @@ fn sevenz_streaming(path: &Path, cfg: &ExtractorConfig, callback: CB<'_>) -> Res
             }
             // bytes stays empty — filename still indexed below
         }
-        callback(extract_member_bytes(bytes, &name, cfg));
+        callback(extract_member_bytes(bytes, &name, display_prefix, cfg));
         Ok(true)
     })?;
 
@@ -299,7 +300,7 @@ fn single_compressed<R: Read>(reader: R, path: &Path, cfg: &ExtractorConfig) -> 
         return Ok(make_filename_line(&inner_name));
     }
 
-    Ok(extract_member_bytes(bytes, &inner_name, cfg))
+    Ok(extract_member_bytes(bytes, &inner_name, path.to_str().unwrap_or(""), cfg))
 }
 
 // ============================================================================
@@ -368,10 +369,10 @@ fn handle_nested_archive(
     // is always the same monomorphisation regardless of nesting depth.
     let result: Result<()> = match kind {
         // ── Tar variants: stream directly, zero extra memory ─────────────
-        ArchiveKind::TarGz  => tar_streaming(tar::Archive::new(GzDecoder::new(reader)), &inner_cfg, &mut prefixed),
-        ArchiveKind::TarBz2 => tar_streaming(tar::Archive::new(BzDecoder::new(reader)), &inner_cfg, &mut prefixed),
-        ArchiveKind::TarXz  => tar_streaming(tar::Archive::new(XzDecoder::new(reader)), &inner_cfg, &mut prefixed),
-        ArchiveKind::Tar    => tar_streaming(tar::Archive::new(reader), &inner_cfg, &mut prefixed),
+        ArchiveKind::TarGz  => tar_streaming(tar::Archive::new(GzDecoder::new(reader)), outer_name, &inner_cfg, &mut prefixed),
+        ArchiveKind::TarBz2 => tar_streaming(tar::Archive::new(BzDecoder::new(reader)), outer_name, &inner_cfg, &mut prefixed),
+        ArchiveKind::TarXz  => tar_streaming(tar::Archive::new(XzDecoder::new(reader)), outer_name, &inner_cfg, &mut prefixed),
+        ArchiveKind::Tar    => tar_streaming(tar::Archive::new(reader), outer_name, &inner_cfg, &mut prefixed),
 
         // ── Zip: read into memory (Cursor); temp file if too large ────────
         ArchiveKind::Zip    => nested_zip(reader, outer_name, &inner_cfg, &mut prefixed),
@@ -425,11 +426,11 @@ fn nested_zip(mut reader: &mut dyn Read, outer_name: &str, cfg: &ExtractorConfig
             tmp.seek(std::io::SeekFrom::Start(0))?;
         }
         let archive = zip::ZipArchive::new(tmp).context("opening oversized nested zip from temp file")?;
-        return zip_from_archive(archive, cfg, callback);
+        return zip_from_archive(archive, outer_name, cfg, callback);
     }
 
     let archive = zip::ZipArchive::new(Cursor::new(bytes)).context("opening nested zip")?;
-    zip_from_archive(archive, cfg, callback)
+    zip_from_archive(archive, outer_name, cfg, callback)
 }
 
 /// Extract a nested 7z archive by streaming it to a temp file on disk.
@@ -466,7 +467,7 @@ fn nested_sevenz(mut reader: &mut dyn Read, outer_name: &str, cfg: &ExtractorCon
         tmp.flush()?;
         tmp.seek(std::io::SeekFrom::Start(0))?;
     }
-    sevenz_streaming(tmp.path(), cfg, callback)
+    sevenz_streaming(tmp.path(), outer_name, cfg, callback)
 }
 
 // ============================================================================
@@ -489,7 +490,7 @@ fn make_filename_line(name: &str) -> Vec<IndexLine> {
 /// dispatched directly.  Multi-file archives are NOT handled here — the
 /// caller routes those through `handle_nested_archive` before reaching
 /// this function.
-fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
+fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, display_prefix: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
     // Always index the filename so the member is discoverable by name.
     let mut lines = make_filename_line(entry_name);
 
@@ -548,7 +549,8 @@ fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, cfg: &ExtractorConfig)
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or(entry_name);
-                    let content_lines = find_extract_dispatch::dispatch_from_bytes(&inner_bytes, inner_name, cfg);
+                    let display_name = format!("{display_prefix}::{inner_name}");
+                    let content_lines = find_extract_dispatch::dispatch_from_bytes(&inner_bytes, &display_name, cfg);
                     let with_path = content_lines.into_iter().map(|mut l| {
                         l.archive_path = Some(entry_name.to_string());
                         l
@@ -564,7 +566,8 @@ fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, cfg: &ExtractorConfig)
     }
 
     // ── All other formats: unified dispatch ───────────────────────────────────
-    let content_lines = find_extract_dispatch::dispatch_from_bytes(&bytes, entry_name, cfg);
+    let display_name = format!("{display_prefix}::{entry_name}");
+    let content_lines = find_extract_dispatch::dispatch_from_bytes(&bytes, &display_name, cfg);
     let with_path = content_lines.into_iter().map(|mut l| {
         l.archive_path = Some(entry_name.to_string());
         l

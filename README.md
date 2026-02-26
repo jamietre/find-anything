@@ -88,6 +88,8 @@ cd find-anything
 cargo build --release
 ```
 
+For cross-compilation targets (ARM7 NAS, etc.) and full dev setup, see [DEVELOPMENT.md](DEVELOPMENT.md).
+
 ---
 
 ## Binaries
