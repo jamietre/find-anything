@@ -14,6 +14,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Worker status in stats** — `GET /api/v1/stats` now returns a `worker_status` field (`idle` or `processing` with `source` and `file`); `find-admin stats` prints a `Worker:` line showing `idle` or `● processing source/file`; the web Stats panel shows a pulsing dot and filename in the metrics strip while indexing is active
 
 ### Fixed
+- **Filesystem walk performance** — removed an `exists()` syscall per directory during the `.noindex` check in `walk_paths`; the marker file is now detected by filename in the walk loop body (zero extra syscalls in the common case), and any collected files under a `.noindex` directory are pruned in a single pass after the walk; added 5-second progress logging (`walking filesystem… N files found so far`) and a completion log line
 - **`config/update.sh` path resolution** — script now uses `$(dirname "$0")` so it works when called from any working directory; also added `set -euo pipefail` to stop on first failure
 
 ### Fixed

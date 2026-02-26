@@ -353,12 +353,10 @@ content-hash caching to avoid re-OCR.
 
 ### Indexing Control
 
-- [ ] **`.noindex` marker file** — if a file with a configurable name (default `.noindex`,
-  settable via e.g. `scan.noindex_file = ".noindex"`) exists in a directory, skip that
-  directory and all its children during scanning and watching; analogous to `.gitignore`
-  for indexing exclusion but without requiring glob patterns in the config file; useful
-  for ad-hoc opt-out of indexing on a per-directory basis (e.g. large scratch dirs,
-  private notes, build outputs not covered by the default excludes)
+- [x] **`.noindex` / `.index` per-directory control** — `.noindex` marker skips a directory
+  and all descendants; `.index` TOML file overrides scan settings for a subtree (excludes,
+  size limit, hidden files, archive depth, etc.); both filenames configurable via
+  `scan.noindex_file` / `scan.index_file`
 
 ### Performance & Scalability
 
@@ -367,6 +365,21 @@ content-hash caching to avoid re-OCR.
 - [ ] Distributed indexing (multiple scan clients per source)
 - [ ] Database partitioning for large sources (>100GB)
 - [ ] Incremental FTS5 rebuilds
+- [ ] **Optimize file-list transfer for large sources** — at scan start, `find-scan`
+  fetches the full server file list via `GET /api/v1/files` to detect deletions and
+  changed mtimes. The response is held in memory as a `HashMap<String, i64>` alongside
+  the local `HashMap<String, PathBuf>` built by the filesystem walk. At ~140 bytes/entry
+  for the server map and ~200 bytes/entry for the local map, 1 M files costs roughly
+  340 MB peak; 10 M files ~3.4 GB. At current NAS scale (~23 K files, ~8 MB total) this
+  is negligible. Two improvements make sense if the source grows significantly:
+  (1) **Drop `kind` from `FileRecord`** — the client discards it immediately; removing
+  it from the API response and the `SELECT` saves ~15–20% of payload and parse cost for
+  free. (2) **Server-side diff** — instead of sending the full file list to the client,
+  the client posts a compact `path → mtime` map and the server returns only the paths
+  to delete and those needing re-indexing; this eliminates both client-side HashMaps
+  and the full JSON body entirely, reducing peak client memory from O(n) to O(batch).
+  The server-side diff is a non-trivial API change (new endpoint, server reads the local
+  map from the request body) so is deferred until there is a concrete need.
 
 ### Operations & Monitoring
 

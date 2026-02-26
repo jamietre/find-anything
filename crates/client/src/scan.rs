@@ -49,6 +49,7 @@ pub async fn run_scan(
     // Walk all configured paths and build the local file map.
     info!("walking filesystem...");
     let local_files = walk_paths(paths, scan, &excludes);
+    info!("walk complete: {} files found", local_files.len());
 
     // Compute sets.
     let server_paths: HashSet<&str> = server_files.keys().map(|s| s.as_str()).collect();
@@ -350,6 +351,9 @@ fn walk_paths(
     excludes: &GlobSet,
 ) -> HashMap<String, PathBuf> {
     let mut map = HashMap::new();
+    let mut noindex_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    let log_interval = std::time::Duration::from_secs(5);
+    let mut last_log = std::time::Instant::now();
 
     for root_str in paths {
         let root = Path::new(root_str);
@@ -359,22 +363,10 @@ fn walk_paths(
             .filter_entry(|e| {
                 let name = e.file_name().to_str().unwrap_or("");
 
-                // Control files are never indexed and never used to trigger descent.
-                if name == scan.noindex_file || name == scan.index_file {
-                    return false;
-                }
-
-                // .noindex check: if a directory contains the noindex marker file,
-                // skip that directory and all its descendants. This check runs before
-                // the hidden-file filter so that a ".noindex" marker (which starts
-                // with ".") is always detected even when include_hidden = false.
-                if e.file_type().is_dir() && e.path().join(&scan.noindex_file).exists() {
-                    tracing::debug!("skipping {} (.noindex present)", e.path().display());
-                    return false;
-                }
-
-                // Hidden files
-                if !scan.include_hidden && name.starts_with('.') && e.depth() > 0 {
+                // Skip hidden directories (avoid descending into .git etc.).
+                // Hidden FILES are handled in the loop body so that control files
+                // (.noindex, .index) are always visible regardless of include_hidden.
+                if e.file_type().is_dir() && !scan.include_hidden && name.starts_with('.') && e.depth() > 0 {
                     return false;
                 }
                 // Exclusion globs (match relative to root)
@@ -390,14 +382,46 @@ fn walk_paths(
                 Ok(e) => e,
                 Err(e) => { warn!("walk error: {e:#}"); continue; }
             };
+            let name = entry.file_name().to_str().unwrap_or("");
+
+            // Detect .noindex marker: record its parent so we can prune after the walk.
+            if name == scan.noindex_file {
+                if let Some(parent) = entry.path().parent() {
+                    tracing::debug!("skipping {} (.noindex present)", parent.display());
+                    noindex_dirs.insert(parent.to_path_buf());
+                }
+                continue;
+            }
+            // Skip the .index control file (not a content file).
+            if name == scan.index_file {
+                continue;
+            }
+
             if !entry.file_type().is_file() {
                 continue;
             }
+
+            // Hidden files (hidden directories already pruned in filter_entry).
+            if !scan.include_hidden && name.starts_with('.') && entry.depth() > 0 {
+                continue;
+            }
+
             let abs = entry.path().to_path_buf();
             let rel = relative_path(&abs, paths);
             map.insert(rel, abs);
+
+            if last_log.elapsed() >= log_interval {
+                info!("walking filesystem... {} files found so far", map.len());
+                last_log = std::time::Instant::now();
+            }
         }
     }
+
+    // Prune any files collected under a .noindex directory.
+    if !noindex_dirs.is_empty() {
+        map.retain(|_, abs| !noindex_dirs.iter().any(|d| abs.starts_with(d)));
+    }
+
     map
 }
 
