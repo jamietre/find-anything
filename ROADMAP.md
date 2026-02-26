@@ -312,6 +312,28 @@ content-hash caching to avoid re-OCR.
 - [ ] Code symbol indexing (functions, classes, imports)
 - [ ] Email (mbox, PST) indexing
 
+### Extractor Log Verbosity
+
+- [ ] **Suppress pdf-extract noise by default** — the hardened fork now emits `warn!`
+  for every unrecognised font encoding, colorspace, or glyph name; on a large corpus
+  this is very chatty. By default, `find-client` (and `find-watch`) should suppress
+  `WARN` and below from the `pdf_extract` crate (or from all extractor sub-processes).
+  Options: set `RUST_LOG` when spawning extractor processes; or filter by crate path
+  in the `env_logger` / `tracing` initialisation in `find-client`.
+- [ ] **Per-extractor log level config** — add an optional `scan.extractor_log_level`
+  (or per-extractor overrides) so operators can dial up verbosity for debugging a
+  specific extractor without flooding logs from others; default should be `error` or
+  `off` for third-party library crates
+
+### Indexing Control
+
+- [ ] **`.noindex` marker file** — if a file with a configurable name (default `.noindex`,
+  settable via e.g. `scan.noindex_file = ".noindex"`) exists in a directory, skip that
+  directory and all its children during scanning and watching; analogous to `.gitignore`
+  for indexing exclusion but without requiring glob patterns in the config file; useful
+  for ad-hoc opt-out of indexing on a per-directory basis (e.g. large scratch dirs,
+  private notes, build outputs not covered by the default excludes)
+
 ### Performance & Scalability
 
 - [x] Archive subfolder organization (v0.1.6)
