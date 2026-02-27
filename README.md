@@ -9,6 +9,16 @@ find-anything "password strength"
 [code] docs/security.md:87       Password strength requirements: minimum 12 chars
 ```
 
+**Highlights:**
+
+- Full text search across all indexed machines from one place
+- Fuzzy, exact, and regex search modes
+- Archive members (ZIP, TAR, 7Z) indexed as individual searchable files
+- Content deduplication — identical files stored once; search results surface all duplicate paths
+- Per-directory indexing control via `.noindex` (skip subtree) and `.index` (override scan settings)
+- Indexing error tracking — extraction failures surfaced in the UI per source
+- Real-time updates via `find-watch`; cross-platform (Linux, macOS, Windows)
+
 ---
 
 ## How it works
@@ -100,14 +110,15 @@ For cross-compilation targets (ARM7 NAS, etc.) and full dev setup, see [DEVELOPM
 | `find-scan`            | Initial filesystem indexer                 | each client machine         |
 | `find-watch`           | Real-time file watcher (incremental)       | each client machine         |
 | `find-anything`        | CLI search client                          | anywhere                    |
-| `find-admin`           | Admin utilities: config, stats, inbox mgmt | each client machine         |
-| `find-extract-text`    | Text/Markdown extractor                    | client (used by find-watch) |
-| `find-extract-pdf`     | PDF extractor                              | client (used by find-watch) |
-| `find-extract-media`   | Image/audio/video metadata extractor       | client (used by find-watch) |
-| `find-extract-archive` | ZIP/TAR/7Z extractor                       | client (used by find-watch) |
-| `find-extract-html`    | HTML extractor                             | client (used by find-watch) |
-| `find-extract-office`  | Office document extractor (DOCX/XLSX/PPTX) | client (used by find-watch) |
-| `find-extract-epub`    | EPUB ebook extractor                       | client (used by find-watch) |
+| `find-admin`           | Admin utilities: config, status, inbox mgmt | each client machine         |
+| `find-extract-text`    | Text/Markdown extractor                     | client (used by find-watch) |
+| `find-extract-pdf`     | PDF extractor                               | client (used by find-watch) |
+| `find-extract-media`   | Image/audio/video metadata extractor        | client (used by find-watch) |
+| `find-extract-archive` | ZIP/TAR/7Z extractor                        | client (used by find-watch) |
+| `find-extract-html`    | HTML extractor                              | client (used by find-watch) |
+| `find-extract-office`  | Office document extractor (DOCX/XLSX/PPTX)  | client (used by find-watch) |
+| `find-extract-epub`    | EPUB ebook extractor                        | client (used by find-watch) |
+| `find-extract-pe`      | Windows PE/DLL metadata extractor           | client (used by find-watch) |
 
 The `find-extract-*` binaries are used by `find-watch` to extract file content
 in subprocesses. They must be co-located with `find-watch` or on PATH.
@@ -179,7 +190,18 @@ find-anything "some pattern" --mode exact
 find-anything "fn handler" --mode regex --source home --limit 20
 ```
 
-### 6. Web UI (optional)
+### 6. Check indexing status
+
+```sh
+find-admin status          # per-source file counts, sizes, last scan, worker state
+find-admin status --json   # machine-readable
+```
+
+Extraction failures (e.g. corrupt PDFs, unreadable archives) are tracked per file and
+visible in the **Settings → Errors** panel in the web UI and in the `find-admin status`
+output as an error count per source.
+
+### 7. Web UI (optional)
 
 ```sh
 cd web
@@ -223,7 +245,8 @@ find-scan --full
 | Images (JPEG, PNG, TIFF, HEIC, RAW)  | EXIF metadata (camera, GPS, dates)                                       |
 | Audio (MP3, FLAC, M4A, OGG)          | ID3/Vorbis/MP4 tags (title, artist, album)                               |
 | Video (MP4, MKV, WebM, AVI, MOV)     | Format, resolution, duration                                             |
-| Archives (ZIP, TAR, 7Z, GZ)          | Recursive extraction of all member files                                 |
+| Archives (ZIP, TAR, 7Z, GZ)          | Members extracted recursively and indexed as individual searchable files  |
+| Windows PE/DLL                       | File version, description, company, original filename from version info  |
 
 ---
 
@@ -260,6 +283,8 @@ exclude          = ["**/.git/**", "**/node_modules/**", "**/target/**"]
 max_file_size_mb = 10
 follow_symlinks  = false
 include_hidden   = false
+noindex_file     = ".noindex"   # place this file in a dir to skip it entirely
+index_file       = ".index"     # place this TOML file in a dir to override scan settings for that subtree
 
 [scan.archives]
 enabled   = true

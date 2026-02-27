@@ -25,7 +25,7 @@ enum Command {
     /// Print effective client configuration with defaults filled in
     Config,
     /// Print per-source statistics from the server
-    Stats,
+    Status,
     /// List indexed sources
     Sources,
     /// Check server connectivity and authentication
@@ -87,7 +87,7 @@ async fn main() -> Result<()> {
             }
         }
 
-        Command::Stats => {
+        Command::Status => {
             let client = api::ApiClient::new(&config.server.url, &config.server.token);
             let stats = client.get_stats().await.context("fetching stats")?;
             if args.json {

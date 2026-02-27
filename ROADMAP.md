@@ -140,7 +140,7 @@ This document tracks the development roadmap for find-anything, from completed f
 Replaced `find-config` with a unified `find-admin` binary covering all administrative and diagnostic tasks:
 
 - `find-admin config` — show effective client config with defaults filled in (replaces `find-config`)
-- `find-admin stats` — print per-source file counts, sizes, and last-scan age from the server
+- `find-admin status` — print per-source file counts, sizes, and last-scan age from the server
 - `find-admin sources` — list indexed sources and their base URLs
 - `find-admin check` — validate connectivity, bearer-token auth, and source count with colored ✓/✗ output
 - `find-admin inbox` — list pending and failed inbox files with size and age
