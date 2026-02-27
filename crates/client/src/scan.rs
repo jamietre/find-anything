@@ -151,6 +151,21 @@ pub async fn run_scan(
 
             let mut members_submitted: usize = 0;
             while let Some(member_batch) = rx.recv().await {
+                // A batch with empty lines and a skip_reason is a summary failure
+                // that applies to the outer archive itself (e.g. 7z solid block too
+                // large).  Record the failure on the outer archive path and move on.
+                if member_batch.lines.is_empty() {
+                    if let Some(reason) = member_batch.skip_reason {
+                        if failures.len() < MAX_FAILURES_PER_BATCH {
+                            failures.push(IndexingFailure {
+                                path: rel_path.clone(),
+                                error: truncate_error(&reason, MAX_ERROR_LEN),
+                            });
+                        }
+                    }
+                    continue;
+                }
+
                 // Apply effective exclude patterns to archive members.
                 // archive_path may be "inner.zip::path/to/file.js" for nested archives;
                 // take the last segment (actual file path) for glob matching.
@@ -160,6 +175,19 @@ pub async fn run_scan(
                         continue;
                     }
                 }
+
+                // Record a per-member skip reason as an indexing failure.
+                if let Some(ref reason) = member_batch.skip_reason {
+                    if failures.len() < MAX_FAILURES_PER_BATCH {
+                        if let Some(ap) = member_batch.lines.first().and_then(|l| l.archive_path.as_deref()) {
+                            failures.push(IndexingFailure {
+                                path: format!("{}::{}", rel_path, ap),
+                                error: truncate_error(reason, MAX_ERROR_LEN),
+                            });
+                        }
+                    }
+                }
+
                 let content_hash = member_batch.content_hash;
                 for file in build_member_index_files(rel_path, mtime, size, member_batch.lines, content_hash) {
                     let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();

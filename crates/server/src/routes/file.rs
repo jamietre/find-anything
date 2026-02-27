@@ -64,7 +64,14 @@ pub async fn get_file(
 
         let lines = db::get_file_lines(&conn, &archive_mgr, &full_path)?;
         let total_lines = lines.len();
-        let indexing_error = db::get_indexing_error(&conn, &full_path)?;
+        // For archive members (path contains "::"), fall back to the outer archive's
+        // error if no per-member error was recorded.  This covers cases like 7z solid
+        // blocks where one failure is stored on the outer archive path rather than on
+        // each of the (potentially thousands of) member paths.
+        let indexing_error = db::get_indexing_error(&conn, &full_path)?.or_else(|| {
+            let outer = full_path.split_once("::")?.0;
+            db::get_indexing_error(&conn, outer).ok().flatten()
+        });
         Ok::<_, anyhow::Error>(FileResponse {
             lines,
             file_kind: kind,

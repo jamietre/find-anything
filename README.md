@@ -287,8 +287,9 @@ noindex_file     = ".noindex"   # place this file in a dir to skip it entirely
 index_file       = ".index"     # place this TOML file in a dir to override scan settings for that subtree
 
 [scan.archives]
-enabled   = true
-max_depth = 10    # max nesting depth (guards against zip bombs)
+enabled               = true
+max_depth             = 10    # max nesting depth (guards against zip bombs)
+max_7z_solid_block_mb = 256   # lower on memory-constrained systems (NAS, containers)
 
 [watch]
 debounce_ms   = 500               # ms of silence before processing events

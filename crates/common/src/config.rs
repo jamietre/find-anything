@@ -30,6 +30,7 @@ struct ScanDefaults {
 struct ArchiveDefaults {
     max_depth: usize,
     max_temp_file_mb: usize,
+    max_7z_solid_block_mb: usize,
 }
 
 #[derive(Deserialize)]
@@ -240,6 +241,18 @@ pub struct ArchiveConfig {
     /// deeply compressed or unusually large inner archives.  Default: 500 MB.
     #[serde(default = "default_max_archive_temp_file_mb")]
     pub max_temp_file_mb: usize,
+    /// Maximum total uncompressed size in MB of a single 7z solid block.
+    ///
+    /// When decompressing a 7z solid block, the LZMA decoder allocates a
+    /// dictionary buffer proportional to the block's total unpack size,
+    /// regardless of how large any individual file within the block is.
+    /// Blocks whose total unpack size exceeds this limit are skipped: all
+    /// member files are indexed by filename only (no content extraction).
+    ///
+    /// Lower this on memory-constrained systems (NAS boxes, containers).
+    /// Default: 256 MB.
+    #[serde(default = "default_max_7z_solid_block_mb")]
+    pub max_7z_solid_block_mb: usize,
 }
 
 impl Default for ArchiveConfig {
@@ -248,12 +261,14 @@ impl Default for ArchiveConfig {
             enabled: true,
             max_depth: default_max_archive_depth(),
             max_temp_file_mb: default_max_archive_temp_file_mb(),
+            max_7z_solid_block_mb: default_max_7z_solid_block_mb(),
         }
     }
 }
 
-fn default_max_archive_depth() -> usize    { client_defaults().scan.archives.max_depth }
+fn default_max_archive_depth() -> usize       { client_defaults().scan.archives.max_depth }
 fn default_max_archive_temp_file_mb() -> usize { client_defaults().scan.archives.max_temp_file_mb }
+fn default_max_7z_solid_block_mb() -> usize   { client_defaults().scan.archives.max_7z_solid_block_mb }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WatchConfig {
@@ -309,6 +324,10 @@ pub struct ExtractorConfig {
     /// component (e.g. `.terraform/`, `.git/`) are skipped entirely, consistent
     /// with the filesystem walk's `include_hidden = false` behaviour.
     pub include_hidden: bool,
+    /// Maximum total uncompressed size in MB of a 7z solid block before
+    /// falling back to filename-only extraction.  Maps to
+    /// `scan.archives.max_7z_solid_block_mb`.  Default: 256 MB.
+    pub max_7z_solid_block_mb: usize,
 }
 
 impl Default for ExtractorConfig {
@@ -319,6 +338,7 @@ impl Default for ExtractorConfig {
             max_line_length: default_max_line_length(),
             max_temp_file_mb: default_max_archive_temp_file_mb(),
             include_hidden: false,
+            max_7z_solid_block_mb: default_max_7z_solid_block_mb(),
         }
     }
 }
@@ -332,6 +352,7 @@ impl ExtractorConfig {
             max_line_length: scan.max_line_length,
             max_temp_file_mb: scan.archives.max_temp_file_mb,
             include_hidden: scan.include_hidden,
+            max_7z_solid_block_mb: scan.archives.max_7z_solid_block_mb,
         }
     }
 }

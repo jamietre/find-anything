@@ -295,9 +295,11 @@ follow_symlinks  = false  # Follow symbolic links during filesystem walk
 include_hidden   = false  # Include dot-files and dot-directories
 
 [scan.archives]
-enabled          = true   # Extract content from ZIP, TAR, 7z, etc.
-max_depth        = 10     # Maximum nesting depth for archives-within-archives
-max_temp_file_mb = 500    # Max size of temp file for nested 7z / oversized nested ZIP
+enabled               = true   # Extract content from ZIP, TAR, 7z, etc.
+max_depth             = 10     # Maximum nesting depth for archives-within-archives
+max_temp_file_mb      = 500    # Max size of temp file for nested 7z / oversized nested ZIP
+max_7z_solid_block_mb = 256    # 7z solid blocks larger than this are indexed by filename only
+                                # (lower this on memory-constrained systems such as NAS boxes)
 
 [watch]
 debounce_ms   = 500       # Milliseconds to wait after last event before re-indexing
