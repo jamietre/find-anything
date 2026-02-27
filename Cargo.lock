@@ -1295,7 +1295,7 @@ dependencies = [
 
 [[package]]
 name = "find-client"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1324,7 +1324,7 @@ dependencies = [
 
 [[package]]
 name = "find-common"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -1339,7 +1339,7 @@ dependencies = [
 
 [[package]]
 name = "find-extract-archive"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1361,7 +1361,7 @@ dependencies = [
 
 [[package]]
 name = "find-extract-dispatch"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "find-common",
@@ -1378,7 +1378,7 @@ dependencies = [
 
 [[package]]
 name = "find-extract-epub"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "find-common",
@@ -1392,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "find-extract-html"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "find-common",
@@ -1404,7 +1404,7 @@ dependencies = [
 
 [[package]]
 name = "find-extract-media"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "audio-video-metadata",
@@ -1421,7 +1421,7 @@ dependencies = [
 
 [[package]]
 name = "find-extract-office"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "calamine",
@@ -1436,7 +1436,7 @@ dependencies = [
 
 [[package]]
 name = "find-extract-pdf"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "find-common",
@@ -1449,7 +1449,7 @@ dependencies = [
 
 [[package]]
 name = "find-extract-pe"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "find-common",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "find-extract-text"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "content_inspector",
@@ -1481,7 +1481,7 @@ checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "find-server"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -1509,7 +1509,7 @@ dependencies = [
 
 [[package]]
 name = "find-tray-win"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "find-common",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "find-windows-service"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "find-common",

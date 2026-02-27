@@ -9,7 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-02-27
+
 ### Added
+- **C# syntax highlighting** — `.cs` files now get full syntax highlighting in the file viewer; also removes the non-functional Haskell entry from the extension map
 - **Document search mode** — new "Document" option in the search mode dropdown finds files where all query terms appear anywhere in the file (not necessarily on the same line); returns one result per file; when the file viewer is opened, all lines containing query terms are highlighted simultaneously; implemented via per-token FTS5 `DISTINCT file_id` queries intersected in Rust, with the best FTS-ranked line per file as the representative result
 - **Context window preference** — the number of context lines shown in search result cards (previously only configurable in `server.toml`) is now also settable per-browser in the Preferences panel; options: 0 (match only), 1, 2, 3, or 5 lines; stored in localStorage and takes priority over the server default; a Reset button reverts to the server setting
 - **Favicon** — added a magnifying glass favicon (`web/static/favicon.ico`) with 16/24/32/48/256px frames matching the app's blue accent colour (`#58a6ff`) on a transparent background
