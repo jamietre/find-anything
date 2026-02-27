@@ -14,7 +14,7 @@ find-anything without building from source.
 | `install.sh` | `curl \| sh` installer — detects platform, downloads release tarball |
 | `Dockerfile` | Multi-stage build for `find-server` (rust:slim → debian:bookworm-slim) |
 | `docker-compose.yml` | Server with data volume; binds to `127.0.0.1:8080` |
-| `server.toml.example` | Annotated server config template for Docker users |
+| `examples/server.toml` | Annotated server config template for Docker users |
 
 ## CI Workflow
 
@@ -55,7 +55,7 @@ destination isn't in PATH.
 
 ```sh
 # Copy and edit the config
-cp server.toml.example server.toml
+cp examples/server.toml server.toml
 # Edit token, data_dir = /data, bind = 0.0.0.0:8080
 
 docker compose up -d

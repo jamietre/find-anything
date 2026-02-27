@@ -120,7 +120,7 @@ Download the installer from [GitHub Releases](https://github.com/jamietre/find-a
 ```sh
 git clone https://github.com/jamietre/find-anything
 cd find-anything
-cp server.toml.example server.toml   # edit: set token and data_dir
+cp examples/server.toml server.toml   # edit: set token and data_dir
 docker compose up -d
 ```
 
@@ -166,7 +166,7 @@ in subprocesses. They must be co-located with `find-watch` or on PATH.
 **With Docker Compose:**
 
 ```sh
-cp server.toml.example server.toml
+cp examples/server.toml server.toml
 # Edit server.toml: set a strong token value
 docker compose up -d
 ```

@@ -46,7 +46,7 @@ pnpm install
 Copy and edit the example configs:
 
 ```sh
-cp server.toml.example config/server.toml
+cp examples/server.toml config/server.toml
 cp client.toml.example config/client.toml   # edit: set server URL and source paths
 ```
 
