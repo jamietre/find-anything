@@ -3,6 +3,7 @@ import hljs from 'highlight.js/lib/core';
 // ── Language imports ──────────────────────────────────────────────────────────
 import bash from 'highlight.js/lib/languages/bash';
 import c from 'highlight.js/lib/languages/c';
+import csharp from 'highlight.js/lib/languages/csharp';
 import cpp from 'highlight.js/lib/languages/cpp';
 import css from 'highlight.js/lib/languages/css';
 import dockerfile from 'highlight.js/lib/languages/dockerfile';
@@ -31,6 +32,7 @@ import yaml from 'highlight.js/lib/languages/yaml';
 
 hljs.registerLanguage('bash', bash);
 hljs.registerLanguage('c', c);
+hljs.registerLanguage('csharp', csharp);
 hljs.registerLanguage('cpp', cpp);
 hljs.registerLanguage('css', css);
 hljs.registerLanguage('dockerfile', dockerfile);
@@ -67,6 +69,7 @@ const EXT_MAP: Record<string, string> = {
 	cxx: 'cpp',
 	cc: 'cpp',
 	hpp: 'cpp',
+	cs: 'csharp',
 	// JVM
 	java: 'java',
 	kt: 'kotlin',
@@ -100,8 +103,6 @@ const EXT_MAP: Record<string, string> = {
 	zsh: 'shell',
 	fish: 'shell',
 	ps1: 'shell',
-	// JVM / functional
-	hs: 'haskell',
 	// Data / config
 	json: 'json',
 	yaml: 'yaml',
