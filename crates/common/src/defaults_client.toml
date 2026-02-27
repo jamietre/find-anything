@@ -95,9 +95,10 @@ exclude = [
 ]
 
 [scan.archives]
-enabled          = true
-max_depth        = 10
-max_temp_file_mb = 500
+enabled               = true
+max_depth             = 10
+max_temp_file_mb      = 500
+max_7z_solid_block_mb = 256
 
 # ── Watch ────────────────────────────────────────────────────────────────────
 
