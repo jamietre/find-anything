@@ -21,6 +21,7 @@ import os
 import random
 import sqlite3
 import time
+import zipfile
 from pathlib import Path
 
 # ── Realistic file distributions ──────────────────────────────────────────────
@@ -259,6 +260,118 @@ def make_scan_history(all_files: list[dict], n_scans: int = 24) -> list[dict]:
     return points
 
 
+# ── Fake EXIF image with real content chunk ────────────────────────────────────
+
+# Realistic EXIF data for a handful of demo cameras
+DEMO_EXIF_IMAGES = [
+    {
+        "path": "photos/fujifilm-golden-gate.jpg",
+        "size": 8_200_000,
+        "extract_ms": 68,
+        "exif": [
+            "[EXIF:Make] FUJIFILM",
+            "[EXIF:Model] X-T5",
+            "[EXIF:LensModel] XF23mmF1.4 R LM WR",
+            "[EXIF:ExposureTime] 1/1600 sec.",
+            "[EXIF:FNumber] f/2.0",
+            "[EXIF:ISOSpeedRatings] 320",
+            "[EXIF:DateTimeOriginal] 2024:09:21 16:45:03",
+            "[EXIF:ExposureBiasValue] -0.33 EV",
+            "[EXIF:FocalLength] 23.0 mm",
+            "[EXIF:ColorSpace] sRGB",
+            "[EXIF:PixelXDimension] 8240",
+            "[EXIF:PixelYDimension] 5504",
+            "[EXIF:GPSLatitudeRef] N",
+            "[EXIF:GPSLatitude] 37 deg 46 min 11.16 sec",
+            "[EXIF:GPSLongitudeRef] W",
+            "[EXIF:GPSLongitude] 122 deg 28 min 45.24 sec",
+            "[EXIF:GPSAltitude] 11.8 m Above Sea Level",
+        ],
+    },
+    {
+        "path": "photos/pixel8-london-bridge.jpg",
+        "size": 4_700_000,
+        "extract_ms": 55,
+        "exif": [
+            "[EXIF:Make] Google",
+            "[EXIF:Model] Pixel 8",
+            "[EXIF:LensModel] rear ultra wide 1/2.2\" 13mm f/2.2",
+            "[EXIF:ExposureTime] 1/500 sec.",
+            "[EXIF:FNumber] f/2.2",
+            "[EXIF:ISOSpeedRatings] 50",
+            "[EXIF:DateTimeOriginal] 2024:11:03 14:12:47",
+            "[EXIF:FocalLength] 2.2 mm",
+            "[EXIF:PixelXDimension] 4080",
+            "[EXIF:PixelYDimension] 3060",
+            "[EXIF:GPSLatitudeRef] N",
+            "[EXIF:GPSLatitude] 51 deg 30 min 26.04 sec",
+            "[EXIF:GPSLongitudeRef] W",
+            "[EXIF:GPSLongitude] 0 deg 5 min 16.92 sec",
+            "[EXIF:GPSAltitude] 6.2 m Above Sea Level",
+        ],
+    },
+]
+
+
+def _next_archive_path(content_dir: Path) -> tuple[Path, str]:
+    """Find the latest content ZIP in content_dir, or return a new one."""
+    zips = sorted(content_dir.glob("*/content_*.zip"))
+    if zips:
+        return zips[-1].parent, zips[-1].name
+    # No existing archive — create content/0000/content_00001.zip
+    folder = content_dir / "0000"
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder, "content_00001.zip"
+
+
+def seed_image_with_exif(
+    conn: sqlite3.Connection,
+    content_dir: Path,
+    img: dict,
+    now: int,
+) -> None:
+    """Insert one image file with realistic EXIF metadata into the DB and ZIP store."""
+    path = img["path"]
+    # Skip if already present.
+    if conn.execute("SELECT 1 FROM files WHERE path = ?", (path,)).fetchone():
+        return
+
+    indexed_at = now - random.randint(30, 180) * 86400
+    mtime = indexed_at - random.randint(1, 7) * 86400
+
+    conn.execute(
+        "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms) "
+        "VALUES (?, ?, ?, 'image', ?, ?)",
+        (path, mtime, img["size"], indexed_at, img["extract_ms"]),
+    )
+    file_id = conn.execute("SELECT id FROM files WHERE path = ?", (path,)).fetchone()[0]
+
+    # Build chunk content: one EXIF line per row, then the path line.
+    meta_lines = img["exif"]
+    chunk_lines = meta_lines + [path]
+    chunk_text = "\n".join(chunk_lines) + "\n"
+    chunk_name = path + ".chunk0.txt"
+
+    # Write chunk into the latest (or a new) content ZIP.
+    folder, archive_name = _next_archive_path(content_dir)
+    zip_path = folder / archive_name
+    with zipfile.ZipFile(zip_path, "a", compression=zipfile.ZIP_DEFLATED) as zf:
+        if chunk_name not in zf.namelist():
+            zf.writestr(chunk_name, chunk_text)
+
+    # Insert one lines row per chunk line (all line_number=0 — metadata).
+    for offset, _ in enumerate(chunk_lines):
+        row_id = conn.execute(
+            "INSERT INTO lines (file_id, line_number, chunk_archive, chunk_name, line_offset_in_chunk) "
+            "VALUES (?, 0, ?, ?, ?)",
+            (file_id, archive_name, chunk_name, offset),
+        ).lastrowid
+        conn.execute(
+            "INSERT INTO lines_fts (rowid, content) VALUES (?, ?)",
+            (row_id, chunk_lines[offset]),
+        )
+
+
 # ── Database operations ────────────────────────────────────────────────────────
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
@@ -276,7 +389,7 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def seed(db_path: str, count: int, clear: bool) -> None:
+def seed(db_path: str, count: int, clear: bool, data_dir: Path) -> None:
     print(f"\nSeeding {db_path} with {count} files…")
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -331,6 +444,14 @@ def seed(db_path: str, count: int, clear: bool) -> None:
     )
     after = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
     print(f"  inserted {after - before} file records ({after} total)")
+
+    # Seed demo images with real EXIF metadata in the ZIP store.
+    content_dir = data_dir / "sources" / "content"
+    content_dir.mkdir(parents=True, exist_ok=True)
+    for img in DEMO_EXIF_IMAGES:
+        seed_image_with_exif(conn, content_dir, img, now)
+    conn.commit()
+    print(f"  seeded {len(DEMO_EXIF_IMAGES)} demo images with EXIF metadata")
 
     # Rebuild scan history from all files (existing + new)
     all_db_files = [
@@ -389,7 +510,7 @@ def main() -> None:
 
     for db_path in db_files:
         if db_path.exists():
-            seed(str(db_path), args.count, args.clear)
+            seed(str(db_path), args.count, args.clear, Path(args.data_dir))
         else:
             print(f"  skipping {db_path} (not found)")
 

@@ -620,6 +620,210 @@ pub fn fts_candidates(
     Ok(results)
 }
 
+/// Return type for `document_candidates`: total qualifying files + per-file (representative, extras).
+pub type DocumentCandidates = (usize, Vec<(CandidateRow, Vec<CandidateRow>)>);
+
+/// Document-level fuzzy candidate search.
+///
+/// Unlike `fts_candidates` (which requires all query terms on the *same* line),
+/// this finds files where each query term appears on *any* line, then surfaces
+/// one result per file with extra_matches carrying the best line per remaining token.
+///
+/// Returns `(total, Vec<(representative, extra_matches)>)`.
+/// `total` is the number of qualifying files before the limit is applied.
+pub fn document_candidates(
+    conn: &Connection,
+    archive_mgr: &ArchiveManager,
+    query: &str,
+    limit: usize,
+) -> Result<DocumentCandidates> {
+    use std::collections::HashSet;
+
+    let tokens: Vec<String> = query
+        .split_whitespace()
+        .filter(|w| w.len() >= 3)
+        .map(|w| w.to_string())
+        .collect();
+
+    if tokens.is_empty() {
+        return Ok((0, vec![]));
+    }
+
+    // For each token, collect the set of file_ids that have at least one matching line.
+    let mut per_token_ids: Vec<HashSet<i64>> = Vec::new();
+    for token in &tokens {
+        let fts_expr = format!("\"{}\"", token.replace('"', "\"\""));
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT l.file_id
+             FROM lines_fts
+             JOIN lines l ON l.id = lines_fts.rowid
+             WHERE lines_fts MATCH ?1
+             LIMIT 100000",
+        )?;
+        let ids: HashSet<i64> = stmt
+            .query_map(params![fts_expr], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        per_token_ids.push(ids);
+    }
+
+    // Intersect: files that have ALL tokens somewhere.
+    let qualifying_ids: HashSet<i64> = per_token_ids
+        .into_iter()
+        .reduce(|a, b| a.intersection(&b).copied().collect())
+        .unwrap_or_default();
+
+    let total = qualifying_ids.len();
+    if total == 0 {
+        return Ok((0, vec![]));
+    }
+
+    let or_expr = tokens
+        .iter()
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+
+    // Fetch up to `tokens.len()` lines per qualifying file so we can pick the best
+    // line per token. We need enough rows to fill `limit` files × N tokens.
+    let per_file_cap = tokens.len().max(1);
+    let fetch_limit = (limit * 20 * per_file_cap).max(10_000) as i64;
+
+    struct RawRow {
+        file_path: String,
+        file_kind: String,
+        line_number: usize,
+        chunk_archive: String,
+        chunk_name: String,
+        line_offset: usize,
+        file_id: i64,
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT f.path, f.kind, l.line_number,
+                l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id
+         FROM lines_fts
+         JOIN lines l ON l.id = lines_fts.rowid
+         JOIN files f ON f.id = l.file_id
+         WHERE lines_fts MATCH ?1
+         ORDER BY lines_fts.rank
+         LIMIT ?2",
+    )?;
+
+    // Collect up to `per_file_cap` raw rows per qualifying file.
+    let mut file_rows: HashMap<i64, Vec<RawRow>> = HashMap::new();
+    let mut file_order: Vec<i64> = Vec::new(); // insertion order for stable output
+
+    let mut rows = stmt.query(params![or_expr, fetch_limit])?;
+    while let Some(row) = rows.next()? {
+        let file_id: i64 = row.get(6)?;
+        if !qualifying_ids.contains(&file_id) {
+            continue;
+        }
+        let entry = file_rows.entry(file_id).or_insert_with(|| {
+            file_order.push(file_id);
+            Vec::new()
+        });
+        if entry.len() < per_file_cap {
+            entry.push(RawRow {
+                file_path:    row.get(0)?,
+                file_kind:    row.get(1)?,
+                line_number:  row.get::<_, i64>(2)? as usize,
+                chunk_archive: row.get(3)?,
+                chunk_name:   row.get(4)?,
+                line_offset:  row.get::<_, i64>(5)? as usize,
+                file_id,
+            });
+        }
+        if file_order.len() >= limit && file_rows.get(&file_order[file_order.len()-1]).map_or(0, |v| v.len()) >= per_file_cap {
+            break;
+        }
+    }
+
+    // Read content from ZIP archives, reusing a chunk cache.
+    let mut chunk_cache: HashMap<(String, String), Vec<String>> = HashMap::new();
+
+    let read_content = |row: &RawRow, cache: &mut HashMap<(String, String), Vec<String>>| -> String {
+        let key = (row.chunk_archive.clone(), row.chunk_name.clone());
+        if !cache.contains_key(&key) {
+            let chunk_ref = ChunkRef { archive_name: key.0.clone(), chunk_name: key.1.clone() };
+            let text = archive_mgr.read_chunk(&chunk_ref).unwrap_or_default();
+            cache.insert(key.clone(), text.lines().map(|l| l.to_string()).collect());
+        }
+        cache[&key].get(row.line_offset).cloned().unwrap_or_default()
+    };
+
+    let tokens_lower: Vec<String> = tokens.iter().map(|t| t.to_lowercase()).collect();
+
+    let mut results = Vec::new();
+    for file_id in file_order.into_iter().take(limit) {
+        let rows = match file_rows.remove(&file_id) {
+            Some(r) => r,
+            None => continue,
+        };
+
+        // First row is the top FTS-ranked line → the representative.
+        let rep_row = &rows[0];
+        let rep_content = read_content(rep_row, &mut chunk_cache);
+        let rep_content_lower = rep_content.to_lowercase();
+        let (file_path, archive_path) = split_composite_path(&rep_row.file_path);
+
+        let representative = CandidateRow {
+            file_path: file_path.clone(),
+            file_kind: rep_row.file_kind.clone(),
+            archive_path: archive_path.clone(),
+            line_number: rep_row.line_number,
+            content: rep_content,
+            file_id,
+        };
+
+        // For each token not already covered by the representative, find the first
+        // subsequent row that covers it (simple case-insensitive substring check).
+        let mut uncovered: Vec<&str> = tokens_lower
+            .iter()
+            .filter(|t| !rep_content_lower.contains(t.as_str()))
+            .map(|t| t.as_str())
+            .collect();
+
+        let mut extras: Vec<CandidateRow> = Vec::new();
+        for extra_row in &rows[1..] {
+            if uncovered.is_empty() {
+                break;
+            }
+            let content = read_content(extra_row, &mut chunk_cache);
+            let content_lower = content.to_lowercase();
+            // Only include this row if it covers at least one new token.
+            let newly_covered: Vec<usize> = uncovered
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| content_lower.contains(*t))
+                .map(|(i, _)| i)
+                .collect();
+            if !newly_covered.is_empty() {
+                // Skip line_number=0 (metadata/path lines) — not useful as highlights.
+                if extra_row.line_number > 0 {
+                    let (ep, ea) = split_composite_path(&extra_row.file_path);
+                    extras.push(CandidateRow {
+                        file_path: ep,
+                        file_kind: extra_row.file_kind.clone(),
+                        archive_path: ea,
+                        line_number: extra_row.line_number,
+                        content,
+                        file_id,
+                    });
+                }
+                // Remove newly covered tokens (iterate in reverse to preserve indices).
+                for i in newly_covered.into_iter().rev() {
+                    uncovered.swap_remove(i);
+                }
+            }
+        }
+
+        results.push((representative, extras));
+    }
+
+    Ok((total, results))
+}
+
 /// Fetch alias paths grouped by their canonical file ID.
 /// Returns a map of canonical_id → list of alias paths.
 pub fn fetch_aliases_for_canonical_ids(

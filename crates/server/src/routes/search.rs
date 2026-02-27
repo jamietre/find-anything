@@ -157,6 +157,48 @@ pub async fn search(
                 let conn = db::open(&db_path)?;
                 let archive_mgr = ArchiveManager::new(data_dir);
                 let base_url = db::get_base_url(&conn)?;
+
+                // Document mode has its own query path (one result per file).
+                if mode == "document" {
+                    let (doc_total, candidates) = db::document_candidates(&conn, &archive_mgr, &query, scoring_limit)?;
+                    let mut scorer = FuzzyScorer::new(&query);
+                    let result_pairs: Vec<(SearchResult, i64)> = candidates
+                        .into_iter()
+                        .map(|(rep, extras)| {
+                            let file_id = rep.file_id;
+                            let score = scorer.score(&rep.content).unwrap_or(0);
+                            let extra_matches = extras.into_iter().map(|e| {
+                                find_common::api::ContextLine {
+                                    line_number: e.line_number,
+                                    content: e.content,
+                                }
+                            }).collect();
+                            (SearchResult {
+                                source: source_name.clone(),
+                                path: rep.file_path.clone(),
+                                archive_path: rep.archive_path,
+                                line_number: rep.line_number,
+                                snippet: rep.content,
+                                score,
+                                context_lines: vec![],
+                                resource_url: make_resource_url(&base_url, &rep.file_path),
+                                aliases: vec![],
+                                extra_matches,
+                            }, file_id)
+                        })
+                        .collect();
+                    let canonical_ids: Vec<i64> = result_pairs.iter().map(|(_, id)| *id).collect();
+                    let aliases_map = db::fetch_aliases_for_canonical_ids(&conn, &canonical_ids)?;
+                    let results: Vec<SearchResult> = result_pairs
+                        .into_iter()
+                        .map(|(mut r, id)| {
+                            if let Some(aliases) = aliases_map.get(&id) { r.aliases = aliases.clone(); }
+                            r
+                        })
+                        .collect();
+                    return Ok((doc_total, results));
+                }
+
                 // For regex mode, extract literal character sequences from the pattern
                 // for FTS5 pre-filtering, then apply the full regex as a post-filter.
                 // For exact mode, treat the whole query as a phrase (literal substring).
@@ -189,6 +231,7 @@ pub async fn search(
                                 context_lines: vec![],
                                 resource_url: make_resource_url(&base_url, &c.file_path),
                                 aliases: vec![],
+                                extra_matches: vec![],
                             }, file_id)
                         }).collect()
                     }
@@ -208,6 +251,7 @@ pub async fn search(
                                     context_lines: vec![],
                                     resource_url: make_resource_url(&base_url, &c.file_path),
                                     aliases: vec![],
+                                    extra_matches: vec![],
                                 }, file_id)
                             })
                             .collect()
@@ -227,6 +271,7 @@ pub async fn search(
                                     context_lines: vec![],
                                     resource_url: make_resource_url(&base_url, &c.file_path),
                                     aliases: vec![],
+                                    extra_matches: vec![],
                                 }, file_id))
                             })
                             .collect()

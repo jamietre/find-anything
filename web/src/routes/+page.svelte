@@ -260,7 +260,12 @@
 		const r = e.detail;
 		fileSource = r.source;
 		currentFile = FilePath.fromParts(r.path, r.archive_path ?? null);
-		fileSelection = r.line_number ? [r.line_number] : [];
+		const extraLines = (r.extra_matches ?? [])
+			.map((m) => m.line_number)
+			.filter((n) => n > 0 && n !== r.line_number);
+		fileSelection = r.line_number
+			? [r.line_number, ...extraLines]
+			: extraLines.length ? extraLines : [];
 		panelMode = 'file';
 		view = 'file';
 		showTree = true;

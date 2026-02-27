@@ -9,6 +9,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+- **Document search mode** — new "Document" option in the search mode dropdown finds files where all query terms appear anywhere in the file (not necessarily on the same line); returns one result per file; when the file viewer is opened, all lines containing query terms are highlighted simultaneously; implemented via per-token FTS5 `DISTINCT file_id` queries intersected in Rust, with the best FTS-ranked line per file as the representative result
+- **Context window preference** — the number of context lines shown in search result cards (previously only configurable in `server.toml`) is now also settable per-browser in the Preferences panel; options: 0 (match only), 1, 2, 3, or 5 lines; stored in localStorage and takes priority over the server default; a Reset button reverts to the server setting
+- **Favicon** — added a magnifying glass favicon (`web/static/favicon.ico`) with 16/24/32/48/256px frames matching the app's blue accent colour (`#58a6ff`) on a transparent background
+- **Screenshots in README** — four annotated screenshots (search results, file viewer, command palette, index statistics) added under `docs/screenshots/`; displayed in the README as a four-column table with expandable `<details>` panels
+- **Demo images with EXIF metadata in seed script** — `seed-demo-db.py` now inserts two realistic demo image records (`photos/fujifilm-golden-gate.jpg`, `photos/pixel8-london-bridge.jpg`) with full EXIF metadata (camera, lens, exposure, GPS) written into a real content ZIP chunk so they appear correctly in the file viewer
+
 ### Fixed
 - **Archive member sizes no longer inflate total indexed size** — `build_member_index_files` was propagating the outer archive's file size to every extracted member; a 1,000-member 10 GB zip was contributing ~10 TB to the "indexed" figure in the stats panel; members now correctly get `size = 0` since individual uncompressed sizes are not available at index time, while the outer archive's size is still counted via its own file record
 - **Stats panel no longer flashes on background refresh** — the loading spinner was shown on every 2-second poll while indexing was active, causing a full re-render and making copy/paste impossible; background refreshes now update in place with no visible flash; only the very first page load shows the spinner

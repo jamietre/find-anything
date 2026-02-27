@@ -203,6 +203,10 @@ pub struct SearchResult {
     /// Empty when there are no duplicates; omitted from JSON.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub aliases: Vec<String>,
+    /// Additional lines where query terms were found (document mode only).
+    /// Each entry is the best matching line for a term not covered by `line_number`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_matches: Vec<ContextLine>,
 }
 
 /// GET /api/v1/search response.
