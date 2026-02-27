@@ -284,9 +284,15 @@ def seed(db_path: str, count: int, clear: bool) -> None:
 
     if clear:
         conn.execute("DELETE FROM scan_history")
-        conn.execute("DELETE FROM files")
+        # Only remove fake/seed records (files with no lines entries).
+        # Real indexed files have lines rows and must be preserved so
+        # FTS search continues to work.
+        conn.execute(
+            "DELETE FROM files WHERE id NOT IN (SELECT DISTINCT file_id FROM lines)"
+        )
         conn.commit()
-        print("  cleared existing data")
+        n_remaining = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        print(f"  cleared seed records ({n_remaining} real indexed files preserved)")
 
     # Find paths already in the DB so we don't collide
     existing_paths = {row[0] for row in conn.execute("SELECT path FROM files")}
