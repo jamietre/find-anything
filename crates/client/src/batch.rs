@@ -112,7 +112,7 @@ pub fn build_index_files(
 pub fn build_member_index_files(
     outer_path: &str,
     mtime: i64,
-    size: i64,
+    _size: i64,
     member_lines: Vec<IndexLine>,
     content_hash: Option<String>,
 ) -> Vec<IndexFile> {
@@ -157,7 +157,7 @@ pub fn build_member_index_files(
         result.push(IndexFile {
             path: composite_path,
             mtime,
-            size,
+            size: 0, // Individual member sizes are unknown; outer archive size is counted separately
             kind: member_kind,
             lines,
             extract_ms: None,

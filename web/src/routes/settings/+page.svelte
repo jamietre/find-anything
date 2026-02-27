@@ -200,7 +200,7 @@
 		flex: 1;
 		padding: 24px 32px;
 		overflow-y: auto;
-		max-width: 640px;
+		min-width: 0;
 	}
 
 	.content-title {

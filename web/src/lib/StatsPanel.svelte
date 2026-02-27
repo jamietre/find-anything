@@ -4,7 +4,7 @@
 	import type { SourceStats, StatsResponse } from '$lib/api';
 
 	let stats: StatsResponse | null = null;
-	let loading = false;
+	let initialLoading = true;
 	let error: string | null = null;
 	let selectedSource = '';
 
@@ -30,17 +30,18 @@
 	}
 
 	async function fetchStats() {
-		loading = true;
 		error = null;
 		try {
-			stats = await getStats();
-			if (stats.sources.length > 0) {
-				selectedSource = stats.sources[0].name;
+			const fresh = await getStats();
+			// Preserve selected source across refreshes
+			if (!selectedSource && fresh.sources.length > 0) {
+				selectedSource = fresh.sources[0].name;
 			}
+			stats = fresh;
 		} catch (e) {
 			error = String(e);
 		} finally {
-			loading = false;
+			initialLoading = false;
 		}
 	}
 
@@ -145,7 +146,7 @@
 	}
 </script>
 
-{#if loading}
+{#if initialLoading}
 	<div class="status">Loading…</div>
 {:else if error}
 	<div class="status error">{error}</div>
@@ -198,14 +199,6 @@
 			{#if stats.failed_requests > 0}
 				<span class="failed">{stats.failed_requests} failed</span>
 			{/if}
-			{#if stats.worker_status.state === 'processing'}
-				<span class="worker-processing" title="{stats.worker_status.source}: {stats.worker_status.file}">
-					<span class="worker-dot"></span>
-					indexing {stats.worker_status.source}/{stats.worker_status.file.split('/').pop()}
-				</span>
-			{:else}
-				<span class="worker-idle">idle</span>
-			{/if}
 		</div>
 
 		<!-- By Kind -->
@@ -251,6 +244,20 @@
 			<div class="status-small">Only one scan recorded — run another scan to see the chart.</div>
 		{/if}
 	{/if}
+
+	<!-- Worker status footer -->
+	<div class="worker-status" class:processing={stats.worker_status.state === 'processing'}>
+		{#if stats.worker_status.state === 'processing'}
+			<span class="worker-dot"></span>
+			<span class="worker-label">Indexing</span>
+			<span class="worker-source">{stats.worker_status.source}</span>
+			<span class="worker-sep">/</span>
+			<span class="worker-file">{stats.worker_status.file}</span>
+		{:else}
+			<span class="worker-dot idle-dot"></span>
+			<span class="worker-label">Idle</span>
+		{/if}
+	</div>
 {/if}
 
 <style>
@@ -358,30 +365,64 @@
 		color: #f85149;
 	}
 
-	.worker-idle {
+	/* Worker status footer */
+	.worker-status {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		margin-top: 20px;
+		padding: 8px 12px;
+		border-radius: var(--radius);
+		background: var(--bg-secondary);
+		border: 1px solid var(--border);
+		font-size: 12px;
 		color: var(--text-muted);
-		opacity: 0.6;
+		min-width: 0;
 	}
 
-	.worker-processing {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		color: #58a6ff;
-		max-width: 260px;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
+	.worker-status.processing {
+		color: var(--text);
+		border-color: rgba(88, 166, 255, 0.3);
 	}
 
 	.worker-dot {
-		display: inline-block;
-		width: 6px;
-		height: 6px;
+		width: 7px;
+		height: 7px;
 		border-radius: 50%;
 		background: #58a6ff;
 		flex-shrink: 0;
 		animation: pulse 1.2s ease-in-out infinite;
+	}
+
+	.idle-dot {
+		background: var(--text-muted);
+		opacity: 0.4;
+		animation: none;
+	}
+
+	.worker-label {
+		flex-shrink: 0;
+		font-weight: 500;
+	}
+
+	.worker-source {
+		flex-shrink: 0;
+		color: var(--text-muted);
+	}
+
+	.worker-sep {
+		flex-shrink: 0;
+		color: var(--text-muted);
+		opacity: 0.5;
+	}
+
+	.worker-file {
+		font-family: var(--font-mono);
+		font-size: 11px;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
 	}
 
 	@keyframes pulse {
