@@ -5,6 +5,7 @@ export interface UserProfile {
 	sourceBaseUrls?: Record<string, string>;
 	wordWrap?: boolean;
 	markdownFormat?: boolean;
+	contextWindow?: number;
 }
 
 const STORAGE_KEY = 'find-anything.profile';

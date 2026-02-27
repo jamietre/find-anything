@@ -68,7 +68,12 @@
 		try { sources = await listSources(); } catch (e) {
 			if (e instanceof AuthError) { showTokenSetup = true; return; }
 		}
-		try { const s = await getSettings(); contextWindow.set(s.context_window); } catch { /* silent */ }
+		try {
+			const s = await getSettings();
+			// Use profile override if set; fall back to server default.
+			const profileWindow = get(profile).contextWindow;
+			contextWindow.set(profileWindow ?? s.context_window);
+		} catch { /* silent */ }
 	}
 
 	// ── History ─────────────────────────────────────────────────────────────────
