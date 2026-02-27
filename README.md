@@ -4,7 +4,7 @@ Distributed full-content file indexing and fuzzy search. Index one or more machi
 into a central server, then query everything from a single CLI or web UI.
 
 ```
-find-anything "password strength"
+$ find-anything "password strength"
 [code] src/auth/validate.rs:142  check_password_strength(input)?;
 [code] docs/security.md:87       Password strength requirements: minimum 12 chars
 ```
@@ -13,11 +13,45 @@ find-anything "password strength"
 
 - Full text search across all indexed machines from one place
 - Fuzzy, exact, and regex search modes
+- Find files in tree view by path/name using CTRL+P
 - Archive members (ZIP, TAR, 7Z) indexed as individual searchable files
 - Content deduplication — identical files stored once; search results surface all duplicate paths
 - Per-directory indexing control via `.noindex` (skip subtree) and `.index` (override scan settings)
 - Indexing error tracking — extraction failures surfaced in the UI per source
 - Real-time updates via `find-watch`; cross-platform (Linux, macOS, Windows)
+
+---
+
+## Screenshots
+
+<table>
+<tr>
+<td>
+<details>
+<summary><img src="docs/screenshots/search-results.png" width="180" alt="Fuzzy search"></summary>
+<img src="docs/screenshots/search-results.png" width="800" alt="Fuzzy search">
+</details>
+</td>
+<td>
+<details>
+<summary><img src="docs/screenshots/file-view.png" width="180" alt="File viewer"></summary>
+<img src="docs/screenshots/file-view.png" width="800" alt="File viewer">
+</details>
+</td>
+<td>
+<details>
+<summary><img src="docs/screenshots/command-palette.png" width="180" alt="Command palette"></summary>
+<img src="docs/screenshots/command-palette.png" width="800" alt="Command palette">
+</details>
+</td>
+<td>
+<details>
+<summary><img src="docs/screenshots/stats.png" width="180" alt="Index statistics"></summary>
+<img src="docs/screenshots/stats.png" width="800" alt="Index statistics">
+</details>
+</td>
+</tr>
+</table>
 
 ---
 
@@ -104,12 +138,12 @@ For cross-compilation targets (ARM7 NAS, etc.) and full dev setup, see [DEVELOPM
 
 ## Binaries
 
-| Binary                 | Role                                       | Runs on                     |
-| ---------------------- | ------------------------------------------ | --------------------------- |
-| `find-server`          | Central index server                       | server machine              |
-| `find-scan`            | Initial filesystem indexer                 | each client machine         |
-| `find-watch`           | Real-time file watcher (incremental)       | each client machine         |
-| `find-anything`        | CLI search client                          | anywhere                    |
+| Binary                 | Role                                        | Runs on                     |
+| ---------------------- | ------------------------------------------- | --------------------------- |
+| `find-server`          | Central index server                        | server machine              |
+| `find-scan`            | Initial filesystem indexer                  | each client machine         |
+| `find-watch`           | Real-time file watcher (incremental)        | each client machine         |
+| `find-anything`        | CLI search client                           | anywhere                    |
 | `find-admin`           | Admin utilities: config, status, inbox mgmt | each client machine         |
 | `find-extract-text`    | Text/Markdown extractor                     | client (used by find-watch) |
 | `find-extract-pdf`     | PDF extractor                               | client (used by find-watch) |
@@ -245,7 +279,7 @@ find-scan --full
 | Images (JPEG, PNG, TIFF, HEIC, RAW)  | EXIF metadata (camera, GPS, dates)                                       |
 | Audio (MP3, FLAC, M4A, OGG)          | ID3/Vorbis/MP4 tags (title, artist, album)                               |
 | Video (MP4, MKV, WebM, AVI, MOV)     | Format, resolution, duration                                             |
-| Archives (ZIP, TAR, 7Z, GZ)          | Members extracted recursively and indexed as individual searchable files  |
+| Archives (ZIP, TAR, 7Z, GZ)          | Members extracted recursively and indexed as individual searchable files |
 | Windows PE/DLL                       | File version, description, company, original filename from version info  |
 
 ---

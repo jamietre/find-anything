@@ -38,6 +38,7 @@
 <div class="search-box">
 	<select bind:value={mode} on:change={handleModeChange} class="mode-select">
 		<option value="fuzzy">Fuzzy</option>
+		<option value="document">Document</option>
 		<option value="exact">Exact</option>
 		<option value="regex">Regex</option>
 	</select>
