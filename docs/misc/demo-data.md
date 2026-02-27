@@ -22,15 +22,22 @@ Or re-run the inline script — data lands in `/tmp/find-demo`.
       src/main.rs, auth.rs, tasks.rs
       src/api/routes.rs, middleware.rs
       docs/architecture.md, deployment.md
+      docs/screenshots/task-list.jpg   # EXIF: Apple MacBook Pro, 2024-03-20
+      tests/fixtures/*.json            # API request/response examples
     weather-cli/       # fictional Python weather CLI
       README.md
       pyproject.toml
       src/main.py, api.py
+      tests/fixtures/forecast_london.json
   notes/
     meeting-notes.md
     research-databases.md
     ideas.md
     onboarding-checklist.md
+    contacts.json
+    photos/
+      team-offsite-2024.jpg        # EXIF: Fujifilm X-T5, GPS: Golden Gate Park SF
+      architecture-whiteboard.jpg  # EXIF: Google Pixel 8, GPS: London
 ```
 
 ## Client config

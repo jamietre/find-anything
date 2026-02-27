@@ -158,8 +158,27 @@ subdirectories on expand.
   - UI: Archive files (`kind="archive"`) expand in the tree like directories
 - **`archive_path`** on `IndexLine` is deprecated (schema v3) — composite paths in `files.path` replaced it.
   For backward compatibility, external API endpoints still accept an `archive_path` query param.
-- **PDF extraction** wraps `pdf-extract` in `std::panic::catch_unwind` because
-  the library panics on malformed PDFs rather than returning errors.
+- **PDF extraction** uses a fork of `pdf-extract` at
+  `https://github.com/jamietre/pdf-extract`, pinned by git rev in
+  `crates/extractors/pdf/Cargo.toml`. The local working copy lives at
+  `/home/jamiet/code/pdf-extract/`. When investigating PDF extraction bugs or
+  panics, look in the fork — particularly `pdf-extract/src/lib.rs`.
+
+  **Workflow for any change to the fork:**
+  1. Edit `/home/jamiet/code/pdf-extract/src/lib.rs` (or other fork files)
+  2. `cd /home/jamiet/code/pdf-extract && git add -p && git commit`
+  3. `git push` — pushes to `github.com:jamietre/pdf-extract`
+  4. Copy the new commit hash (first 7 chars)
+  5. Update `rev = "XXXXXXX"` in `crates/extractors/pdf/Cargo.toml`
+  6. `cargo update -p pdf-extract` to refresh `Cargo.lock`
+  7. `cargo build -p find-extract-pdf` to verify it compiles
+
+  **Never** leave fork changes uncommitted/unpushed — the build pins a specific
+  rev, so local edits have no effect until committed, pushed, and the rev updated.
+
+  The fork avoids calling `type1_encoding_parser::get_encoding_map` (which
+  panics on malformed Type1 font data) by calling `type1_encoding_parser::parse()`
+  directly and handling errors gracefully.
 - The `files` table is per-source (one SQLite DB per source name, stored at
   `data_dir/sources/{source}.db`). Archives are shared across sources.
 - The **FTS5 index is contentless** (`content=''`); content lives only in ZIPs.

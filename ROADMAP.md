@@ -47,7 +47,6 @@ This document tracks the development roadmap for find-anything, from completed f
 
 - **`GET /api/v1/tree` endpoint** — Prefix-based directory listing using range-scan SQL; returns virtual directory nodes grouped server-side
 - **Directory tree sidebar** — Collapsible tree with lazy loading per directory; auto-expands ancestors of the active file
-- **Breadcrumb navigation** — Clickable path segments at the top of the detail panel; clicking a directory switches to directory listing view
 - **Directory listing view** — Table view of directory contents (name, kind, size, modified date)
 - **Atomic archive deletion** — File deletion keeps the SQLite transaction open until ZIP rewrite succeeds; rolls back on failure
 
@@ -154,6 +153,11 @@ RBAC is planned for a future release.
 ---
 
 ## Near-term Priorities
+
+### Entry page UX improvements
+
+- Allow navigating via ctrl+p right away
+  - how do we handle multple data sources?
 
 ### 🔴 Bug: Scan Should Delete Before Adding
 
@@ -312,6 +316,7 @@ content-hash caching to avoid re-OCR.
 
 ### Web UI Ideas
 
+- [ ] - **Breadcrumb navigation** — Clickable path segments at the top of the detail panel; clicking a directory switches to directory listing view
 - [x] Folder path browsing
 - [x] Sources visibility — dropdown selector (v0.1.6)
 - [x] Word wrap toggle (v0.1.5)
@@ -340,16 +345,7 @@ content-hash caching to avoid re-OCR.
 
 ### Extractor Log Verbosity
 
-- [ ] **Suppress pdf-extract noise by default** — the hardened fork now emits `warn!`
-      for every unrecognised font encoding, colorspace, or glyph name; on a large corpus
-      this is very chatty. By default, `find-client` (and `find-watch`) should suppress
-      `WARN` and below from the `pdf_extract` crate (or from all extractor sub-processes).
-      Options: set `RUST_LOG` when spawning extractor processes; or filter by crate path
-      in the `env_logger` / `tracing` initialisation in `find-client`.
-- [ ] **Per-extractor log level config** — add an optional `scan.extractor_log_level`
-      (or per-extractor overrides) so operators can dial up verbosity for debugging a
-      specific extractor without flooding logs from others; default should be `error` or
-      `off` for third-party library crates
+- [ ] Always emit the filename whenever a warn or above log is generated during scanning.
 
 ### Indexing Control
 

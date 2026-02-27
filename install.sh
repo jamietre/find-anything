@@ -297,10 +297,9 @@ echo "Setting up find-watch service..."
 if command -v systemctl >/dev/null 2>&1 && systemctl --user status >/dev/null 2>&1; then
   # systemd user session is active — install as a user service
   SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-  SERVICE_FILE="$SYSTEMD_USER_DIR/find-watch.service"
   mkdir -p "$SYSTEMD_USER_DIR"
 
-  cat > "$SERVICE_FILE" <<EOF
+  cat > "$SYSTEMD_USER_DIR/find-watch.service" <<EOF
 [Unit]
 Description=find-anything file watcher
 After=network.target
@@ -317,11 +316,24 @@ Environment=PATH=${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin
 WantedBy=default.target
 EOF
 
+  cat > "$SYSTEMD_USER_DIR/find-scan.service" <<EOF
+[Unit]
+Description=find-anything initial index scan
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=${INSTALL_DIR}/find-scan --config ${CONFIG_FILE}
+Environment=RUST_LOG=find_scan=info
+Environment=PATH=${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin
+EOF
+
   systemctl --user daemon-reload
   systemctl --user enable find-watch
   systemctl --user start find-watch
 
   WATCH_SERVICE_TYPE="user"
+  SCAN_SERVICE_TYPE="user"
   echo ""
   echo "find-watch systemd user service installed and started."
   echo "  Status:  systemctl --user status find-watch"
@@ -330,9 +342,11 @@ EOF
 
 elif command -v systemctl >/dev/null 2>&1 && [ -d "/run/systemd/system" ]; then
   # systemd is present but user session is unavailable (e.g. Synology DSM).
-  # Write the unit file to a temp location and instruct the user to install it.
-  UNIT_STAGING="$HOME/.config/find-anything/find-watch.service"
-  cat > "$UNIT_STAGING" <<EOF
+  # Write the unit files to a staging location and instruct the user to install them.
+  UNIT_STAGING_WATCH="$HOME/.config/find-anything/find-watch.service"
+  UNIT_STAGING_SCAN="$HOME/.config/find-anything/find-scan.service"
+
+  cat > "$UNIT_STAGING_WATCH" <<EOF
 [Unit]
 Description=find-anything file watcher
 After=network.target
@@ -349,26 +363,42 @@ Environment=PATH=${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin
 WantedBy=multi-user.target
 EOF
 
+  cat > "$UNIT_STAGING_SCAN" <<EOF
+[Unit]
+Description=find-anything initial index scan
+After=network.target
+
+[Service]
+User=$(id -un)
+Type=oneshot
+ExecStart=${INSTALL_DIR}/find-scan --config ${CONFIG_FILE}
+Environment=RUST_LOG=find_scan=info
+Environment=PATH=${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin
+EOF
+
   echo ""
   echo "systemd user sessions are not supported on this system (e.g. Synology DSM)."
-  echo "A system-level service unit has been written to:"
-  echo "  $UNIT_STAGING"
+  echo "Service unit files have been written to:"
+  echo "  $UNIT_STAGING_WATCH"
+  echo "  $UNIT_STAGING_SCAN"
   echo ""
-  echo "To install and enable it, run:"
+  echo "To install and start the watcher:"
   echo ""
-  WATCH_SERVICE_TYPE="system"
-  echo "  sudo mv $UNIT_STAGING /etc/systemd/system/find-watch.service"
+  echo "  sudo mv $UNIT_STAGING_WATCH /etc/systemd/system/find-watch.service"
+  echo "  sudo mv $UNIT_STAGING_SCAN  /etc/systemd/system/find-scan.service"
   echo "  sudo systemctl daemon-reload"
   echo "  sudo systemctl enable find-watch"
   echo "  sudo systemctl start find-watch"
 
+  WATCH_SERVICE_TYPE="system"
+  SCAN_SERVICE_TYPE="system"
+
 elif [ "$OS_NAME" = "macos" ]; then
   # macOS: suggest launchd
   PLIST_DIR="$HOME/Library/LaunchAgents"
-  PLIST_FILE="$PLIST_DIR/com.jamietre.find-watch.plist"
   mkdir -p "$PLIST_DIR"
 
-  cat > "$PLIST_FILE" <<EOF
+  cat > "$PLIST_DIR/com.jamietre.find-watch.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -393,18 +423,46 @@ elif [ "$OS_NAME" = "macos" ]; then
 </plist>
 EOF
 
-  launchctl load "$PLIST_FILE"
+  cat > "$PLIST_DIR/com.jamietre.find-scan.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.jamietre.find-scan</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${INSTALL_DIR}/find-scan</string>
+    <string>--config</string>
+    <string>${CONFIG_FILE}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>${HOME}/Library/Logs/find-scan.log</string>
+  <key>StandardErrorPath</key>
+  <string>${HOME}/Library/Logs/find-scan.log</string>
+</dict>
+</plist>
+EOF
+
+  launchctl load "$PLIST_DIR/com.jamietre.find-watch.plist"
+  launchctl load "$PLIST_DIR/com.jamietre.find-scan.plist"
 
   WATCH_SERVICE_TYPE="macos"
+  SCAN_SERVICE_TYPE="macos"
   echo ""
   echo "find-watch launchd agent installed and started."
   echo "  Status:  launchctl list com.jamietre.find-watch"
   echo "  Logs:    tail -f ~/Library/Logs/find-watch.log"
-  echo "  Stop:    launchctl unload $PLIST_FILE"
+  echo "  Stop:    launchctl unload $PLIST_DIR/com.jamietre.find-watch.plist"
 
 else
   # No systemd at all
   WATCH_SERVICE_TYPE="manual"
+  SCAN_SERVICE_TYPE="manual"
   echo ""
   echo "Autostart not configured (systemd not detected)."
   echo "Start find-watch manually:"
@@ -447,9 +505,41 @@ echo "If upgrading, restart the watcher to pick up the new binary:"
 echo ""
 print_restart_cmd
 echo ""
-echo "First-time setup — run the initial scan:"
+echo "──────────────────────────────────────────────────────────────"
+echo "First-time setup: run the initial scan"
+echo "──────────────────────────────────────────────────────────────"
 echo ""
-echo "  find-scan --full"
+echo "The initial scan indexes all configured directories. It can take"
+echo "a long time on large collections — run it as a background service"
+echo "so a disconnected terminal won't kill it."
 echo ""
-echo "This indexes all configured directories. Run it once before"
-echo "find-watch will have anything useful to keep up to date."
+if [ "$SCAN_SERVICE_TYPE" = "user" ]; then
+  echo "  systemctl --user start find-scan"
+  echo ""
+  echo "Follow progress:"
+  echo "  journalctl --user -u find-scan -f"
+elif [ "$SCAN_SERVICE_TYPE" = "system" ]; then
+  echo "  sudo systemctl start find-scan"
+  echo ""
+  echo "Follow progress:"
+  echo "  sudo journalctl -u find-scan -f"
+elif [ "$SCAN_SERVICE_TYPE" = "macos" ]; then
+  echo "  launchctl start com.jamietre.find-scan"
+  echo ""
+  echo "Follow progress:"
+  echo "  tail -f ~/Library/Logs/find-scan.log"
+else
+  echo "  ${INSTALL_DIR}/find-scan --config ${CONFIG_FILE}"
+fi
+echo ""
+echo "For a full re-scan (re-indexes every file from scratch):"
+echo ""
+if [ "$SCAN_SERVICE_TYPE" = "user" ]; then
+  echo "  systemctl --user set-environment FIND_SCAN_ARGS=--full"
+  echo "  systemctl --user start find-scan"
+  echo "  systemctl --user unset-environment FIND_SCAN_ARGS"
+  echo ""
+  echo "Or directly:"
+fi
+echo "  ${INSTALL_DIR}/find-scan --config ${CONFIG_FILE} --full"
+echo ""
