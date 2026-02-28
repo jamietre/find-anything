@@ -73,6 +73,8 @@ pub async fn run_scan(
     let mut batch: Vec<IndexFile> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_bytes: usize = 0;
     let mut failures: Vec<IndexingFailure> = Vec::new();
+    let log_interval = std::time::Duration::from_secs(5);
+    let mut last_log = std::time::Instant::now();
 
     // Per-directory caches: keyed by directory path.
     // Each directory's effective ScanConfig (after applying ancestor .index overrides)
@@ -88,7 +90,14 @@ pub async fn run_scan(
             match server_mtime {
                 None => {}                   // new file — index it
                 Some(sm) if mtime > sm => {} // modified — index it
-                Some(_) => { skipped += 1; continue; } // unchanged — skip
+                Some(_) => {
+                    skipped += 1;
+                    if last_log.elapsed() >= log_interval {
+                        info!("{indexed} indexed, {skipped} unchanged so far...");
+                        last_log = std::time::Instant::now();
+                    }
+                    continue;
+                }
             }
         }
 

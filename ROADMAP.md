@@ -161,7 +161,7 @@ RBAC is planned for a future release.
 
 ### Indexing improvements
 
-- [ ] Log (xxx indexed so far, yyy skipped) if files are skipped due to already being indexed, since we don't precheck for files we have already
+- [x] Log (xxx indexed so far, yyy skipped) if files are skipped due to already being indexed — periodic progress log every 5 s during the indexing loop
 
 ### 🔴 Bug: PDF OOM Crash During Extraction
 
