@@ -163,22 +163,24 @@ RBAC is planned for a future release.
 
 - [x] Log (xxx indexed so far, yyy skipped) if files are skipped due to already being indexed — periodic progress log every 5 s during the indexing loop
 
-### 🔴 Bug: PDF OOM Crash During Extraction
+### Logging improvements
 
-`lopdf` aborts the process with `memory allocation of 76492800 bytes failed` when
-indexing certain PDFs on memory-constrained systems (e.g. a 500 MB NAS). Root cause
-is the same as the 7z OOM issue (plan 034): `handle_alloc_error` aborts rather than
-panics, so `catch_unwind` cannot intercept it. The only defence is a pre-flight guard
-similar to the one added for 7z blocks.
+- [ ] This should use the same apttern as elsewhere: log "processing ..." first then log the warning
+      2026-02-28T12:32:48.095924Z WARN find_extract_pdf: PDF is password-protected, content not indexed: /volume1/data/backups/FromMomMac/Library/Mail/V7/079E825E-CEF8-46FA-813A-F63AAB5350AC/[Gmail].mbox/All Mail.mbox/95F6C28D-53E9-4B54-BF8E-0B058ABFAFAF/Data/3/9/1/Attachments/193207/3/2015-09-01 Alibaba sale confirmation.pdf
 
-Mitigation options:
-- Add a `max_pdf_size_mb` config option (default ~32 MB) as a fast-path skip before
-  even calling into lopdf — the file size is a reasonable proxy for peak working memory.
-- The existing `max_size_kb` already gates content extraction for very large files,
-  but its default (5 MB) is for content, not memory safety; a separate PDF guard with
-  a higher, machine-appropriate ceiling makes the intent explicit.
-- Long-term: `set_alloc_error_hook` stabilisation (tracking issue [#51245]) would let
-  us convert OOM aborts to panics and use `catch_unwind` as a safety net.
+### ✅ Bug: PDF and 7z OOM Crash During Extraction (fixed)
+
+`lopdf` and `sevenz_rust2` call `handle_alloc_error` on OOM, which **aborts** the
+process — not a panic, so `catch_unwind` cannot intercept it.
+
+**Fixed (plan 036):** `find-scan` now spawns `find-extract-*` subprocesses for all
+extraction (matching the model already used by `find-watch`). If a subprocess OOMs,
+only the subprocess dies; `find-scan` logs a warning and continues. `MemberBatch` is
+now serializable so archive extraction via subprocess preserves content hashes and
+skip reasons. `scan.max_pdf_size_mb` and the dynamic memory guards in
+`find-extract-pdf` have been removed — they are no longer needed with process
+isolation. The 7z dynamic block-memory guard is retained (it saves a subprocess spawn
+and crash log for blocks that would certainly OOM).
 
 ---
 

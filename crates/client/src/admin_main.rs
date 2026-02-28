@@ -143,7 +143,7 @@ async fn main() -> Result<()> {
                 Ok(settings) => {
                     println!("{}", format!("✓  Server reachable at {}", config.server.url).green());
                     println!("{}", "✓  Authenticated (token accepted)".green());
-                    println!("{}", format!("✓  Server version: {}", settings.version).green());
+                    println!("{}", format!("✓  Server version: {} (build {}, schema v{})", settings.version, settings.git_hash, settings.schema_version).green());
                 }
                 Err(e) => {
                     // Distinguish auth failures from connectivity failures

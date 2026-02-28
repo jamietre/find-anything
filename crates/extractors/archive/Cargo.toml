@@ -1,6 +1,6 @@
 [package]
 name = "find-extract-archive"
-version = "0.3.0"
+version = "0.3.1"
 edition = "2021"
 
 [lib]
@@ -34,3 +34,16 @@ sevenz-rust2 = "0.20"
 
 tempfile = "3"
 tracing-subscriber = { workspace = true }
+
+[features]
+# Compile-time probe: does `std::alloc::set_alloc_error_hook` compile without
+# the nightly feature gate?  Run:
+#
+#   cargo check -p find-extract-archive --features probe_alloc_hook
+#
+# If it fails → hook not yet stable (keep subprocess isolation).
+# If it succeeds → hook is stable; follow the upgrade path in
+#   docs/plans/034-7z-oom-crash.md.
+#
+# Tracking: https://github.com/rust-lang/rust/issues/51245
+probe_alloc_hook = []

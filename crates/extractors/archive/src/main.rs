@@ -43,9 +43,12 @@ fn main() {
         ..Default::default()
     };
 
-    match find_extract_archive::extract(path, &cfg) {
-        Ok(lines) => {
-            match serde_json::to_string_pretty(&lines) {
+    let mut batches: Vec<find_extract_archive::MemberBatch> = Vec::new();
+    match find_extract_archive::extract_streaming(path, &cfg, &mut |batch| {
+        batches.push(batch);
+    }) {
+        Ok(()) => {
+            match serde_json::to_string_pretty(&batches) {
                 Ok(json) => {
                     println!("{}", json);
                     process::exit(0);

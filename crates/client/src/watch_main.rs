@@ -1,5 +1,6 @@
 mod api;
 mod batch;
+mod subprocess;
 mod watch;
 
 use anyhow::{Context, Result};

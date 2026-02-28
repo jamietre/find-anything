@@ -1,10 +1,16 @@
-// When this fires, follow the upgrade path in docs/plans/034-7z-oom-crash.md.
-#[cfg(alloc_error_hook_stable)]
-compile_error!(
-    "`std::alloc::set_alloc_error_hook` is now stable (rust-lang/rust#51245)! \
-     OOM aborts during 7z extraction can now be converted to catchable panics. \
-     See docs/plans/034-7z-oom-crash.md for the full upgrade path."
-);
+// Probe for `std::alloc::set_alloc_error_hook` stabilisation.
+//
+// Run: cargo check -p find-extract-archive --features probe_alloc_hook
+//
+// If it compiles → the hook is stable on your toolchain; subprocess isolation
+// can be replaced with an in-process alloc error hook.  See the upgrade path
+// in docs/plans/034-7z-oom-crash.md and tracking issue rust-lang/rust#51245.
+#[cfg(feature = "probe_alloc_hook")]
+pub fn _probe_alloc_error_hook() {
+    // If this compiles without the `allocator_api` / `alloc_error_hook` feature
+    // gate, `set_alloc_error_hook` has been stabilised.
+    std::alloc::set_alloc_error_hook(|_layout| {});
+}
 
 use std::fs::File;
 use std::io::{Cursor, Read};
@@ -20,7 +26,7 @@ use find_common::api::IndexLine;
 use find_common::config::ExtractorConfig;
 
 /// One batch of lines for a single archive member, with its content hash.
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct MemberBatch {
     pub lines: Vec<IndexLine>,
     /// blake3 hex hash of the member's raw bytes (decompressed from the archive).
@@ -45,27 +51,7 @@ fn has_hidden_component(name: &str) -> bool {
     name.split('/').any(|c| c.starts_with('.') && c.len() > 1 && c != "..")
 }
 
-/// Read the kernel's estimate of available memory from /proc/meminfo (Linux only).
-///
-/// Returns `MemAvailable` in bytes, which includes free RAM plus reclaimable
-/// page cache. Returns `None` on non-Linux platforms or if the file is
-/// unreadable (e.g. inside a container with a restricted /proc).
-#[cfg(target_os = "linux")]
-fn available_memory_bytes() -> Option<u64> {
-    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("MemAvailable:") {
-            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
-            return Some(kb * 1024);
-        }
-    }
-    None
-}
-
-#[cfg(not(target_os = "linux"))]
-fn available_memory_bytes() -> Option<u64> {
-    None
-}
+use find_common::mem::available_bytes as available_memory_bytes;
 
 /// Extract content from archive files (ZIP, TAR, TGZ, TBZ2, TXZ, GZ, BZ2, XZ, 7Z).
 ///

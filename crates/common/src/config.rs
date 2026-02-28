@@ -113,6 +113,20 @@ pub struct ScanConfig {
     #[serde(default = "default_excludes")]
     pub exclude: Vec<String>,
 
+    /// Additional exclude patterns appended to `exclude` after parsing.
+    ///
+    /// Use this to extend the built-in defaults without replacing them.
+    /// `exclude` alone **replaces** the defaults; `exclude_extra` always
+    /// **adds to** whatever `exclude` contains.
+    ///
+    /// Example in client.toml:
+    /// ```toml
+    /// [scan]
+    /// exclude_extra = ["**/my-build/**", "*.tmp"]
+    /// ```
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_extra: Vec<String>,
+
     #[serde(default = "default_max_file_size_mb")]
     pub max_file_size_mb: u64,
 
@@ -141,12 +155,18 @@ pub struct ScanConfig {
     /// a subtree. Default: ".index".
     #[serde(default = "default_index_file")]
     pub index_file: String,
+
+    /// Directory containing find-extract-* binaries.
+    /// None = auto-detect (same dir as the executable, then PATH).
+    #[serde(default)]
+    pub extractor_dir: Option<String>,
 }
 
 impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             exclude: default_excludes(),
+            exclude_extra: vec![],
             max_file_size_mb: default_max_file_size_mb(),
             follow_symlinks: false,
             include_hidden: false,
@@ -154,6 +174,7 @@ impl Default for ScanConfig {
             max_line_length: default_max_line_length(),
             noindex_file: default_noindex_file(),
             index_file: default_index_file(),
+            extractor_dir: None,
         }
     }
 }
@@ -471,13 +492,16 @@ pub fn default_config_path() -> String {
 pub fn parse_client_config(toml_str: &str) -> Result<ClientConfig> {
     let value: toml::Value = toml::from_str(toml_str).context("invalid TOML")?;
     let mut unknown = Vec::new();
-    let cfg = serde_ignored::deserialize(value, |path| {
+    let mut cfg: ClientConfig = serde_ignored::deserialize(value, |path| {
         unknown.push(path.to_string());
     })
     .context("parsing client config")?;
     for key in &unknown {
         warn!("unknown config key: {key}");
     }
+    // Merge exclude_extra into exclude so the rest of the codebase only
+    // needs to look at one field.
+    cfg.scan.exclude.extend(std::mem::take(&mut cfg.scan.exclude_extra));
     Ok(cfg)
 }
 
@@ -593,6 +617,40 @@ enabled = false
         assert_eq!(ov.include_hidden, Some(true));
         assert_eq!(ov.exclude, Some(vec!["*.tmp".into()]));
         assert_eq!(ov.archives.as_ref().unwrap().enabled, Some(false));
+    }
+
+    #[test]
+    fn exclude_extra_appends_to_defaults() {
+        let toml = r#"
+[server]
+url = "http://localhost:8080"
+token = "t"
+
+[scan]
+exclude_extra = ["**/my-build/**", "*.tmp"]
+"#;
+        let cfg = parse_client_config(toml).unwrap();
+        // exclude_extra is merged into exclude; the built-in defaults come first
+        let defaults = default_excludes();
+        assert!(cfg.scan.exclude.starts_with(&defaults));
+        assert!(cfg.scan.exclude.contains(&"**/my-build/**".to_string()));
+        assert!(cfg.scan.exclude.contains(&"*.tmp".to_string()));
+        // exclude_extra itself is empty after merging
+        assert!(cfg.scan.exclude_extra.is_empty());
+    }
+
+    #[test]
+    fn exclude_replaces_defaults() {
+        let toml = r#"
+[server]
+url = "http://localhost:8080"
+token = "t"
+
+[scan]
+exclude = ["*.only"]
+"#;
+        let cfg = parse_client_config(toml).unwrap();
+        assert_eq!(cfg.scan.exclude, vec!["*.only"]);
     }
 
     #[test]

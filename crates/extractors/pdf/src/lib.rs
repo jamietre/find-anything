@@ -7,8 +7,9 @@ use tracing::{warn, error};
 ///
 /// Uses pdf-extract library. Handles malformed PDFs gracefully by catching panics.
 pub fn extract(path: &Path, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+    let name = path.display().to_string();
     let bytes = std::fs::read(path)?;
-    extract_from_bytes(&bytes, &path.display().to_string(), cfg)
+    extract_from_bytes(&bytes, &name, cfg)
 }
 
 /// Extract text content from PDF bytes.

@@ -16,6 +16,7 @@ use crate::api::ApiClient;
 use crate::batch::{build_index_files, build_member_index_files, submit_batch};
 use crate::extract;
 use crate::lazy_header;
+use crate::subprocess;
 
 
 
@@ -67,6 +68,12 @@ pub async fn run_scan(
         local_files.len(),
     );
 
+    // Capture scan start time here so it's recorded even if the scan is interrupted.
+    let scan_start = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
     // Index in batches.  Mtime is checked per-file as we go — no upfront stat pass.
     let mut indexed: usize = 0;
     let mut skipped: usize = 0;
@@ -93,7 +100,8 @@ pub async fn run_scan(
                 Some(_) => {
                     skipped += 1;
                     if last_log.elapsed() >= log_interval {
-                        info!("{indexed} indexed, {skipped} unchanged so far...");
+                        let total = indexed + skipped;
+                    info!("processed {total} files ({skipped} unchanged) so far...");
                         last_log = std::time::Instant::now();
                     }
                     continue;
@@ -145,25 +153,16 @@ pub async fn run_scan(
                 content_hash: outer_hash,
             };
             batch.push(outer_file);
-            submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
+            submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], Some(scan_start)).await?;
             batch_bytes = 0;
 
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<find_extract_archive::MemberBatch>(16);
-            let abs_clone: std::path::PathBuf = (*abs_path).clone(); // owned — required by spawn_blocking 'static
-            let cfg_clone = cfg;
-
-            let extract_task = tokio::task::spawn_blocking(move || {
-                lazy_header::set_pending(&abs_clone.to_string_lossy());
-                let result = find_extract_archive::extract_streaming(&abs_clone, &cfg_clone, &mut |batch| {
-                    // blocking_send provides backpressure; ignore errors (scan cancelled).
-                    let _ = tx.blocking_send(batch);
-                });
-                lazy_header::clear_pending();
-                result
-            });
+            lazy_header::set_pending(&abs_path.to_string_lossy());
+            let member_batches = subprocess::extract_archive_via_subprocess(
+                abs_path, &eff_scan, &eff_scan.extractor_dir).await;
+            lazy_header::clear_pending();
 
             let mut members_submitted: usize = 0;
-            while let Some(member_batch) = rx.recv().await {
+            for member_batch in member_batches {
                 // A batch with empty lines and a skip_reason is a summary failure
                 // that applies to the outer archive itself (e.g. 7z solid block too
                 // large).  Record the failure on the outer archive path and move on.
@@ -209,23 +208,10 @@ pub async fn run_scan(
                     batch.push(file);
                     if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
                         info!("submitting batch — extracting {rel_path} ({} members, {} total)", batch.len(), members_submitted);
-                        submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
+                        submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], Some(scan_start)).await?;
                         batch_bytes = 0;
                     }
                 }
-            }
-
-            match extract_task.await {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => {
-                    let msg = format!("{e:#}");
-                    let truncated = truncate_error(&msg, MAX_ERROR_LEN);
-                    warn!("extract {}: {}", abs_path.display(), truncated);
-                    if failures.len() < MAX_FAILURES_PER_BATCH {
-                        failures.push(IndexingFailure { path: rel_path.clone(), error: truncated });
-                    }
-                }
-                Err(e) => warn!("extract task panicked for {}: {e}", abs_path.display()),
             }
         } else {
             // ── Non-archive extraction ───────────────────────────────────────
@@ -233,18 +219,8 @@ pub async fn run_scan(
             // [FILE:mime] line when no extractor matched the bytes, so we check
             // for that line below to update the kind accordingly.
             lazy_header::set_pending(&abs_path.to_string_lossy());
-            let lines = match extract::extract(abs_path, &cfg) {
-                Ok(l) => l,
-                Err(e) => {
-                    let msg = format!("{e:#}");
-                    let truncated = truncate_error(&msg, MAX_ERROR_LEN);
-                    warn!("extract {}: {}", abs_path.display(), truncated);
-                    if failures.len() < MAX_FAILURES_PER_BATCH {
-                        failures.push(IndexingFailure { path: rel_path.clone(), error: truncated });
-                    }
-                    vec![]
-                }
-            };
+            let lines = subprocess::extract_via_subprocess(
+                abs_path, &eff_scan, &eff_scan.extractor_dir).await;
             lazy_header::clear_pending();
             // Refine "unknown" or "text" kind using extracted content:
             // - A [FILE:mime] line emitted by dispatch means binary → use mime_to_kind.
@@ -279,33 +255,31 @@ pub async fn run_scan(
                 batch_bytes += file_bytes;
                 batch.push(file);
                 if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
-                    info!("submitting batch — {indexed} files indexed so far");
-                    submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
+                    let total = indexed + skipped;
+                    info!("submitting batch — {indexed} indexed of {total} processed so far");
+                    submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], Some(scan_start)).await?;
                     batch_bytes = 0;
                 }
             }
         }
 
         if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
-            info!("submitting batch — {indexed} files indexed so far");
-            submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], None).await?;
+            let total = indexed + skipped;
+            info!("submitting batch — {indexed} indexed of {total} processed so far");
+            submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], Some(scan_start)).await?;
             batch_bytes = 0;
         }
     }
 
-    // Final batch: remaining files + all deletes + scan-complete timestamp.
-    let now = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-
+    // Final batch: remaining files + all deletes.
     let deleted = to_delete.len();
     if deleted > 0 {
         info!("deleting {deleted} removed files");
     }
-    submit_batch(api, source_name, base_url, &mut batch, &mut failures, to_delete, Some(now)).await?;
+    submit_batch(api, source_name, base_url, &mut batch, &mut failures, to_delete, Some(scan_start)).await?;
 
-    info!("scan complete — {indexed} indexed, {skipped} unchanged, {deleted} deleted");
+    let total = indexed + skipped;
+    info!("scan complete — {indexed} indexed, {total} processed ({skipped} unchanged, {deleted} deleted)");
     Ok(())
 }
 

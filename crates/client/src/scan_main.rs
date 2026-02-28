@@ -3,6 +3,7 @@ mod batch;
 mod extract;
 mod lazy_header;
 mod scan;
+mod subprocess;
 
 use anyhow::{Context, Result};
 use clap::Parser;

@@ -9,13 +9,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-02-28
+
 ### Added
+- **Subprocess-based extraction in find-scan (OOM isolation)** — `find-scan` now spawns `find-extract-*` subprocesses for all file extraction (matching the model already used by `find-watch`); if a subprocess OOMs or crashes (e.g. `lopdf` or `sevenz_rust2` calling `handle_alloc_error`), only the subprocess dies — `find-scan` logs a warning and continues to the next file; the three shared helper functions (`extract_via_subprocess`, `relay_subprocess_logs`, `extractor_binary_for`) are moved from `watch.rs` to a new `client/src/subprocess.rs`; a new `extract_archive_via_subprocess` returns the full `Vec<MemberBatch>` to preserve content hashes and skip reasons; the archive binary now outputs `Vec<MemberBatch>` (serializable) instead of the flat `Vec<IndexLine>`, so content hashes and per-member skip reasons are no longer lost when calling via subprocess; `scan.archives.extractor_dir` added to `ScanConfig` (same semantics as the existing `watch.extractor_dir`)
+- **Remove PDF memory guards** — `scan.max_pdf_size_mb` and the dynamic available-memory check in `find-extract-pdf` are removed; with subprocess isolation these guards are no longer needed (an OOM only kills the subprocess); `available_bytes()` in `find_common::mem` remains, still used by the 7z solid-block guard in the archive extractor
 - **Build hash in settings API** — `GET /api/v1/settings` now returns `schema_version` (current SQLite schema version) and `git_hash` (short commit hash, injected at compile time via `GIT_HASH` env var in mise tasks); makes it easy to confirm exactly what build is running without bumping the version
 - **FTS row count in stats API** — `GET /api/v1/stats` now returns `fts_row_count` per source for diagnosing FTS index health
 - **Windows POSIX emulation excludes** — default scan exclusions now cover MSYS2, Git for Windows, and Cygwin installation trees (`**/msys64/**`, `**/Git/mingw64/**`, `**/cygwin64/**`, etc.) to avoid indexing gigabytes of Unix toolchain binaries on Windows
 - **7z OOM protection: dynamic memory guard** — before decoding each solid block, `find-scan` now reads `/proc/meminfo` (`MemAvailable`) and skips the block if the estimated decoder allocation would exceed 75% of available memory, emitting filename-only entries with a skip reason; blocks reporting zero unpack size (solid archives where sizes aren't stored in the header) are also skipped rather than risking an unrecoverable abort; addresses crashes on memory-constrained systems (e.g. 500 MB RAM NAS) where the LZMA dictionary allocation for a 120 MB block exhausted available memory
 - **7z stabilisation probe** — `crates/extractors/archive/build.rs` probes at compile time for `std::alloc::set_alloc_error_hook` becoming available on stable Rust (tracking issue rust-lang/rust#51245); if stabilised, a `compile_error!` fires directing developers to the upgrade path in `docs/plans/034-7z-oom-crash.md`
 - **Plan 034: 7z OOM crash** — documents the root cause, history of attempted fixes, current approach, and future options including `set_alloc_error_hook`
+- **PDF OOM protection** — two-layer guard prevents lopdf from aborting the process on memory-constrained systems: a static `scan.max_pdf_size_mb` config limit (default 32 MB) skips oversized PDFs before reading their bytes; a dynamic `/proc/meminfo` check requires ≥4× the file's size of available memory before attempting extraction; both paths fall back to filename-only indexing with a WARN; `available_bytes()` extracted to `find_common::mem` and shared with the 7z extractor
 - **Periodic indexing progress log** — `find-scan` now logs `"{N} indexed, {M} unchanged so far..."` every 5 seconds while skipping unchanged files, so scans with many unchanged files are no longer silent between the walk and the final summary
 - **Lazy extraction header logging** — when a third-party crate (e.g. `lopdf`, `sevenz_rust2`) emits a WARN-or-above log during file extraction, `find-scan` now prefixes it with a single `INFO Processing <path>` line so the offending file is immediately identifiable; the header is emitted at most once per file and suppressed entirely for files that produce no warnings; events from `find_`-prefixed targets are excluded (our own warn! calls already include the path); plan 035 documents the design
 
@@ -26,8 +31,20 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Slow indexing steps now logged** — worker steps taking >500 ms emit a `WARN` with timing, making it easier to diagnose performance issues on slow NAS storage
 - **Search result placeholder rows shorter than content rows** — placeholder skeleton lines in the search results card were driven to ~17 px by a 10 px space character, while content rows are ~21.5 px (13 px code font × 1.5 line-height); placeholder now has `min-height: 20px` and `align-items: center`
 
+### Added
+- **`scan.exclude_extra` config field** — new `exclude_extra` array in `[scan]` appends patterns to the built-in defaults without replacing them; `exclude` still replaces defaults entirely for users who need full control; `exclude_extra` is merged into `exclude` at parse time so the rest of the codebase sees one unified list
+- **`find-admin check` shows build hash and schema version** — the check command now prints `Server version: X.Y.Z (build XXXXXXX, schema vN)` matching the info available from `GET /api/v1/settings`
+- **Stabilisation probe for `set_alloc_error_hook`** — `mise run probe-alloc-hook` checks whether `std::alloc::set_alloc_error_hook` compiles on stable Rust yet (tracking rust-lang/rust#51245); pass = hook is stable and subprocess isolation can be replaced; fail = still nightly-only; replaces the old `build.rs` probe which was incompatible with cross-compiled ARM builds due to a glibc version mismatch
+
+### Fixed
+- **`last_scan` timestamp now recorded even if scan is interrupted** — previously the scan timestamp was only sent with the final batch; an interrupted scan left `find-admin status` showing "last scan: never" even when thousands of files had been indexed; the timestamp is now captured at scan start and included in every batch
+- **Subprocess log lines no longer repeat the filename and binary name** — `relay_subprocess_logs` previously attached `file=` and `binary=` fields to every relayed line; the filename is already shown by the lazy extraction header (`Processing <path>`), so both fields are removed from individual log events
+
 ### Changed
+- **Scan progress log format** — periodic progress message changed from `"{N} indexed, {M} unchanged so far..."` to `"processed {N+M} files ({M} unchanged) so far..."` to make clear that "indexed" is the count of new/changed files actually sent to the server, not the total files seen; batch-submit and final summary messages updated consistently
 - **Dependency updates** — `rusqlite` 0.31→0.38, `reqwest` 0.12→0.13 (feature `rustls-tls`→`rustls`, new `query` feature required), `notify` 6→8, `colored` 2→3
+
+---
 
 ## [0.3.0] - 2026-02-27
 

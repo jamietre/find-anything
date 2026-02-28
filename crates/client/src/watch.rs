@@ -7,15 +7,16 @@ use anyhow::Result;
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, warn};
+use tracing::{info, warn};
 
 use find_common::{
-    api::{detect_kind_from_ext, BulkRequest, IndexLine},
+    api::{detect_kind_from_ext, BulkRequest},
     config::{load_dir_override, ClientConfig, ScanConfig, SourceConfig},
 };
 
 use crate::api::ApiClient;
 use crate::batch::build_index_files;
+use crate::subprocess;
 
 /// (root_path, source_name, root_str)
 type SourceMap = Vec<(PathBuf, String, String)>;
@@ -327,7 +328,7 @@ async fn handle_update(
 ) -> Result<()> {
     info!("update: {}", rel_path);
 
-    let lines = extract_via_subprocess(abs_path, eff_scan, extractor_dir).await;
+    let lines = subprocess::extract_via_subprocess(abs_path, eff_scan, extractor_dir).await;
 
     let mtime = mtime_of(abs_path).unwrap_or(0);
     let size = size_of(abs_path).unwrap_or(0);
@@ -367,139 +368,6 @@ async fn handle_delete(
         indexing_failures: vec![],
     })
     .await
-}
-
-// ── Subprocess extraction ─────────────────────────────────────────────────────
-
-async fn extract_via_subprocess(
-    abs_path: &Path,
-    scan: &ScanConfig,
-    extractor_dir: &Option<String>,
-) -> Vec<IndexLine> {
-    let binary = extractor_binary_for(abs_path, extractor_dir);
-    let max_size_kb = (scan.max_file_size_mb * 1024).to_string();
-    let max_depth = scan.archives.max_depth.to_string();
-    let max_line_length = scan.max_line_length.to_string();
-
-    let ext = abs_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let is_archive = matches!(
-        ext.as_str(),
-        "zip" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "tbz2" | "txz" | "7z"
-    );
-    let is_pdf = ext == "pdf";
-
-    let mut cmd = tokio::process::Command::new(&binary);
-    cmd.arg(abs_path).arg(&max_size_kb);
-    if is_archive {
-        // find-extract-archive: <path> [max-size-kb] [max-depth] [max-line-length]
-        cmd.arg(&max_depth).arg(&max_line_length);
-    } else if is_pdf {
-        // find-extract-pdf: <path> [max-size-kb] [max-line-length]
-        cmd.arg(&max_line_length);
-    }
-
-    match cmd.output().await {
-        Ok(out) => {
-            relay_subprocess_logs(&out.stderr, &binary, abs_path);
-            if out.status.success() {
-                serde_json::from_slice::<Vec<IndexLine>>(&out.stdout).unwrap_or_default()
-            } else {
-                warn!(
-                    "extractor {} exited {:?} for {}",
-                    binary,
-                    out.status.code(),
-                    abs_path.display()
-                );
-                vec![]
-            }
-        }
-        Err(e) => {
-            warn!("failed to run extractor {}: {e:#}", binary);
-            vec![]
-        }
-    }
-}
-
-/// Re-emit subprocess stderr lines through our tracing subscriber so they
-/// appear in find-watch output at the correct level and pass through the
-/// same log-ignore filters as in-process events.
-///
-/// tracing-subscriber fmt (no time, no ANSI) formats lines as:
-///   `{LEVEL} {target}: {message}`
-/// We parse the level prefix and re-emit accordingly.
-fn relay_subprocess_logs(stderr: &[u8], binary: &str, file: &Path) {
-    let text = String::from_utf8_lossy(stderr);
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        // Parse the level prefix emitted by tracing-subscriber fmt.
-        // Typical format: "WARN target: message" or "ERROR target: message".
-        let rest = line.trim_start_matches(|c: char| !c.is_alphanumeric());
-        if let Some(msg) = rest.strip_prefix("ERROR ") {
-            error!(target: "subprocess", binary, file = %file.display(), "{msg}");
-        } else if let Some(msg) = rest.strip_prefix("WARN ") {
-            warn!(target: "subprocess", binary, file = %file.display(), "{msg}");
-        } else if let Some(msg) = rest.strip_prefix("INFO ") {
-            info!(target: "subprocess", binary, file = %file.display(), "{msg}");
-        } else if let Some(msg) = rest.strip_prefix("DEBUG ") {
-            debug!(target: "subprocess", binary, file = %file.display(), "{msg}");
-        } else if let Some(msg) = rest.strip_prefix("TRACE ") {
-            debug!(target: "subprocess", binary, file = %file.display(), "{msg}");
-        } else {
-            // Unknown format — emit as warn so it's not silently dropped.
-            warn!(target: "subprocess", binary, file = %file.display(), "{line}");
-        }
-    }
-}
-
-fn extractor_binary_for(path: &Path, extractor_dir: &Option<String>) -> String {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-
-    let name = match ext.as_str() {
-        "zip" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "tbz2" | "txz" | "7z" => {
-            "find-extract-archive"
-        }
-        "pdf" => "find-extract-pdf",
-        "jpg" | "jpeg" | "png" | "gif" | "bmp" | "ico" | "webp" | "heic"
-        | "tiff" | "tif" | "raw" | "cr2" | "nef" | "arw"
-        | "mp3" | "flac" | "ogg" | "m4a" | "aac" | "wav" | "wma" | "opus"
-        | "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "m4v" | "flv" => {
-            "find-extract-media"
-        }
-        "html" | "htm" | "xhtml" => "find-extract-html",
-        "docx" | "xlsx" | "xls" | "xlsm" | "pptx" => "find-extract-office",
-        "epub" => "find-extract-epub",
-        _ => "find-extract-text",
-    };
-
-    // Resolution order:
-    // 1. config.watch.extractor_dir / name
-    // 2. same dir as current executable / name
-    // 3. name (rely on PATH)
-    if let Some(dir) = extractor_dir {
-        return format!("{}/{}", dir, name);
-    }
-
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(name);
-            if candidate.exists() {
-                return candidate.to_string_lossy().to_string();
-            }
-        }
-    }
-
-    name.to_string()
 }
 
 // ── Filesystem helpers ────────────────────────────────────────────────────────

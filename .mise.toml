@@ -90,6 +90,10 @@ run = ["cargo check --workspace", "pnpm --dir web check"]
 description = "Run clippy lints (matches CI — fails on warnings)"
 run = "cargo clippy --workspace -- -D warnings"
 
+[tasks.probe-alloc-hook]
+description = "Check if std::alloc::set_alloc_error_hook is stable yet (fail = still nightly, pass = can remove subprocess isolation)"
+run = "cargo check -p find-extract-archive --features probe_alloc_hook"
+
 # ── Admin ─────────────────────────────────────────────────────────────────────
 
 [tasks.admin]
