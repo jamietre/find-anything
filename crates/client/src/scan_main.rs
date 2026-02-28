@@ -1,6 +1,7 @@
 mod api;
 mod batch;
 mod extract;
+mod lazy_header;
 mod scan;
 
 use anyhow::{Context, Result};
@@ -27,6 +28,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| "warn,find_scan=info".into()))
+        .with(lazy_header::FileHeaderLayer)
         .with(tracing_subscriber::fmt::layer().with_filter(LogIgnoreFilter))
         .init();
 

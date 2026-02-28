@@ -156,8 +156,31 @@ RBAC is planned for a future release.
 
 ### Entry page UX improvements
 
-- Allow navigating via ctrl+p right away
+- [ ] Allow navigating via ctrl+p right away
   - how do we handle multple data sources?
+
+### Indexing improvements
+
+- [ ] Log (xxx indexed so far, yyy skipped) if files are skipped due to already being indexed, since we don't precheck for files we have already
+
+### 🔴 Bug: PDF OOM Crash During Extraction
+
+`lopdf` aborts the process with `memory allocation of 76492800 bytes failed` when
+indexing certain PDFs on memory-constrained systems (e.g. a 500 MB NAS). Root cause
+is the same as the 7z OOM issue (plan 034): `handle_alloc_error` aborts rather than
+panics, so `catch_unwind` cannot intercept it. The only defence is a pre-flight guard
+similar to the one added for 7z blocks.
+
+Mitigation options:
+- Add a `max_pdf_size_mb` config option (default ~32 MB) as a fast-path skip before
+  even calling into lopdf — the file size is a reasonable proxy for peak working memory.
+- The existing `max_size_kb` already gates content extraction for very large files,
+  but its default (5 MB) is for content, not memory safety; a separate PDF guard with
+  a higher, machine-appropriate ceiling makes the intent explicit.
+- Long-term: `set_alloc_error_hook` stabilisation (tracking issue [#51245]) would let
+  us convert OOM aborts to panics and use `catch_unwind` as a safety net.
+
+---
 
 ### 🔴 Bug: Scan Should Delete Before Adding
 
@@ -345,7 +368,7 @@ content-hash caching to avoid re-OCR.
 
 ### Extractor Log Verbosity
 
-- [ ] Always emit the filename whenever a warn or above log is generated during scanning.
+- [x] Always emit the filename whenever a warn or above log is generated during scanning — lazy header logging (plan 035): `INFO Processing <path>` emitted once before the first third-party WARN per file.
 
 ### Indexing Control
 

@@ -15,6 +15,7 @@ use find_common::{
 use crate::api::ApiClient;
 use crate::batch::{build_index_files, build_member_index_files, submit_batch};
 use crate::extract;
+use crate::lazy_header;
 
 
 
@@ -143,10 +144,13 @@ pub async fn run_scan(
             let cfg_clone = cfg;
 
             let extract_task = tokio::task::spawn_blocking(move || {
-                find_extract_archive::extract_streaming(&abs_clone, &cfg_clone, &mut |batch| {
+                lazy_header::set_pending(&abs_clone.to_string_lossy());
+                let result = find_extract_archive::extract_streaming(&abs_clone, &cfg_clone, &mut |batch| {
                     // blocking_send provides backpressure; ignore errors (scan cancelled).
                     let _ = tx.blocking_send(batch);
-                })
+                });
+                lazy_header::clear_pending();
+                result
             });
 
             let mut members_submitted: usize = 0;
@@ -219,6 +223,7 @@ pub async fn run_scan(
             // dispatch_from_path handles MIME detection internally: it emits a
             // [FILE:mime] line when no extractor matched the bytes, so we check
             // for that line below to update the kind accordingly.
+            lazy_header::set_pending(&abs_path.to_string_lossy());
             let lines = match extract::extract(abs_path, &cfg) {
                 Ok(l) => l,
                 Err(e) => {
@@ -231,6 +236,7 @@ pub async fn run_scan(
                     vec![]
                 }
             };
+            lazy_header::clear_pending();
             // Refine "unknown" or "text" kind using extracted content:
             // - A [FILE:mime] line emitted by dispatch means binary → use mime_to_kind.
             // - Text content lines (line_number > 0) present → promote to "text".
