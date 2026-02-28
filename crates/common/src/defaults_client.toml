@@ -92,6 +92,58 @@ exclude = [
 
     # ── Linux misc ────────────────────────────────────────────────────────
     "**/lost+found/**",
+
+    # ── Windows POSIX emulation (MSYS2, Git for Windows, Cygwin) ─────────
+    # These tools install a full POSIX filesystem tree under a Windows path,
+    # containing the same system binaries and runtime directories as the
+    # root-level Linux patterns above.  The root-level patterns don't help
+    # here because these trees are nested (e.g. C:/msys64/bin/,
+    # C:/Program Files/Git/usr/bin/).  home/ is intentionally left uncovered
+    # so that user scripts in e.g. msys64/home/<user>/bin/ are still indexed.
+    "**/msys64/bin/**",
+    "**/msys64/etc/**",
+    "**/msys64/lib/**",
+    "**/msys64/lib64/**",
+    "**/msys64/usr/bin/**",
+    "**/msys64/usr/sbin/**",
+    "**/msys64/usr/lib/**",
+    "**/msys64/usr/lib/debug/**",
+    "**/msys64/usr/libexec/**",
+    "**/msys64/mingw32/**",
+    "**/msys64/mingw64/**",
+    "**/msys64/ucrt64/**",
+    "**/msys64/clang32/**",
+    "**/msys64/clang64/**",
+    "**/msys64/clangarm64/**",
+    "**/msys64/proc/**",
+    "**/msys64/sys/**",
+    "**/msys64/dev/**",
+    "**/msys64/run/**",
+    "**/msys64/tmp/**",
+    "**/msys64/var/tmp/**",
+    "**/msys64/var/lock/**",
+    "**/msys64/var/run/**",
+    # Git for Windows (typically C:/Program Files/Git)
+    "**/Git/etc/**",
+    "**/Git/mingw64/**",
+    "**/Git/tmp/**",
+    "**/Git/usr/**",
+    # Cygwin (typically C:/cygwin64)
+    "**/cygwin64/bin/**",
+    "**/cygwin64/etc/**",
+    "**/cygwin64/lib/**",
+    "**/cygwin64/lib64/**",
+    "**/cygwin64/usr/bin/**",
+    "**/cygwin64/usr/sbin/**",
+    "**/cygwin64/usr/lib/**",
+    "**/cygwin64/usr/libexec/**",
+    "**/cygwin64/proc/**",
+    "**/cygwin64/sys/**",
+    "**/cygwin64/dev/**",
+    "**/cygwin64/tmp/**",
+    "**/cygwin64/var/tmp/**",
+    "**/cygwin64/var/lock/**",
+    "**/cygwin64/var/run/**",
 ]
 
 [scan.archives]

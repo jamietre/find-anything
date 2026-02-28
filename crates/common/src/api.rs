@@ -327,6 +327,10 @@ pub struct AppSettingsResponse {
     pub context_window: usize,
     /// Server version string (from Cargo.toml).
     pub version: String,
+    /// SQLite schema version for all source databases.
+    pub schema_version: i64,
+    /// Short git commit hash baked in at compile time.
+    pub git_hash: String,
 }
 
 // ── Stats types ───────────────────────────────────────────────────────────────
@@ -380,6 +384,10 @@ pub struct SourceStats {
     /// Number of files with recorded indexing errors.
     #[serde(default)]
     pub indexing_error_count: usize,
+    /// Number of rows in the FTS5 index (includes stale entries from re-indexed
+    /// files; useful for diagnosing whether the index is populated).
+    #[serde(default)]
+    pub fts_row_count: i64,
 }
 
 /// Current processing state of the inbox worker.

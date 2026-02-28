@@ -4,7 +4,7 @@ use axum::{extract::State, http::HeaderMap, response::IntoResponse, Json};
 
 use find_common::api::AppSettingsResponse;
 
-use crate::AppState;
+use crate::{db, AppState};
 
 use super::check_auth;
 
@@ -21,6 +21,8 @@ pub async fn get_settings(
     Json(AppSettingsResponse {
         context_window: state.config.search.context_window,
         version: env!("CARGO_PKG_VERSION").to_string(),
+        schema_version: db::SCHEMA_VERSION,
+        git_hash: option_env!("GIT_HASH").unwrap_or("unknown").to_string(),
     })
     .into_response()
 }

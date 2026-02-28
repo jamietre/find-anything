@@ -14,7 +14,7 @@ use crate::archive::{ArchiveManager, ChunkRef};
 
 /// The current schema version. Stored in SQLite's built-in `user_version` pragma.
 /// Increment this whenever the schema changes incompatibly.
-const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
@@ -25,6 +25,7 @@ pub fn open(db_path: &Path) -> Result<Connection> {
     migrate_v3(&conn).context("v3 migration")?;
     migrate_v4(&conn).context("v4 migration")?;
     migrate_v5(&conn).context("v5 migration")?;
+    migrate_v6(&conn).context("v6 migration")?;
     Ok(conn)
 }
 
@@ -38,8 +39,8 @@ fn check_schema_version(conn: &Connection, db_path: &Path) -> Result<()> {
         return Ok(());
     }
 
-    // v3 and v4 are migratable forward via the migration chain.
-    if version == 3 || version == 4 {
+    // v3, v4, and v5 are migratable forward via the migration chain.
+    if version == 3 || version == 4 || version == 5 {
         return Ok(());
     }
 
@@ -126,6 +127,27 @@ fn migrate_v5(conn: &Connection) -> Result<()> {
          CREATE INDEX IF NOT EXISTS files_canonical ON files(canonical_file_id)
              WHERE canonical_file_id IS NOT NULL;
          PRAGMA user_version = 5;",
+    )?;
+    Ok(())
+}
+
+fn migrate_v6(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= 6 {
+        return Ok(());
+    }
+    // The lines_fts table may have been created with the default unicode61 tokenizer
+    // if the database predates the trigram tokenizer being added to schema_v2.sql.
+    // The `CREATE VIRTUAL TABLE IF NOT EXISTS` in the schema silently skips recreation,
+    // leaving the old tokenizer in place. Drop and recreate to force trigram.
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS lines_fts;
+         CREATE VIRTUAL TABLE lines_fts USING fts5(
+             content,
+             content       = '',
+             tokenize      = 'trigram'
+         );
+         PRAGMA user_version = 6;",
     )?;
     Ok(())
 }
@@ -520,10 +542,15 @@ fn build_fts_query(query: &str, phrase: bool) -> Option<String> {
         }
         Some(format!("\"{}\"", query.replace('"', "\"\"")))
     } else {
+        // Use unquoted terms so FTS5 treats each word as a token query rather
+        // than a phrase query.  Quoted phrases require ≥3 trigrams to match
+        // (i.e. the term must be ≥5 chars), which breaks short-word searches
+        // like "test" (4 chars, 2 trigrams).  Unquoted token queries have no
+        // such minimum.  Strip FTS5 syntax characters to avoid query errors.
         let terms: Vec<String> = query
             .split_whitespace()
+            .map(|w| w.chars().filter(|c| !matches!(c, '"' | '*' | '(' | ')' | '^')).collect::<String>())
             .filter(|w| w.len() >= 3)
-            .map(|w| format!("\"{}\"", w.replace('"', "\"\"")))
             .collect();
         if terms.is_empty() {
             return None;
@@ -1268,6 +1295,14 @@ pub fn get_indexing_error_count(conn: &Connection) -> Result<usize> {
     let count: i64 =
         conn.query_row("SELECT COUNT(*) FROM indexing_errors", [], |r| r.get(0))?;
     Ok(count as usize)
+}
+
+/// Return the total number of rows in the FTS5 index.
+/// Includes stale entries from re-indexed files; useful for diagnosing
+/// whether the index is being populated at all.
+pub fn get_fts_row_count(conn: &Connection) -> Result<i64> {
+    conn.query_row("SELECT COUNT(*) FROM lines_fts", [], |r| r.get(0))
+        .map_err(Into::into)
 }
 
 /// Return the error message for a single path, if one exists.

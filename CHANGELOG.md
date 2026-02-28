@@ -9,6 +9,24 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+- **Build hash in settings API** — `GET /api/v1/settings` now returns `schema_version` (current SQLite schema version) and `git_hash` (short commit hash, injected at compile time via `GIT_HASH` env var in mise tasks); makes it easy to confirm exactly what build is running without bumping the version
+- **FTS row count in stats API** — `GET /api/v1/stats` now returns `fts_row_count` per source for diagnosing FTS index health
+- **Windows POSIX emulation excludes** — default scan exclusions now cover MSYS2, Git for Windows, and Cygwin installation trees (`**/msys64/**`, `**/Git/mingw64/**`, `**/cygwin64/**`, etc.) to avoid indexing gigabytes of Unix toolchain binaries on Windows
+- **7z OOM protection: dynamic memory guard** — before decoding each solid block, `find-scan` now reads `/proc/meminfo` (`MemAvailable`) and skips the block if the estimated decoder allocation would exceed 75% of available memory, emitting filename-only entries with a skip reason; blocks reporting zero unpack size (solid archives where sizes aren't stored in the header) are also skipped rather than risking an unrecoverable abort; addresses crashes on memory-constrained systems (e.g. 500 MB RAM NAS) where the LZMA dictionary allocation for a 120 MB block exhausted available memory
+- **7z stabilisation probe** — `crates/extractors/archive/build.rs` probes at compile time for `std::alloc::set_alloc_error_hook` becoming available on stable Rust (tracking issue rust-lang/rust#51245); if stabilised, a `compile_error!` fires directing developers to the upgrade path in `docs/plans/034-7z-oom-crash.md`
+- **Plan 034: 7z OOM crash** — documents the root cause, history of attempted fixes, current approach, and future options including `set_alloc_error_hook`
+
+### Fixed
+- **FTS trigram tokenizer not applied to existing databases** — `CREATE VIRTUAL TABLE IF NOT EXISTS` silently skipped recreation of `lines_fts` when the trigram tokenizer was added to the schema, leaving existing installations with the unicode61 (word) tokenizer; `migrate_v6` now drops and recreates the table with the correct tokenizer; schema version bumped to 6
+- **FTS search returning no results for short queries** — `build_fts_query` was wrapping all terms in double quotes, making them FTS5 phrase queries which require at least 3 trigrams (≥5 chars); 3–4 character queries like `"test"` silently returned zero results; terms are now passed unquoted in fuzzy mode (FTS5 special characters are stripped instead)
+- **Worker SQLite writes now use explicit transactions** — each file's index operations are wrapped in a single `BEGIN`/`COMMIT` transaction, reducing write amplification and improving throughput on slow storage
+- **Slow indexing steps now logged** — worker steps taking >500 ms emit a `WARN` with timing, making it easier to diagnose performance issues on slow NAS storage
+- **Search result placeholder rows shorter than content rows** — placeholder skeleton lines in the search results card were driven to ~17 px by a 10 px space character, while content rows are ~21.5 px (13 px code font × 1.5 line-height); placeholder now has `min-height: 20px` and `align-items: center`
+
+### Changed
+- **Dependency updates** — `rusqlite` 0.31→0.38, `reqwest` 0.12→0.13 (feature `rustls-tls`→`rustls`, new `query` feature required), `notify` 6→8, `colored` 2→3
+
 ## [0.3.0] - 2026-02-27
 
 ### Added

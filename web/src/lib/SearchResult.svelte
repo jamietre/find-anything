@@ -252,7 +252,8 @@
 
 	.placeholder {
 		display: flex;
-		align-items: baseline;
+		align-items: center;
+		min-height: 20px;
 		padding: 1px 0;
 		border-left: 2px solid transparent;
 	}
@@ -265,7 +266,7 @@
 	.placeholder-bar {
 		flex: 1;
 		height: 10px;
-		margin: 3px 12px 3px 4px;
+		margin: 0 12px 0 4px;
 		border-radius: 3px;
 		background: var(--border);
 		opacity: 0.5;

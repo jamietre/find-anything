@@ -65,14 +65,20 @@ run = [
 [tasks.build-release]
 description = "Build web UI then compile find-server release binary with embedded assets"
 run = ["pnpm --dir web run build", "cargo build --release -p find-server"]
+env = { GIT_HASH = "{{exec(command='git rev-parse --short HEAD')}}" }
 
 [tasks.build-server]
 description = "Build all binaries for x86_64 (for update-server.sh)"
 run = ["pnpm --dir web run build", "cargo build --release --workspace"]
+env = { GIT_HASH = "{{exec(command='git rev-parse --short HEAD')}}" }
 
 [tasks.build-arm]
 description = "Build all binaries for ARM7 NAS using cross (matches CI, avoids glibc version mismatch)"
-run = ["pnpm --dir web run build", "cross build --release --target armv7-unknown-linux-gnueabihf"]
+run = [
+  "pnpm --dir web run build",
+  "cross build --release --target armv7-unknown-linux-gnueabihf",
+]
+env = { GIT_HASH = "{{exec(command='git rev-parse --short HEAD')}}" }
 
 # ── Checks ────────────────────────────────────────────────────────────────────
 

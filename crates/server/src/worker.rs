@@ -13,6 +13,20 @@ use crate::db;
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Log a warning if `start` is older than `threshold_secs`.
+fn warn_slow(start: std::time::Instant, threshold_secs: u64, step: &str, context: &str) {
+    let elapsed = start.elapsed();
+    if elapsed.as_secs() >= threshold_secs {
+        tracing::warn!(
+            elapsed_secs = elapsed.as_secs(),
+            step,
+            context,
+            "Slow step: {step} took {:.1}s for {context}",
+            elapsed.as_secs_f64(),
+        );
+    }
+}
+
 type StatusHandle = std::sync::Arc<std::sync::Mutex<WorkerStatus>>;
 
 /// Start the inbox worker that processes index requests asynchronously.
@@ -96,6 +110,7 @@ async fn process_request_async(
 
 fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle) -> Result<()> {
     tracing::info!("Processing request: {}", request_path.display());
+    let request_start = std::time::Instant::now();
 
     // Decompress and parse request
     let compressed = std::fs::read(request_path)?;
@@ -108,7 +123,7 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle) 
 
     // Open source database
     let db_path = data_dir.join("sources").join(format!("{}.db", request.source));
-    let conn = db::open(&db_path)?;
+    let mut conn = db::open(&db_path)?;
 
     // Initialize archive manager
     let mut archive_mgr = ArchiveManager::new(data_dir.to_path_buf());
@@ -126,7 +141,9 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle) 
                 file: file.path.clone(),
             };
         }
-        process_file(&conn, &mut archive_mgr, file)?;
+        let file_start = std::time::Instant::now();
+        process_file(&mut conn, &mut archive_mgr, file)?;
+        warn_slow(file_start, 30, "process_file", &file.path);
     }
 
     // 3. Indexing error tracking
@@ -147,6 +164,8 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle) 
         db::upsert_indexing_errors(&conn, &request.indexing_failures, now)?;
     }
 
+    warn_slow(request_start, 120, "process_request", &request_path.display().to_string());
+
     // 4. Metadata
     if let Some(ts) = request.scan_timestamp {
         db::update_last_scan(&conn, ts)?;
@@ -160,7 +179,7 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle) 
 }
 
 fn process_file(
-    conn: &Connection,
+    conn: &mut Connection,
     archive_mgr: &mut ArchiveManager,
     file: &find_common::api::IndexFile,
 ) -> Result<()> {
@@ -168,6 +187,10 @@ fn process_file(
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
+
+    // ── Pre-transaction reads and ZIP operations ────────────────────────────
+    // These must happen outside the transaction: ZIP writes are not part of
+    // SQLite, and reads here inform whether ZIP operations are needed at all.
 
     // If this is an outer archive file being re-indexed, delete stale inner members
     // first. They'll be re-submitted as separate IndexFile entries in the same batch.
@@ -196,7 +219,9 @@ fn process_file(
             }
         }
         if !old_refs.is_empty() {
+            let t = std::time::Instant::now();
             archive_mgr.remove_chunks(old_refs)?;
+            warn_slow(t, 10, "remove_chunks(archive_members)", &file.path);
         }
         conn.execute(
             "DELETE FROM files WHERE path LIKE ?1",
@@ -260,7 +285,9 @@ fn process_file(
             })?
             .collect::<rusqlite::Result<_>>()?;
         if !old_refs.is_empty() {
+            let t = std::time::Instant::now();
             archive_mgr.remove_chunks(old_refs)?;
+            warn_slow(t, 10, "remove_chunks(reindex)", &file.path);
         }
     }
 
@@ -272,8 +299,10 @@ fn process_file(
     // Chunk lines into ~1KB pieces
     let chunk_result = archive::chunk_lines(&file.path, &line_data);
 
-    // Append chunks to ZIP archives
+    // Append chunks to ZIP archives (must happen before the transaction)
+    let t_append = std::time::Instant::now();
     let chunk_refs = archive_mgr.append_chunks(chunk_result.chunks.clone())?;
+    warn_slow(t_append, 10, "append_chunks", &file.path);
 
     // Build mapping: chunk_number → chunk_ref
     let mut chunk_ref_map: HashMap<usize, ChunkRef> = HashMap::new();
@@ -281,9 +310,23 @@ fn process_file(
         chunk_ref_map.insert(chunk.chunk_number, chunk_ref.clone());
     }
 
+    // Build lookup: line_number → original line for FTS5 content
+    let mut line_content_map: HashMap<usize, String> = HashMap::new();
+    for line in &file.lines {
+        line_content_map.insert(line.line_number, line.content.clone());
+    }
+
+    // ── Single transaction for all SQLite writes ───────────────────────────
+    // Batching every INSERT into one transaction eliminates per-row fsyncs,
+    // which dominate wall-clock time for large files (e.g. verbose XML logs).
+    // ZIP chunks are already written above; a rollback here leaves orphaned
+    // chunks that are harmlessly overwritten on the next re-index.
+    let t_fts = std::time::Instant::now();
+    let tx = conn.transaction()?;
+
     // Upsert file record as canonical (canonical_file_id = NULL).
     // indexed_at is set on first insert and not overwritten on conflict.
-    conn.execute(
+    tx.execute(
         "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, canonical_file_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
          ON CONFLICT(path) DO UPDATE SET
@@ -301,7 +344,7 @@ fn process_file(
         ],
     )?;
 
-    let file_id: i64 = conn.query_row(
+    let file_id: i64 = tx.query_row(
         "SELECT id FROM files WHERE path = ?1",
         rusqlite::params![file.path],
         |row| row.get(0),
@@ -315,13 +358,7 @@ fn process_file(
     // inflated. Actual search results are correct because the JOIN with `lines` filters them
     // out, but pagination may misbehave if the client uses `total` to decide whether to
     // fetch more pages.
-    conn.execute("DELETE FROM lines WHERE file_id = ?1", rusqlite::params![file_id])?;
-
-    // Build lookup: line_number → original line for FTS5 content
-    let mut line_content_map: HashMap<usize, String> = HashMap::new();
-    for line in &file.lines {
-        line_content_map.insert(line.line_number, line.content.clone());
-    }
+    tx.execute("DELETE FROM lines WHERE file_id = ?1", rusqlite::params![file_id])?;
 
     // Insert lines with chunk references and populate FTS5
     for mapping in &chunk_result.line_mappings {
@@ -331,7 +368,7 @@ fn process_file(
         let line_content = line_content_map.get(&mapping.line_number)
             .context("line content not found")?;
 
-        let line_id = conn.query_row(
+        let line_id = tx.query_row(
             "INSERT INTO lines (file_id, line_number, chunk_archive, chunk_name, line_offset_in_chunk)
              VALUES (?1, ?2, ?3, ?4, ?5)
              RETURNING id",
@@ -345,11 +382,14 @@ fn process_file(
             |row| row.get::<_, i64>(0),
         )?;
 
-        conn.execute(
+        tx.execute(
             "INSERT INTO lines_fts(rowid, content) VALUES (?1, ?2)",
             rusqlite::params![line_id, line_content],
         )?;
     }
+
+    tx.commit()?;
+    warn_slow(t_fts, 10, "fts_insert", &file.path);
 
     Ok(())
 }

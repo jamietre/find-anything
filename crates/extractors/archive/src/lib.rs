@@ -1,3 +1,11 @@
+// When this fires, follow the upgrade path in docs/plans/034-7z-oom-crash.md.
+#[cfg(alloc_error_hook_stable)]
+compile_error!(
+    "`std::alloc::set_alloc_error_hook` is now stable (rust-lang/rust#51245)! \
+     OOM aborts during 7z extraction can now be converted to catchable panics. \
+     See docs/plans/034-7z-oom-crash.md for the full upgrade path."
+);
+
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -35,6 +43,28 @@ type CB<'a> = &'a mut dyn FnMut(MemberBatch);
 /// `cfg.include_hidden` is false.
 fn has_hidden_component(name: &str) -> bool {
     name.split('/').any(|c| c.starts_with('.') && c.len() > 1 && c != "..")
+}
+
+/// Read the kernel's estimate of available memory from /proc/meminfo (Linux only).
+///
+/// Returns `MemAvailable` in bytes, which includes free RAM plus reclaimable
+/// page cache. Returns `None` on non-Linux platforms or if the file is
+/// unreadable (e.g. inside a container with a restricted /proc).
+#[cfg(target_os = "linux")]
+fn available_memory_bytes() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+#[cfg(not(target_os = "linux"))]
+fn available_memory_bytes() -> Option<u64> {
+    None
 }
 
 /// Extract content from archive files (ZIP, TAR, TGZ, TBZ2, TXZ, GZ, BZ2, XZ, 7Z).
@@ -369,23 +399,19 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
     let size_limit = cfg.max_size_kb * 1024;
 
     // Parse the archive header to inspect block sizes before any decompression.
-    // We open the file a second time for the data stream so we can skip blocks
-    // whose LZMA dictionary allocation would exhaust memory.
-    //
-    // Root cause: sevenz_rust2 creates the LZMA decoder (allocating a dictionary
-    // buffer proportional to the block's total unpack size) BEFORE calling our
-    // per-file callback.  For a solid archive with a 128 MB block this allocates
-    // ~128 MB regardless of our per-file size limit, and that allocation can fail
-    // on memory-constrained systems (WSL2, NAS boxes, containers).
+    // The LZMA decoder allocates a dictionary buffer proportional to the block's
+    // unpack size BEFORE our per-file callback is ever called.  On memory-
+    // constrained systems this single allocation can exhaust available memory.
     let archive = {
         let mut f = File::open(path)?;
         sevenz_rust2::Archive::read(&mut f, &sevenz_rust2::Password::empty())
             .context("7z: failed to parse archive header")?
     };
 
-    // Cap on a single solid block's total unpack size, taken from config.
-    // The LZMA dictionary is sized to (roughly) the block unpack size,
-    // so this bounds the largest single allocation we allow.
+    // Static guard: skip blocks that exceed the configured hard ceiling.
+    // This is a coarse backstop — the dynamic memory check below handles
+    // blocks that pass this limit but still can't be safely allocated at
+    // runtime given current system conditions.
     let max_block_bytes = cfg.max_7z_solid_block_mb * 1024 * 1024;
 
     let oversized: HashSet<usize> = archive
@@ -410,8 +436,6 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
             cfg.max_7z_solid_block_mb,
             skipped,
         );
-        // Emit a single summary failure (empty lines = applies to the outer archive path
-        // in scan.rs) so the user can see why content is missing when they open this file.
         let largest_block_mb = oversized
             .iter()
             .map(|&bi| archive.blocks[bi].get_unpack_size() / (1024 * 1024))
@@ -427,8 +451,6 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
                 skipped, oversized.len(), largest_block_mb, cfg.max_7z_solid_block_mb,
             )),
         });
-        // Emit filename-only entries for files in oversized blocks now,
-        // before we start the decode loop (which would trigger the big allocation).
         for (file_idx, block_opt) in archive.stream_map.file_block_index.iter().enumerate() {
             if let Some(bi) = *block_opt {
                 if oversized.contains(&bi) {
@@ -445,10 +467,6 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
         }
     }
 
-    // Open the archive data stream for block-by-block extraction.
-    // BlockDecoder::new is cheap (no decoder created yet); the LZMA decoder and
-    // its dictionary are created lazily inside for_each_entries, which we skip
-    // entirely for oversized blocks.
     let thread_count = std::thread::available_parallelism()
         .map(|n| n.get() as u32)
         .unwrap_or(1);
@@ -457,9 +475,90 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
     let password = sevenz_rust2::Password::empty();
     for block_index in 0..archive.blocks.len() {
         if oversized.contains(&block_index) {
-            // Filename entries already emitted above; skip decoder creation.
             continue;
         }
+
+        // Dynamic memory guard: check available system memory right before
+        // decoding each block.  get_unpack_size() is a lower-bound estimate
+        // of what the LZMA decoder will allocate (the actual dictionary can
+        // be larger).  Skip the block if decoding it would consume more than
+        // 75% of currently available memory, leaving headroom for the OS and
+        // the rest of the scan process.
+        let unpack_size = archive.blocks[block_index].get_unpack_size();
+        // Helper: collect non-directory file names in this block.
+        let block_files = || -> Vec<&str> {
+            archive
+                .stream_map
+                .file_block_index
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| b.is_some_and(|bi| bi == block_index))
+                .filter_map(|(fi, _)| {
+                    let e = &archive.files[fi];
+                    if e.is_directory() { None } else { Some(e.name()) }
+                })
+                .collect()
+        };
+
+        // Dynamic memory guard.  OOM in the LZMA decoder calls handle_alloc_error
+        // which aborts the process — it is NOT catchable via catch_unwind.  We must
+        // refuse to attempt the allocation rather than try to recover after the fact.
+        //
+        // get_unpack_size() == 0 means the archive header doesn't record individual
+        // file sizes for this block (common in solid archives).  We cannot estimate
+        // the required allocation, so we skip the block rather than risk a crash.
+        if unpack_size == 0 {
+            let names = block_files();
+            if !names.is_empty() {
+                warn!(
+                    "7z: '{}': block {} has unknown unpack size; \
+                     {} file(s) indexed by filename only",
+                    path.display(), block_index, names.len(),
+                );
+                for name in names {
+                    callback(MemberBatch {
+                        lines: make_filename_line(name),
+                        content_hash: None,
+                        skip_reason: Some(
+                            "unknown block size; cannot safely estimate memory requirement"
+                                .to_string(),
+                        ),
+                    });
+                }
+            }
+            continue;
+        }
+
+        if let Some(avail) = available_memory_bytes() {
+            let budget = avail * 3 / 4;
+            if unpack_size > budget {
+                let names = block_files();
+                warn!(
+                    "7z: '{}': block {} needs ~{} MB but only ~{} MB available \
+                     (75% budget ~{} MB); {} file(s) indexed by filename only",
+                    path.display(), block_index,
+                    unpack_size / (1024 * 1024),
+                    avail / (1024 * 1024),
+                    budget / (1024 * 1024),
+                    names.len(),
+                );
+                let skip_reason = Some(format!(
+                    "insufficient memory to extract \
+                     (~{} MB needed, ~{} MB available)",
+                    unpack_size / (1024 * 1024),
+                    avail / (1024 * 1024),
+                ));
+                for name in names {
+                    callback(MemberBatch {
+                        lines: make_filename_line(name),
+                        content_hash: None,
+                        skip_reason: skip_reason.clone(),
+                    });
+                }
+                continue;
+            }
+        }
+
         let block_dec = sevenz_rust2::BlockDecoder::new(
             thread_count,
             block_index,
@@ -467,9 +566,11 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
             &password,
             &mut source,
         );
-        block_dec.for_each_entries(&mut |entry, reader| {
+        if let Err(e) = block_dec.for_each_entries(&mut |entry, reader| {
             sevenz_process_entry(entry, reader, display_prefix, size_limit, cfg, callback)
-        })?;
+        }) {
+            warn!("7z: '{}': block {} error: {:#}", path.display(), block_index, e);
+        }
     }
 
     // Emit entries for files that have no associated block (empty files / dirs
