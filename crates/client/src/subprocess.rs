@@ -1,9 +1,20 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
 
+use tokio::io::AsyncBufReadExt;
+use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
 use find_common::{api::IndexLine, config::ScanConfig};
 use find_extract_archive::MemberBatch;
+
+/// Outcome of a subprocess extraction attempt.
+pub enum SubprocessOutcome {
+    /// Extraction succeeded; contains the extracted lines.
+    Ok(Vec<IndexLine>),
+    /// Subprocess exited non-zero; error is already logged.
+    Failed,
+}
 
 /// Extract content from any file via the appropriate subprocess.
 ///
@@ -11,15 +22,15 @@ use find_extract_archive::MemberBatch;
 /// `Vec<IndexLine>` so the caller receives a flat list identical to the pre-subprocess
 /// result.  For all other formats, parses `Vec<IndexLine>` directly.
 ///
-/// On subprocess failure or parse error, returns an empty vec (the error is
-/// logged as a warning so the scan can continue with other files).
+/// Returns `SubprocessOutcome::Failed` on subprocess failure or parse error
+/// (the error is logged as a warning so the scan can continue with other files).
 pub async fn extract_via_subprocess(
     abs_path: &Path,
     scan: &ScanConfig,
     extractor_dir: &Option<String>,
-) -> Vec<IndexLine> {
+) -> SubprocessOutcome {
     let binary = extractor_binary_for(abs_path, extractor_dir);
-    let max_size_kb = (scan.max_file_size_mb * 1024).to_string();
+    let max_content_kb = (scan.max_content_size_mb * 1024).to_string();
     let max_depth = scan.archives.max_depth.to_string();
     let max_line_length = scan.max_line_length.to_string();
 
@@ -32,12 +43,12 @@ pub async fn extract_via_subprocess(
     let is_pdf = ext == "pdf";
 
     let mut cmd = tokio::process::Command::new(&binary);
-    cmd.arg(abs_path).arg(&max_size_kb);
+    cmd.arg(abs_path).arg(&max_content_kb);
     if is_archive {
-        // find-extract-archive: <path> [max-size-kb] [max-depth] [max-line-length]
+        // find-extract-archive: <path> [max-content-kb] [max-depth] [max-line-length]
         cmd.arg(&max_depth).arg(&max_line_length);
     } else if is_pdf {
-        // find-extract-pdf: <path> [max-size-kb] [max-line-length]
+        // find-extract-pdf: <path> [max-content-kb] [max-line-length]
         cmd.arg(&max_line_length);
     }
 
@@ -45,13 +56,14 @@ pub async fn extract_via_subprocess(
         Ok(out) => {
             relay_subprocess_logs(&out.stderr);
             if out.status.success() {
-                if is_archive {
+                let lines = if is_archive {
                     let batches: Vec<MemberBatch> =
                         serde_json::from_slice(&out.stdout).unwrap_or_default();
                     batches.into_iter().flat_map(|b| b.lines).collect()
                 } else {
                     serde_json::from_slice::<Vec<IndexLine>>(&out.stdout).unwrap_or_default()
-                }
+                };
+                SubprocessOutcome::Ok(lines)
             } else {
                 warn!(
                     "extractor {} exited {:?} for {}",
@@ -59,58 +71,121 @@ pub async fn extract_via_subprocess(
                     out.status.code(),
                     abs_path.display()
                 );
-                vec![]
+                SubprocessOutcome::Failed
             }
         }
         Err(e) => {
             warn!("failed to run extractor {}: {e:#}", binary);
-            vec![]
+            SubprocessOutcome::Failed
         }
     }
 }
 
-/// Extract content from an archive file via subprocess, returning the full
-/// `Vec<MemberBatch>` with content hashes and skip reasons intact.
+#[allow(dead_code)] // used by find-scan; other binaries share this module
+/// Start archive extraction in a subprocess and stream `MemberBatch` items
+/// over a bounded channel as they are extracted.
 ///
-/// Used by `find-scan`'s archive path, which needs per-member metadata for
-/// deduplication and failure reporting.
-#[allow(dead_code)]
-pub async fn extract_archive_via_subprocess(
-    abs_path: &Path,
+/// The subprocess emits NDJSON (one `MemberBatch` JSON object per line) so
+/// neither the subprocess nor the parent ever holds all extracted content in
+/// memory at once.  The channel has capacity 8, which applies backpressure
+/// through the pipe if the caller processes batches more slowly than the
+/// subprocess produces them.
+///
+/// Returns `(receiver, join_handle)`.  The `JoinHandle` resolves to `true`
+/// if the subprocess exited successfully, `false` otherwise.  Await it after
+/// draining the receiver to check for extraction failure.
+pub fn start_archive_subprocess(
+    abs_path: PathBuf,
     scan: &ScanConfig,
     extractor_dir: &Option<String>,
-) -> Vec<MemberBatch> {
-    let binary = extractor_binary_for(abs_path, extractor_dir);
-    let max_size_kb = (scan.max_file_size_mb * 1024).to_string();
+) -> (mpsc::Receiver<MemberBatch>, tokio::task::JoinHandle<bool>) {
+    let binary = extractor_binary_for(&abs_path, extractor_dir);
+    let max_content_kb = (scan.max_content_size_mb * 1024).to_string();
     let max_depth = scan.archives.max_depth.to_string();
     let max_line_length = scan.max_line_length.to_string();
 
-    let mut cmd = tokio::process::Command::new(&binary);
-    cmd.arg(abs_path)
-        .arg(&max_size_kb)
-        .arg(&max_depth)
-        .arg(&max_line_length);
+    let (tx, rx) = mpsc::channel(8);
 
-    match cmd.output().await {
-        Ok(out) => {
-            relay_subprocess_logs(&out.stderr);
-            if out.status.success() {
-                serde_json::from_slice::<Vec<MemberBatch>>(&out.stdout).unwrap_or_default()
-            } else {
-                warn!(
-                    "extractor {} exited {:?} for {}",
-                    binary,
-                    out.status.code(),
-                    abs_path.display()
-                );
-                vec![]
+    let handle = tokio::spawn(async move {
+        let mut cmd = tokio::process::Command::new(&binary);
+        cmd.arg(&abs_path)
+            .arg(&max_content_kb)
+            .arg(&max_depth)
+            .arg(&max_line_length)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("failed to spawn {binary}: {e:#}");
+                return false;
+            }
+        };
+
+        // Take stderr before spawning the drain task so child remains available.
+        let stderr = child.stderr.take();
+        let stderr_handle = tokio::spawn(async move {
+            let mut buf = Vec::new();
+            if let Some(mut s) = stderr {
+                let _ = tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf).await;
+            }
+            buf
+        });
+
+        // Read stdout line by line and forward each parsed MemberBatch.
+        let mut success = true;
+        if let Some(stdout) = child.stdout.take() {
+            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            loop {
+                match lines.next_line().await {
+                    Ok(Some(line)) => {
+                        match serde_json::from_str::<MemberBatch>(&line) {
+                            Ok(batch) => {
+                                if tx.send(batch).await.is_err() {
+                                    // Receiver was dropped (caller aborted); kill subprocess.
+                                    child.kill().await.ok();
+                                    break;
+                                }
+                            }
+                            Err(e) => warn!("archive subprocess parse error: {e:#}"),
+                        }
+                    }
+                    Ok(None) => break,
+                    Err(e) => {
+                        warn!("archive subprocess stdout read error: {e:#}");
+                        break;
+                    }
+                }
             }
         }
-        Err(e) => {
-            warn!("failed to run extractor {}: {e:#}", binary);
-            vec![]
+
+        match child.wait().await {
+            Ok(status) => {
+                if !status.success() {
+                    warn!(
+                        "extractor {} exited {:?} for {}",
+                        binary,
+                        status.code(),
+                        abs_path.display()
+                    );
+                    success = false;
+                }
+            }
+            Err(e) => {
+                warn!("archive subprocess wait error: {e:#}");
+                success = false;
+            }
         }
-    }
+
+        if let Ok(stderr_bytes) = stderr_handle.await {
+            relay_subprocess_logs(&stderr_bytes);
+        }
+
+        success
+    });
+
+    (rx, handle)
 }
 
 /// Re-emit subprocess stderr lines through our tracing subscriber so they

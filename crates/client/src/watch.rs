@@ -328,7 +328,10 @@ async fn handle_update(
 ) -> Result<()> {
     info!("update: {}", rel_path);
 
-    let lines = subprocess::extract_via_subprocess(abs_path, eff_scan, extractor_dir).await;
+    let lines = match subprocess::extract_via_subprocess(abs_path, eff_scan, extractor_dir).await {
+        subprocess::SubprocessOutcome::Ok(lines) => lines,
+        subprocess::SubprocessOutcome::Failed => vec![],
+    };
 
     let mtime = mtime_of(abs_path).unwrap_or(0);
     let size = size_of(abs_path).unwrap_or(0);

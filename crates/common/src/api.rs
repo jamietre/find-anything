@@ -470,3 +470,41 @@ pub struct InboxShowResponse {
     pub failures: Vec<IndexingFailure>,
     pub scan_timestamp: Option<i64>,
 }
+
+// ── Upload API types ───────────────────────────────────────────────────────────
+
+/// `POST /api/v1/upload` request body — initiates a resumable file upload.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadInitRequest {
+    /// Source name to index the file under.
+    pub source: String,
+    /// Relative path of the file within the source.
+    pub rel_path: String,
+    /// File modification time (Unix seconds).
+    pub mtime: i64,
+    /// Total file size in bytes.
+    pub size: u64,
+}
+
+/// `POST /api/v1/upload` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadInitResponse {
+    /// Opaque identifier for this upload session.
+    pub upload_id: String,
+}
+
+/// `HEAD /api/v1/upload/{id}` response — current upload progress.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadStatusResponse {
+    /// Bytes received so far.
+    pub received: u64,
+    /// Total expected bytes (from the init request).
+    pub total: u64,
+}
+
+/// `PATCH /api/v1/upload/{id}` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UploadPatchResponse {
+    /// Total bytes received after this patch.
+    pub received: u64,
+}

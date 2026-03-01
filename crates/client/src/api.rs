@@ -8,7 +8,7 @@ use std::io::Write;
 use find_common::api::{
     AppSettingsResponse, BulkRequest, ContextResponse, FileRecord, InboxDeleteResponse,
     InboxRetryResponse, InboxShowResponse, InboxStatusResponse, SearchResponse, SourceInfo,
-    StatsResponse,
+    StatsResponse, UploadInitRequest, UploadInitResponse, UploadPatchResponse, UploadStatusResponse,
 };
 
 pub struct ApiClient {
@@ -218,6 +218,72 @@ impl ApiClient {
             .json::<InboxRetryResponse>()
             .await
             .context("parsing inbox retry response")
+    }
+
+    /// POST /api/v1/upload — initiate a resumable upload.
+    pub async fn upload_init(
+        &self,
+        source: &str,
+        rel_path: &str,
+        mtime: i64,
+        size: u64,
+    ) -> Result<UploadInitResponse> {
+        let req = UploadInitRequest {
+            source: source.to_string(),
+            rel_path: rel_path.to_string(),
+            mtime,
+            size,
+        };
+        self.client
+            .post(self.url("/api/v1/upload"))
+            .bearer_auth(&self.token)
+            .json(&req)
+            .send()
+            .await
+            .context("POST /api/v1/upload")?
+            .error_for_status()
+            .context("upload init status")?
+            .json::<UploadInitResponse>()
+            .await
+            .context("parsing upload init response")
+    }
+
+    /// PATCH /api/v1/upload/{id} — send a chunk.
+    pub async fn upload_patch(
+        &self,
+        upload_id: &str,
+        content_range: &str,
+        data: Vec<u8>,
+    ) -> Result<UploadPatchResponse> {
+        self.client
+            .patch(self.url(&format!("/api/v1/upload/{upload_id}")))
+            .bearer_auth(&self.token)
+            .header("Content-Range", content_range)
+            .header("Content-Type", "application/octet-stream")
+            .body(data)
+            .send()
+            .await
+            .context("PATCH /api/v1/upload")?
+            .error_for_status()
+            .context("upload patch status")?
+            .json::<UploadPatchResponse>()
+            .await
+            .context("parsing upload patch response")
+    }
+
+    /// HEAD /api/v1/upload/{id} — query upload progress.
+    pub async fn upload_status(&self, upload_id: &str) -> Result<UploadStatusResponse> {
+        self.client
+            .head(self.url(&format!("/api/v1/upload/{upload_id}")))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("HEAD /api/v1/upload")?
+            .error_for_status()
+            .context("upload status")?
+            .json::<UploadStatusResponse>()
+            .await
+            .context("parsing upload status response")
     }
 
     /// GET /api/v1/search

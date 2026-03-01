@@ -4,6 +4,7 @@ mod extract;
 mod lazy_header;
 mod scan;
 mod subprocess;
+mod upload;
 
 use anyhow::{Context, Result};
 use clap::Parser;

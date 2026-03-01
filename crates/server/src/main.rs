@@ -2,6 +2,7 @@ mod archive;
 mod db;
 mod fuzzy;
 mod routes;
+mod upload;
 mod worker;
 
 use std::path::PathBuf;
@@ -12,7 +13,7 @@ use axum::{
     extract::DefaultBodyLimit,
     http::{header, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{get, head, patch, post},
     Router,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
@@ -122,6 +123,20 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Spawn the upload cleanup task.
+    let cleanup_data_dir = data_dir.clone();
+    tokio::spawn(async move {
+        upload::start_cleanup_task(cleanup_data_dir).await;
+    });
+
+    // Upload routes are mounted WITHOUT the DefaultBodyLimit so that large files
+    // can be uploaded in chunks.  All other routes keep the 32 MB limit.
+    let upload_routes = Router::new()
+        .route("/api/v1/upload",        post(routes::upload_init))
+        .route("/api/v1/upload/{id}",   patch(routes::upload_patch))
+        .route("/api/v1/upload/{id}",   head(routes::upload_status))
+        .with_state(Arc::clone(&state));
+
     let app = Router::new()
         .route("/api/v1/sources",        get(routes::list_sources))
         .route("/api/v1/file",           get(routes::get_file))
@@ -140,7 +155,10 @@ async fn main() -> Result<()> {
         .route("/api/v1/admin/inbox/show",  get(routes::inbox_show))
         .fallback(serve_static)
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
-        .with_state(state);
+        .with_state(Arc::clone(&state));
+
+    // Merge upload routes (no body limit) with the main router.
+    let app = upload_routes.merge(app);
 
     let listener = tokio::net::TcpListener::bind(&bind)
         .await

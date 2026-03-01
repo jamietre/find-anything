@@ -30,7 +30,7 @@ fn main() {
 
     let path = Path::new(&args[1]);
     let cfg = ExtractorConfig {
-        max_size_kb: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10240),
+        max_content_kb: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10240),
         max_depth: 10,
         max_line_length: 120,
         ..Default::default()

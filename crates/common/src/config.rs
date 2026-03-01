@@ -19,7 +19,7 @@ struct ClientDefaults {
 #[derive(Deserialize)]
 struct ScanDefaults {
     exclude: Vec<String>,
-    max_file_size_mb: u64,
+    max_content_size_mb: u64,
     max_line_length: usize,
     noindex_file: String,
     index_file: String,
@@ -47,6 +47,7 @@ struct LogDefaults {
 struct ServerDefaults {
     server: ServerSettingsDefaults,
     search: SearchDefaults,
+    extraction: ExtractionDefaults,
     // log.ignore shares the same default_log_ignore() function as the client;
     // both files have identical values.  Parsed by serde but not stored here.
 }
@@ -62,6 +63,13 @@ struct SearchDefaults {
     max_limit: usize,
     fts_candidate_limit: usize,
     context_window: usize,
+}
+
+#[derive(Deserialize)]
+struct ExtractionDefaults {
+    max_content_size_mb: u64,
+    max_line_length: usize,
+    max_archive_depth: usize,
 }
 
 static CLIENT_DEFAULTS: OnceLock<ClientDefaults> = OnceLock::new();
@@ -127,8 +135,11 @@ pub struct ScanConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude_extra: Vec<String>,
 
-    #[serde(default = "default_max_file_size_mb")]
-    pub max_file_size_mb: u64,
+    /// Maximum content size in MB to index per file.
+    /// Content is truncated at this limit rather than the file being skipped.
+    /// Accepts old key `max_file_size_mb` for backward compatibility.
+    #[serde(default = "default_max_content_size_mb", alias = "max_file_size_mb")]
+    pub max_content_size_mb: u64,
 
     #[serde(default)]
     pub follow_symlinks: bool,
@@ -160,6 +171,12 @@ pub struct ScanConfig {
     /// None = auto-detect (same dir as the executable, then PATH).
     #[serde(default)]
     pub extractor_dir: Option<String>,
+
+    /// When true, files whose subprocess extractor exits non-zero are uploaded
+    /// to the server for server-side extraction (requires server to have
+    /// find-extract-* binaries available).  Default: false.
+    #[serde(default)]
+    pub server_fallback: bool,
 }
 
 impl Default for ScanConfig {
@@ -167,7 +184,7 @@ impl Default for ScanConfig {
         Self {
             exclude: default_excludes(),
             exclude_extra: vec![],
-            max_file_size_mb: default_max_file_size_mb(),
+            max_content_size_mb: default_max_content_size_mb(),
             follow_symlinks: false,
             include_hidden: false,
             archives: ArchiveConfig::default(),
@@ -175,6 +192,7 @@ impl Default for ScanConfig {
             noindex_file: default_noindex_file(),
             index_file: default_index_file(),
             extractor_dir: None,
+            server_fallback: false,
         }
     }
 }
@@ -190,8 +208,8 @@ impl ScanConfig {
         if let Some(extra) = &ov.exclude {
             result.exclude.extend(extra.iter().cloned());
         }
-        if let Some(v) = ov.max_file_size_mb {
-            result.max_file_size_mb = v;
+        if let Some(v) = ov.max_content_size_mb {
+            result.max_content_size_mb = v;
         }
         if let Some(v) = ov.include_hidden {
             result.include_hidden = v;
@@ -220,7 +238,9 @@ impl ScanConfig {
 pub struct ScanOverride {
     /// Additional exclude patterns (appended to parent list, never removed).
     pub exclude: Option<Vec<String>>,
-    pub max_file_size_mb: Option<u64>,
+    /// Accepts old key `max_file_size_mb` for backward compatibility.
+    #[serde(alias = "max_file_size_mb")]
+    pub max_content_size_mb: Option<u64>,
     pub include_hidden: Option<bool>,
     pub follow_symlinks: Option<bool>,
     pub archives: Option<ArchiveOverride>,
@@ -312,13 +332,13 @@ impl Default for WatchConfig {
     }
 }
 
-fn default_debounce_ms() -> u64      { client_defaults().watch.debounce_ms }
-fn default_excludes() -> Vec<String> { client_defaults().scan.exclude.clone() }
-fn default_max_file_size_mb() -> u64 { client_defaults().scan.max_file_size_mb }
-fn default_max_line_length() -> usize { client_defaults().scan.max_line_length }
-fn default_noindex_file() -> String  { client_defaults().scan.noindex_file.clone() }
-fn default_index_file() -> String    { client_defaults().scan.index_file.clone() }
-fn default_true() -> bool            { true }
+fn default_debounce_ms() -> u64         { client_defaults().watch.debounce_ms }
+fn default_excludes() -> Vec<String>    { client_defaults().scan.exclude.clone() }
+fn default_max_content_size_mb() -> u64 { client_defaults().scan.max_content_size_mb }
+fn default_max_line_length() -> usize   { client_defaults().scan.max_line_length }
+fn default_noindex_file() -> String     { client_defaults().scan.noindex_file.clone() }
+fn default_index_file() -> String       { client_defaults().scan.index_file.clone() }
+fn default_true() -> bool               { true }
 
 /// Configuration passed to extractor functions.
 ///
@@ -330,8 +350,8 @@ fn default_true() -> bool            { true }
 /// `..ExtractorConfig::default()` to forward-compatibly inherit the defaults.
 #[derive(Debug, Clone, Copy)]
 pub struct ExtractorConfig {
-    /// Maximum file/member size in KB; content extraction is skipped above this.
-    pub max_size_kb: usize,
+    /// Maximum content size in KB; content is truncated at this limit.
+    pub max_content_kb: usize,
     /// Maximum archive nesting depth; prevents zip-bomb recursion.
     pub max_depth: usize,
     /// Maximum line length in characters for PDF extraction.
@@ -354,7 +374,7 @@ pub struct ExtractorConfig {
 impl Default for ExtractorConfig {
     fn default() -> Self {
         Self {
-            max_size_kb: 10 * 1024,
+            max_content_kb: 10 * 1024,
             max_depth: default_max_archive_depth(),
             max_line_length: default_max_line_length(),
             max_temp_file_mb: default_max_archive_temp_file_mb(),
@@ -368,12 +388,22 @@ impl ExtractorConfig {
     /// Build an `ExtractorConfig` from the scan section of the client config.
     pub fn from_scan(scan: &ScanConfig) -> Self {
         Self {
-            max_size_kb: scan.max_file_size_mb as usize * 1024,
+            max_content_kb: scan.max_content_size_mb as usize * 1024,
             max_depth: scan.archives.max_depth,
             max_line_length: scan.max_line_length,
             max_temp_file_mb: scan.archives.max_temp_file_mb,
             include_hidden: scan.include_hidden,
             max_7z_solid_block_mb: scan.archives.max_7z_solid_block_mb,
+        }
+    }
+
+    /// Build an `ExtractorConfig` from the server's extraction settings.
+    pub fn from_extraction(extraction: &ExtractionSettings) -> Self {
+        Self {
+            max_content_kb: extraction.max_content_size_mb as usize * 1024,
+            max_depth: extraction.max_archive_depth,
+            max_line_length: extraction.max_line_length,
+            ..Default::default()
         }
     }
 }
@@ -384,6 +414,8 @@ pub struct ServerAppConfig {
     #[serde(default)]
     pub search: SearchSettings,
     #[serde(default)]
+    pub extraction: ExtractionSettings,
+    #[serde(default)]
     pub log: LogConfig,
 }
 
@@ -393,6 +425,10 @@ pub struct ServerAppSettings {
     pub bind: String,
     pub data_dir: String,
     pub token: String,
+    /// Directory containing find-extract-* binaries for server-side extraction.
+    /// None = auto-detect (same dir as the executable, then PATH).
+    #[serde(default)]
+    pub extractor_dir: Option<String>,
 }
 
 fn default_bind() -> String { server_defaults().server.bind.clone() }
@@ -426,6 +462,34 @@ fn default_search_limit() -> usize    { server_defaults().search.default_limit }
 fn default_max_limit() -> usize       { server_defaults().search.max_limit }
 fn default_fts_candidate_limit() -> usize { server_defaults().search.fts_candidate_limit }
 fn default_context_window() -> usize  { server_defaults().search.context_window }
+
+/// Extraction settings for the server (used for server-side file indexing).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractionSettings {
+    /// Maximum content size in MB to index per file. Default: 10.
+    #[serde(default = "default_extraction_max_content_size_mb")]
+    pub max_content_size_mb: u64,
+    /// Maximum line length in characters for PDF extraction. Default: 120.
+    #[serde(default = "default_extraction_max_line_length")]
+    pub max_line_length: usize,
+    /// Maximum archive nesting depth. Default: 10.
+    #[serde(default = "default_extraction_max_archive_depth")]
+    pub max_archive_depth: usize,
+}
+
+impl Default for ExtractionSettings {
+    fn default() -> Self {
+        Self {
+            max_content_size_mb: default_extraction_max_content_size_mb(),
+            max_line_length: default_extraction_max_line_length(),
+            max_archive_depth: default_extraction_max_archive_depth(),
+        }
+    }
+}
+
+fn default_extraction_max_content_size_mb() -> u64 { server_defaults().extraction.max_content_size_mb }
+fn default_extraction_max_line_length() -> usize   { server_defaults().extraction.max_line_length }
+fn default_extraction_max_archive_depth() -> usize { server_defaults().extraction.max_archive_depth }
 
 // ── Log config ────────────────────────────────────────────────────────────────
 
@@ -491,6 +555,12 @@ pub fn default_config_path() -> String {
 /// Parse a client `client.toml` string, emitting `warn!` for any unrecognised keys.
 pub fn parse_client_config(toml_str: &str) -> Result<ClientConfig> {
     let value: toml::Value = toml::from_str(toml_str).context("invalid TOML")?;
+    // Detect deprecated key before deserialisation so we can emit a warning.
+    if let Some(scan) = value.get("scan") {
+        if scan.get("max_file_size_mb").is_some() {
+            warn!("max_file_size_mb is deprecated; rename to max_content_size_mb in your client.toml");
+        }
+    }
     let mut unknown = Vec::new();
     let mut cfg: ClientConfig = serde_ignored::deserialize(value, |path| {
         unknown.push(path.to_string());
@@ -581,12 +651,12 @@ mod tests {
         let base = ScanConfig::default();
         let ov = ScanOverride {
             include_hidden: Some(true),
-            max_file_size_mb: Some(99),
+            max_content_size_mb: Some(99),
             ..ScanOverride::default()
         };
         let result = base.apply_override(&ov);
         assert!(result.include_hidden);
-        assert_eq!(result.max_file_size_mb, 99);
+        assert_eq!(result.max_content_size_mb, 99);
         // noindex_file/index_file are inherited unchanged
         assert_eq!(result.noindex_file, ".noindex");
     }
@@ -663,5 +733,20 @@ exclude = ["*.only"]
         let cfg: ClientConfig = serde_json::from_str(json).unwrap();
         assert_eq!(cfg.watch.debounce_ms, 500);
         assert!(cfg.watch.extractor_dir.is_none());
+    }
+
+    #[test]
+    fn deprecated_max_file_size_mb_is_accepted() {
+        // Old key should still parse (serde alias).
+        let toml = r#"
+[server]
+url = "http://localhost:8080"
+token = "t"
+
+[scan]
+max_file_size_mb = 50
+"#;
+        let cfg = parse_client_config(toml).unwrap();
+        assert_eq!(cfg.scan.max_content_size_mb, 50);
     }
 }

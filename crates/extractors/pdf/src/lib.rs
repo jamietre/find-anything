@@ -65,8 +65,10 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> an
 
     let mut lines = Vec::new();
     let mut line_num: usize = 0;
+    let max_content_bytes = cfg.max_content_kb * 1024;
+    let mut total_content_bytes: usize = 0;
 
-    for raw_line in text.lines() {
+    'outer: for raw_line in text.lines() {
         let trimmed = raw_line.trim();
         if trimmed.is_empty() {
             continue;
@@ -79,6 +81,10 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> an
         };
 
         for chunk in chunks {
+            total_content_bytes += chunk.len();
+            if total_content_bytes > max_content_bytes {
+                break 'outer;
+            }
             line_num += 1;
             lines.push(IndexLine {
                 archive_path: None,
@@ -136,7 +142,7 @@ mod tests {
 
     fn test_cfg() -> ExtractorConfig {
         ExtractorConfig {
-            max_size_kb: 10 * 1024,
+            max_content_kb: 10 * 1024,
             max_line_length: 0,
             ..Default::default()
         }

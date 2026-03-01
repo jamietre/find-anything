@@ -37,28 +37,24 @@ fn main() {
 
     let path = Path::new(&args[1]);
     let cfg = ExtractorConfig {
-        max_size_kb: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10240),
+        max_content_kb: args.get(2).and_then(|s| s.parse().ok()).unwrap_or(10240),
         max_depth: args.get(3).and_then(|s| s.parse().ok()).unwrap_or(10),
         max_line_length: args.get(4).and_then(|s| s.parse().ok()).unwrap_or(120),
         ..Default::default()
     };
 
-    let mut batches: Vec<find_extract_archive::MemberBatch> = Vec::new();
+    // Emit one JSON object per line (NDJSON) immediately as each member is
+    // extracted, rather than collecting everything into a single array first.
+    // This keeps both the subprocess and the parent process memory-bounded:
+    // the parent can parse and discard each batch as it arrives instead of
+    // buffering the entire output.
     match find_extract_archive::extract_streaming(path, &cfg, &mut |batch| {
-        batches.push(batch);
-    }) {
-        Ok(()) => {
-            match serde_json::to_string_pretty(&batches) {
-                Ok(json) => {
-                    println!("{}", json);
-                    process::exit(0);
-                }
-                Err(e) => {
-                    eprintln!("Error serializing to JSON: {}", e);
-                    process::exit(1);
-                }
-            }
+        match serde_json::to_string(&batch) {
+            Ok(line) => println!("{line}"),
+            Err(e) => eprintln!("Error serializing batch: {e}"),
         }
+    }) {
+        Ok(()) => process::exit(0),
         Err(e) => {
             eprintln!("Error extracting archive from {}: {}", path.display(), e);
             process::exit(1);

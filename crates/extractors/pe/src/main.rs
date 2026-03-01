@@ -14,7 +14,7 @@ fn main() -> anyhow::Result<()> {
         .init();
 
     let cfg = ExtractorConfig {
-        max_size_kb: 100 * 1024,
+        max_content_kb: 100 * 1024,
         max_depth: 10,
         max_line_length: 120,
         ..Default::default()

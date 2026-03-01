@@ -170,7 +170,7 @@ fn zip_from_archive<R: Read + std::io::Seek>(
     cfg: &ExtractorConfig,
     callback: CB<'_>,
 ) -> Result<()> {
-    let size_limit = cfg.max_size_kb * 1024;
+    let size_limit = cfg.max_content_kb * 1024;
 
     for i in 0..archive.len() {
         let mut entry = match archive.by_index(i) {
@@ -194,24 +194,10 @@ fn zip_from_archive<R: Read + std::io::Seek>(
             }
         }
 
-        // Check uncompressed size before allocating — skip reading oversized members.
-        if entry.size() as usize > size_limit {
-            let reason = format!(
-                "too large to index ({}, limit {})",
-                fmt_size(entry.size()), fmt_size(size_limit as u64)
-            );
-            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None, skip_reason: Some(reason) });
-            continue;
-        }
-        // Use take() as a hard memory bound: entry.size() can be wrong for
-        // streaming ZIPs with data descriptors, so guard the actual read too.
+        // Read up to size_limit bytes; truncate naturally via take().
+        // Content is truncated at the limit rather than skipped.
         let mut bytes = Vec::new();
-        let read_result = (&mut entry as &mut dyn Read).take((size_limit + 1) as u64).read_to_end(&mut bytes);
-        if bytes.len() > size_limit {
-            let reason = format!("too large to index (limit {})", fmt_size(size_limit as u64));
-            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None, skip_reason: Some(reason) });
-            continue;
-        }
+        let read_result = (&mut entry as &mut dyn Read).take(size_limit as u64).read_to_end(&mut bytes);
         let skip_reason = if let Err(ref e) = read_result {
             let member_path = std::path::Path::new(&name);
             if find_extract_media::accepts(member_path) {
@@ -231,7 +217,7 @@ fn zip_from_archive<R: Read + std::io::Seek>(
 }
 
 fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
-    let size_limit = cfg.max_size_kb * 1024;
+    let size_limit = cfg.max_content_kb * 1024;
 
     for entry_result in archive.entries().context("reading tar entries")? {
         let mut entry = match entry_result {
@@ -258,26 +244,12 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cf
             }
         }
 
-        // Check uncompressed size before allocating — skip reading oversized members.
-        let entry_size = entry.header().size().unwrap_or(0) as usize;
-        if entry_size > size_limit {
-            let reason = format!(
-                "too large to index ({}, limit {})",
-                fmt_size(entry_size as u64), fmt_size(size_limit as u64)
-            );
-            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None, skip_reason: Some(reason) });
-            continue;
-        }
-        // Use take() as a hard memory bound in case the header size was wrong.
+        // Read up to size_limit bytes; truncate naturally via take().
         // The tar crate drains remaining entry bytes on Entry::drop(), so a
         // partial read here won't desync the stream.
+        // Content is truncated at the limit rather than skipped.
         let mut bytes = Vec::new();
-        let read_result = (&mut entry as &mut dyn Read).take((size_limit + 1) as u64).read_to_end(&mut bytes);
-        if bytes.len() > size_limit {
-            let reason = format!("too large to index (limit {})", fmt_size(size_limit as u64));
-            callback(MemberBatch { lines: make_filename_line(&name), content_hash: None, skip_reason: Some(reason) });
-            continue;
-        }
+        let read_result = (&mut entry as &mut dyn Read).take(size_limit as u64).read_to_end(&mut bytes);
         let skip_reason = if let Err(ref e) = read_result {
             let member_path = std::path::Path::new(&name);
             if find_extract_media::accepts(member_path) {
@@ -328,34 +300,17 @@ fn sevenz_process_entry(
         }
     }
 
-    // Fast-path: skip known-oversized entries immediately.
-    // entry.size() can return 0 for some 7z entries (solid archives where the
-    // per-file size isn't stored in SubStreamsInfo, or "empty file" markers),
-    // so we also guard the actual read with take() below.
-    if entry.size() as usize > size_limit {
-        let reason = format!(
-            "too large to index ({}, limit {})",
-            fmt_size(entry.size()), fmt_size(size_limit as u64)
-        );
-        // Drain the reader to keep solid-block stream in sync.
-        let _ = std::io::copy(reader, &mut std::io::sink());
-        callback(MemberBatch { lines: make_filename_line(&name), content_hash: None, skip_reason: Some(reason) });
-        return Ok(true);
-    }
-    // Bound the read to size_limit+1 bytes regardless of what entry.size()
-    // reported.  If we hit the cap the entry was larger than the limit
-    // (entry.size() was 0 or wrong); drain remainder and skip content.
+    // Read up to size_limit bytes; truncate naturally via take().
+    // Content is truncated at the limit rather than skipped.
+    // After the bounded read, drain any remaining bytes for this entry to keep
+    // the solid-block stream in sync for subsequent entries.
     let mut bytes = Vec::new();
     let read_result = {
-        let mut limited = (reader as &mut dyn Read).take((size_limit + 1) as u64);
+        let mut limited = (reader as &mut dyn Read).take(size_limit as u64);
         limited.read_to_end(&mut bytes)
     };
-    if bytes.len() > size_limit {
-        let reason = format!("too large to index (limit {})", fmt_size(size_limit as u64));
-        let _ = std::io::copy(reader, &mut std::io::sink());
-        callback(MemberBatch { lines: make_filename_line(&name), content_hash: None, skip_reason: Some(reason) });
-        return Ok(true);
-    }
+    // Drain remaining bytes so the solid-block stream stays in sync.
+    let _ = std::io::copy(reader, &mut std::io::sink());
     let skip_reason = if let Err(ref e) = read_result {
         let msg = e.to_string();
         if msg.contains("ChecksumVerificationFailed") {
@@ -382,7 +337,7 @@ fn sevenz_process_entry(
 fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
     use std::collections::HashSet;
 
-    let size_limit = cfg.max_size_kb * 1024;
+    let size_limit = cfg.max_content_kb * 1024;
 
     // Parse the archive header to inspect block sizes before any decompression.
     // The LZMA decoder allocates a dictionary buffer proportional to the block's
@@ -576,7 +531,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
 }
 
 /// Extract a single-file compressed archive (bare .gz, .bz2, .xz).
-/// Decompresses up to `cfg.max_size_kb` bytes and indexes the inner content.
+/// Decompresses up to `cfg.max_content_kb` bytes and indexes the inner content.
 fn single_compressed<R: Read>(reader: R, path: &Path, cfg: &ExtractorConfig) -> Result<MemberBatch> {
     let inner_name = path
         .file_stem()
@@ -584,16 +539,10 @@ fn single_compressed<R: Read>(reader: R, path: &Path, cfg: &ExtractorConfig) -> 
         .unwrap_or("file")
         .to_string();
 
-    let size_limit = cfg.max_size_kb * 1024;
+    let size_limit = cfg.max_content_kb * 1024;
     let mut bytes = Vec::new();
-    reader.take(size_limit as u64 + 1).read_to_end(&mut bytes)?;
-    if bytes.len() > size_limit {
-        return Ok(MemberBatch {
-            lines: make_filename_line(&inner_name),
-            content_hash: None,
-            skip_reason: Some(format!("too large to index (limit {})", fmt_size(size_limit as u64))),
-        });
-    }
+    // Truncate at the limit rather than skipping.
+    reader.take(size_limit as u64).read_to_end(&mut bytes)?;
 
     let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
     Ok(MemberBatch {
@@ -783,14 +732,6 @@ fn make_filename_line(name: &str) -> Vec<IndexLine> {
     }]
 }
 
-/// Format a byte count as a human-readable size string.
-fn fmt_size(bytes: u64) -> String {
-    if bytes >= 1024 * 1024 {
-        format!("{} MB", bytes / (1024 * 1024))
-    } else {
-        format!("{} KB", bytes.div_ceil(1024))
-    }
-}
 
 /// Extract an archive member from raw bytes.
 ///
@@ -799,16 +740,13 @@ fn fmt_size(bytes: u64) -> String {
 /// dispatched directly.  Multi-file archives are NOT handled here — the
 /// caller routes those through `handle_nested_archive` before reaching
 /// this function.
-fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, display_prefix: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
+fn extract_member_bytes(mut bytes: Vec<u8>, entry_name: &str, display_prefix: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
     // Always index the filename so the member is discoverable by name.
     let mut lines = make_filename_line(entry_name);
 
-    // Skip content extraction if the member is too large.
-    if bytes.len() > cfg.max_size_kb * 1024 {
-        return lines;
-    }
-
-    let size_limit = cfg.max_size_kb * 1024;
+    // Truncate bytes at the content limit (defensive — callers already use take()).
+    let size_limit = cfg.max_content_kb * 1024;
+    bytes.truncate(size_limit);
 
     // ── Single-file compressed (.gz / .bz2 / .xz) ────────────────────────────
     // Multi-file archive kinds (.zip, .tar, etc.) are intercepted by the caller;
@@ -821,33 +759,24 @@ fn extract_member_bytes(bytes: Vec<u8>, entry_name: &str, display_prefix: &str, 
                 let decompressed: Option<Vec<u8>> = match kind {
                     ArchiveKind::Gz => {
                         let mut out = Vec::new();
-                        match GzDecoder::new(Cursor::new(&bytes))
-                            .take(size_limit as u64 + 1)
-                            .read_to_end(&mut out)
-                        {
-                            Ok(_) if out.len() <= size_limit => Some(out),
-                            _ => None,
-                        }
+                        let _ = GzDecoder::new(Cursor::new(&bytes))
+                            .take(size_limit as u64)
+                            .read_to_end(&mut out);
+                        if out.is_empty() { None } else { Some(out) }
                     }
                     ArchiveKind::Bz2 => {
                         let mut out = Vec::new();
-                        match BzDecoder::new(Cursor::new(&bytes))
-                            .take(size_limit as u64 + 1)
-                            .read_to_end(&mut out)
-                        {
-                            Ok(_) if out.len() <= size_limit => Some(out),
-                            _ => None,
-                        }
+                        let _ = BzDecoder::new(Cursor::new(&bytes))
+                            .take(size_limit as u64)
+                            .read_to_end(&mut out);
+                        if out.is_empty() { None } else { Some(out) }
                     }
                     ArchiveKind::Xz => {
                         let mut out = Vec::new();
-                        match XzDecoder::new(Cursor::new(&bytes))
-                            .take(size_limit as u64 + 1)
-                            .read_to_end(&mut out)
-                        {
-                            Ok(_) if out.len() <= size_limit => Some(out),
-                            _ => None,
-                        }
+                        let _ = XzDecoder::new(Cursor::new(&bytes))
+                            .take(size_limit as u64)
+                            .read_to_end(&mut out);
+                        if out.is_empty() { None } else { Some(out) }
                     }
                     _ => unreachable!(),
                 };

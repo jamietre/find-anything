@@ -6,6 +6,7 @@ mod file;
 mod search;
 mod stats;
 mod tree;
+pub mod upload;
 
 pub use admin::{inbox_clear, inbox_retry, inbox_show, inbox_status};
 pub use bulk::bulk;
@@ -15,6 +16,7 @@ pub use file::{get_file, list_files};
 pub use search::search;
 pub use stats::get_stats;
 pub use tree::{list_dir, list_sources};
+pub use upload::{upload_init, upload_patch, upload_status};
 pub use self::settings::get_settings;
 
 mod settings;

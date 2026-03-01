@@ -101,13 +101,6 @@ pub fn dispatch_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> V
 /// Does NOT handle archives — the caller is responsible for routing
 /// archive files to `find-extract-archive` before calling this.
 pub fn dispatch_from_path(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
-    // Skip files that exceed the size limit.
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.len() > cfg.max_size_kb as u64 * 1024 {
-            return Ok(vec![]);
-        }
-    }
-
     let bytes = std::fs::read(path)?;
     let name = path.to_string_lossy();
     Ok(dispatch_from_bytes(&bytes, &name, cfg))

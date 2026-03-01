@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
@@ -9,7 +10,7 @@ use walkdir::WalkDir;
 
 use find_common::{
     api::{IndexFile, IndexLine, IndexingFailure},
-    config::{load_dir_override, ExtractorConfig, ScanConfig},
+    config::{load_dir_override, ScanConfig},
 };
 
 use crate::api::ApiClient;
@@ -17,11 +18,25 @@ use crate::batch::{build_index_files, build_member_index_files, submit_batch};
 use crate::extract;
 use crate::lazy_header;
 use crate::subprocess;
+use crate::upload;
 
 
 
 const BATCH_SIZE: usize = 200;
 const BATCH_BYTES: usize = 8 * 1024 * 1024; // 8 MB
+
+/// Hash a file's contents using blake3 without reading the whole file into memory.
+fn hash_file(path: &Path) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = [0u8; 65536];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+    }
+    Some(hasher.finalize().to_hex().to_string())
+}
 const MAX_FAILURES_PER_BATCH: usize = 100;
 const MAX_ERROR_LEN: usize = 500;
 
@@ -77,6 +92,8 @@ pub async fn run_scan(
     // Index in batches.  Mtime is checked per-file as we go — no upfront stat pass.
     let mut indexed: usize = 0;
     let mut skipped: usize = 0;
+    let mut new_files: usize = 0;   // in local but absent from server DB
+    let mut modified: usize = 0;    // mtime changed since last scan
     let mut batch: Vec<IndexFile> = Vec::with_capacity(BATCH_SIZE);
     let mut batch_bytes: usize = 0;
     let mut failures: Vec<IndexingFailure> = Vec::new();
@@ -89,19 +106,25 @@ pub async fn run_scan(
     let mut dir_scan_cache: HashMap<PathBuf, ScanConfig> = HashMap::new();
     let mut dir_excludes_cache: HashMap<PathBuf, GlobSet> = HashMap::new();
 
-    for (rel_path, abs_path) in &local_files {
+    // Sort by relative path for deterministic, reproducible processing order.
+    // HashMap iteration order is randomised per-process, so without this the
+    // same crash would hit a different file each run and logs would differ.
+    let mut local_entries: Vec<(&String, &PathBuf)> = local_files.iter().collect();
+    local_entries.sort_unstable_by(|a, b| a.0.cmp(b.0));
+
+    for (rel_path, abs_path) in local_entries {
         // Check mtime before any further work so unchanged files are skipped cheaply.
         let mtime = mtime_of(abs_path).unwrap_or(0);
         if !full {
             let server_mtime = server_files.get(rel_path.as_str()).copied();
             match server_mtime {
-                None => {}                   // new file — index it
-                Some(sm) if mtime > sm => {} // modified — index it
+                None => { new_files += 1; }                  // new file — index it
+                Some(sm) if mtime > sm => { modified += 1; } // modified — index it
                 Some(_) => {
                     skipped += 1;
                     if last_log.elapsed() >= log_interval {
                         let total = indexed + skipped;
-                    info!("processed {total} files ({skipped} unchanged) so far...");
+                        info!("processed {total} files ({skipped} unchanged, {new_files} new, {modified} modified) so far...");
                         last_log = std::time::Instant::now();
                     }
                     continue;
@@ -111,7 +134,6 @@ pub async fn run_scan(
 
         // Resolve effective config for this file's directory (cached).
         let eff_scan = resolve_effective_scan(abs_path, paths, scan, &mut dir_scan_cache);
-        let cfg = ExtractorConfig::from_scan(&eff_scan);
 
         // Get (or build) the GlobSet for this directory's effective excludes.
         let dir = abs_path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
@@ -133,12 +155,8 @@ pub async fn run_scan(
             // rather than holding the entire archive's content in memory.
             info!("extracting archive {rel_path} ({indexed} indexed so far)");
 
-            // Hash the outer archive file for dedup (only if within size limit).
-            let outer_hash = if size <= (cfg.max_size_kb * 1024) as i64 {
-                std::fs::read(abs_path).ok().map(|bytes| blake3::hash(&bytes).to_hex().to_string())
-            } else {
-                None
-            };
+            // Hash the outer archive file for dedup (streaming to avoid OOM on large archives).
+            let outer_hash = hash_file(abs_path);
 
             // Submit the outer archive file first, before any member batches.
             // The server deletes stale inner members when it sees the outer file,
@@ -157,12 +175,11 @@ pub async fn run_scan(
             batch_bytes = 0;
 
             lazy_header::set_pending(&abs_path.to_string_lossy());
-            let member_batches = subprocess::extract_archive_via_subprocess(
-                abs_path, &eff_scan, &eff_scan.extractor_dir).await;
-            lazy_header::clear_pending();
+            let (mut member_rx, subprocess_task) = subprocess::start_archive_subprocess(
+                abs_path.to_path_buf(), &eff_scan, &eff_scan.extractor_dir);
 
             let mut members_submitted: usize = 0;
-            for member_batch in member_batches {
+            while let Some(member_batch) = member_rx.recv().await {
                 // A batch with empty lines and a skip_reason is a summary failure
                 // that applies to the outer archive itself (e.g. 7z solid block too
                 // large).  Record the failure on the outer archive path and move on.
@@ -213,15 +230,43 @@ pub async fn run_scan(
                     }
                 }
             }
+
+            lazy_header::clear_pending();
+
+            // Check whether the subprocess exited successfully.
+            if !subprocess_task.await.unwrap_or(false) && failures.len() < MAX_FAILURES_PER_BATCH {
+                failures.push(IndexingFailure {
+                    path: rel_path.clone(),
+                    error: "archive extraction subprocess failed".to_string(),
+                });
+            }
         } else {
             // ── Non-archive extraction ───────────────────────────────────────
             // dispatch_from_path handles MIME detection internally: it emits a
             // [FILE:mime] line when no extractor matched the bytes, so we check
             // for that line below to update the kind accordingly.
             lazy_header::set_pending(&abs_path.to_string_lossy());
-            let lines = subprocess::extract_via_subprocess(
+            let outcome = subprocess::extract_via_subprocess(
                 abs_path, &eff_scan, &eff_scan.extractor_dir).await;
             lazy_header::clear_pending();
+
+            let lines = match outcome {
+                subprocess::SubprocessOutcome::Ok(lines) => lines,
+                subprocess::SubprocessOutcome::Failed => {
+                    if eff_scan.server_fallback {
+                        if let Err(e) = upload::upload_file(api, abs_path, rel_path, mtime, source_name).await {
+                            warn!("server fallback upload failed for {rel_path}: {e:#}");
+                            // Fall through: index filename-only so file appears in search.
+                        } else {
+                            // Server will index it; skip local filename-only entry.
+                            continue;
+                        }
+                    }
+                    // Index filename-only so the file is at least findable by name.
+                    vec![]
+                }
+            };
+
             // Refine "unknown" or "text" kind using extracted content:
             // - A [FILE:mime] line emitted by dispatch means binary → use mime_to_kind.
             // - Text content lines (line_number > 0) present → promote to "text".
@@ -239,12 +284,8 @@ pub async fn run_scan(
                 kind
             };
             let extract_ms = t0.elapsed().as_millis() as u64;
-            // Hash raw file bytes for dedup (only if within size limit).
-            let content_hash = if size <= (cfg.max_size_kb * 1024) as i64 {
-                std::fs::read(abs_path).ok().map(|bytes| blake3::hash(&bytes).to_hex().to_string())
-            } else {
-                None
-            };
+            // Hash raw file bytes for dedup (streaming to avoid OOM on large files).
+            let content_hash = hash_file(abs_path);
             let mut index_files = build_index_files(rel_path.clone(), mtime, size, kind, lines);
             if let Some(f) = index_files.first_mut() {
                 f.extract_ms = Some(extract_ms);
@@ -278,8 +319,7 @@ pub async fn run_scan(
     }
     submit_batch(api, source_name, base_url, &mut batch, &mut failures, to_delete, Some(scan_start)).await?;
 
-    let total = indexed + skipped;
-    info!("scan complete — {indexed} indexed, {total} processed ({skipped} unchanged, {deleted} deleted)");
+    info!("scan complete — {indexed} indexed ({new_files} new, {modified} modified), {skipped} unchanged, {deleted} deleted");
     Ok(())
 }
 

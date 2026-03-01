@@ -9,6 +9,25 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-01
+
+### Added
+- **Server-side extraction fallback (`find-upload`)** — when `find-scan`'s extractor subprocess fails (OOM, corrupt file, etc.), the raw file can now be uploaded to the server for server-side extraction via a new resumable chunked upload API (`POST /api/v1/upload`, `PATCH /api/v1/upload/{id}`, `HEAD /api/v1/upload/{id}`); uploads resume automatically from the last acknowledged byte after a connection error; a new `scan.server_fallback = true` config option enables this path; a new `find-upload` binary lets you manually upload a specific file for indexing
+- **`max_content_size_mb` replaces `max_file_size_mb`** — the config key is renamed and the semantics change: files are no longer skipped when they exceed the limit; instead, content is truncated at the limit and the file is always indexed (at minimum by filename); the old key is still accepted with a deprecation warning; all extractors updated to truncate rather than skip — the text extractor uses `.take()`, the archive extractor truncates per-member reads, the PDF extractor stops after hitting the byte limit
+- **Archive extraction streams NDJSON** — `find-extract-archive` now emits one JSON object per line (NDJSON) as each member is extracted, rather than buffering all members into a single array; `find-scan` reads batches through a bounded channel (capacity 8) and processes them one at a time; this eliminates the parent-process OOM that occurred when a large archive (e.g. a zip containing many large text files) produced hundreds of MB of JSON output that was buffered in memory before parsing
+- **Streaming file hash** — content hashes for deduplication now use a 64 KB streaming read instead of `std::fs::read` (which loaded the entire file into memory); eliminates OOM crashes when hashing large files in the main `find-scan` process
+- **Deterministic scan order** — `find-scan` now sorts files alphabetically by relative path before processing; previously HashMap iteration order was randomised per-process, meaning a crash would hit a different file each run; with sorted order the same file appears in the logs each time, making OOM attribution straightforward
+- **Richer scan progress log** — periodic progress now breaks out `new` (absent from server DB) and `modified` (mtime changed) counts separately from `unchanged`; makes it easy to distinguish a partially-populated server DB from actual file modifications; final summary line updated to match
+
+### Fixed
+- **Archive extraction OOM in parent process** — `cmd.output().await` buffered the entire subprocess stdout before returning; for a zip with many large members this could exceed 512 MB in the parent; fixed by switching the archive extractor to NDJSON streaming and reading line-by-line in the parent via a bounded channel
+- **Large-file hash OOM** — `std::fs::read` in the archive and non-archive paths allocated the full file size in the parent process before the subprocess even ran; replaced with a 64 KB streaming hasher
+- **Axum upload route syntax** — upload routes used the old axum v0.6 `:id` capture syntax; axum v0.7+ requires `{id}`; caused a panic at server startup with "Path segments must not start with `:`"
+- **`find-watch` crash on `SubprocessOutcome`** — `watch.rs` was passing the result of `extract_via_subprocess` directly to `build_index_files` without unwrapping the new `SubprocessOutcome` enum, causing a compile error
+
+### Changed
+- **`ExtractionSettings` server config section** — server `server.toml` gains an `[extraction]` section (`max_content_size_mb`, `max_line_length`, `max_archive_depth`) used when extracting uploaded files server-side; defaults match the client defaults
+
 ## [0.3.1] - 2026-02-28
 
 ### Added

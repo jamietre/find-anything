@@ -13,13 +13,13 @@ use gray_matter::{engine::YAML, Matter, Pod};
 /// - Markdown (with frontmatter extraction)
 /// - Config files (JSON, YAML, TOML, etc.)
 ///
-/// # Arguments
-/// * `path` - Path to the file
-/// * `_max_size_kb` - Maximum file size in KB (currently unused, for future size limiting)
+/// Content is truncated at `cfg.max_content_kb` bytes.
 ///
 /// # Returns
 /// Vector of IndexLine objects, one per non-empty line
-pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+    let content_limit = cfg.max_content_kb * 1024;
+
     // Check if this is a Markdown file that might have frontmatter
     let is_markdown = path
         .extension()
@@ -28,14 +28,17 @@ pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexL
         .unwrap_or(false);
 
     if is_markdown {
-        // Read entire file to parse frontmatter
-        let content = std::fs::read_to_string(path)?;
+        // Read up to content_limit bytes to parse frontmatter
+        let file = std::fs::File::open(path)?;
+        let mut buf = Vec::new();
+        file.take(content_limit as u64).read_to_end(&mut buf)?;
+        let content = String::from_utf8_lossy(&buf);
         return Ok(extract_markdown_with_frontmatter(&content));
     }
 
-    // Non-Markdown: use efficient line-by-line reading
+    // Non-Markdown: use efficient line-by-line reading, bounded by content limit
     let file = std::fs::File::open(path)?;
-    let reader = BufReader::new(file);
+    let reader = BufReader::new(file.take(content_limit as u64));
 
     Ok(reader
         .lines()

@@ -8,11 +8,7 @@ use find_common::config::ExtractorConfig;
 ///
 /// Used by `find-extract-dispatch` for archive members. Does not include a
 /// filename line — the caller adds that.
-pub fn extract_from_bytes(bytes: &[u8], _name: &str, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
-    let size_kb = bytes.len() / 1024;
-    if size_kb > cfg.max_size_kb {
-        return Ok(vec![]);
-    }
+pub fn extract_from_bytes(bytes: &[u8], _name: &str, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     let version_info = extract_version_info(bytes)?;
     Ok(version_info
         .lines()
@@ -31,20 +27,9 @@ pub fn extract_from_bytes(bytes: &[u8], _name: &str, cfg: &ExtractorConfig) -> a
 /// - Windows executables (.exe, .dll, .sys, .scr, .cpl, .ocx)
 /// - Version info resources (product, version, company, copyright, etc.)
 ///
-/// # Arguments
-/// * `path` - Path to the PE file
-/// * `max_size_kb` - Maximum file size in KB (files larger than this are skipped)
-///
 /// # Returns
 /// Vector of IndexLine objects with metadata at line_number=0
-pub fn extract(path: &Path, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
-    // Check file size
-    let metadata = fs::metadata(path)?;
-    let size_kb = metadata.len() / 1024;
-    if size_kb > cfg.max_size_kb as u64 {
-        return Ok(vec![]);
-    }
-
+pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     // Read the file
     let data = fs::read(path)?;
 

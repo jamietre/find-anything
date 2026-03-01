@@ -19,10 +19,7 @@ pub fn accepts(path: &Path) -> bool {
 /// Extract text content from HTML bytes.
 ///
 /// Used by `find-extract-dispatch` for archive members and other in-memory sources.
-pub fn extract_from_bytes(bytes: &[u8], _name: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
-    if bytes.len() > cfg.max_size_kb * 1024 {
-        return vec![];
-    }
+pub fn extract_from_bytes(bytes: &[u8], _name: &str, _cfg: &ExtractorConfig) -> Vec<IndexLine> {
     let src = String::from_utf8_lossy(bytes);
     extract_from_str(&src)
 }
@@ -36,11 +33,8 @@ pub fn extract_from_bytes(bytes: &[u8], _name: &str, cfg: &ExtractorConfig) -> V
 /// Content lines (line_number ≥ 1): visible text from block-level elements
 /// (h1–h6, p, li, td, th, pre, blockquote, figcaption), skipping elements
 /// inside nav/header/footer/script/style.
-pub fn extract(path: &Path, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
+pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     let bytes = std::fs::read(path)?;
-    if bytes.len() > cfg.max_size_kb * 1024 {
-        return Ok(vec![]);
-    }
     let src = String::from_utf8_lossy(&bytes);
     Ok(extract_from_str(&src))
 }
