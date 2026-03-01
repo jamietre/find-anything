@@ -343,6 +343,15 @@ pub struct KindStats {
     pub avg_extract_ms: Option<f64>,
 }
 
+/// Per-extension breakdown entry in `SourceStats`.
+/// Sorted by count descending; covers outer files only (no archive members).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtStat {
+    pub ext: String,
+    pub count: usize,
+    pub size: i64,
+}
+
 /// One point in the scan history time series.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScanHistoryPoint {
@@ -380,6 +389,9 @@ pub struct SourceStats {
     pub total_files: usize,
     pub total_size: i64,
     pub by_kind: std::collections::HashMap<String, KindStats>,
+    /// File counts by extension, sorted by count descending (outer files only).
+    #[serde(default)]
+    pub by_ext: Vec<ExtStat>,
     pub history: Vec<ScanHistoryPoint>,
     /// Number of files with recorded indexing errors.
     #[serde(default)]

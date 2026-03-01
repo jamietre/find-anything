@@ -3,6 +3,9 @@
 	import { getStats } from '$lib/api';
 	import type { SourceStats, StatsResponse } from '$lib/api';
 
+	let breakdownMode: 'kind' | 'ext' = 'kind';
+	let showAllExt = false;
+
 	let stats: StatsResponse | null = null;
 	let initialLoading = true;
 	let error: string | null = null;
@@ -201,23 +204,62 @@
 			{/if}
 		</div>
 
-		<!-- By Kind -->
-		{#if Object.keys(currentSource.by_kind).length > 0}
-			<div class="section-title">By Kind</div>
-			<div class="kinds">
-				{#each sortedKinds(currentSource) as [kind, ks] (kind)}
-					{@const pct = currentSource.total_files > 0 ? (ks.count / currentSource.total_files) * 100 : 0}
-					<div class="kind-row">
-						<span class="kind-name">{kind}</span>
-						<div class="kind-bar-wrap">
-							<div class="kind-bar" style="width: {pct}%"></div>
-						</div>
-						<span class="kind-count">{ks.count.toLocaleString()}</span>
-						<span class="kind-size">{fmtSize(ks.size)}</span>
-						<span class="kind-ms">{fmtMs(ks.avg_extract_ms)}</span>
-					</div>
-				{/each}
+		<!-- Breakdown toggle + rows -->
+		{#if Object.keys(currentSource.by_kind).length > 0 || (currentSource.by_ext ?? []).length > 0}
+			<div class="section-header">
+				<span class="section-title" style="margin: 0">Breakdown</span>
+				<div class="mode-toggle">
+					<button
+						class="mode-btn"
+						class:active={breakdownMode === 'kind'}
+						on:click={() => { breakdownMode = 'kind'; showAllExt = false; }}
+					>Kind</button>
+					<button
+						class="mode-btn"
+						class:active={breakdownMode === 'ext'}
+						on:click={() => { breakdownMode = 'ext'; showAllExt = false; }}
+					>Extension</button>
+				</div>
 			</div>
+
+			{#if breakdownMode === 'kind'}
+				<div class="kinds">
+					{#each sortedKinds(currentSource) as [kind, ks] (kind)}
+						{@const pct = currentSource.total_files > 0 ? (ks.count / currentSource.total_files) * 100 : 0}
+						<div class="kind-row">
+							<span class="kind-name">{kind}</span>
+							<div class="kind-bar-wrap">
+								<div class="kind-bar" style="width: {pct}%"></div>
+							</div>
+							<span class="kind-count">{ks.count.toLocaleString()}</span>
+							<span class="kind-size">{fmtSize(ks.size)}</span>
+							<span class="kind-ms">{fmtMs(ks.avg_extract_ms)}</span>
+						</div>
+					{/each}
+				</div>
+			{:else}
+				{@const exts = currentSource.by_ext ?? []}
+				{@const visible = showAllExt ? exts : exts.slice(0, 20)}
+				<div class="kinds">
+					{#each visible as es (es.ext)}
+						{@const pct = currentSource.total_files > 0 ? (es.count / currentSource.total_files) * 100 : 0}
+						<div class="kind-row">
+							<span class="kind-name">.{es.ext}</span>
+							<div class="kind-bar-wrap">
+								<div class="kind-bar" style="width: {pct}%"></div>
+							</div>
+							<span class="kind-count">{es.count.toLocaleString()}</span>
+							<span class="kind-size">{fmtSize(es.size)}</span>
+							<span class="kind-ms"></span>
+						</div>
+					{/each}
+				</div>
+				{#if exts.length > 20}
+					<button class="show-more" on:click={() => (showAllExt = !showAllExt)}>
+						{showAllExt ? 'Show less' : `Show all ${exts.length} extensions`}
+					</button>
+				{/if}
+			{/if}
 		{/if}
 
 		<!-- Items over time -->
@@ -439,6 +481,60 @@
 		color: var(--text-muted);
 		margin-bottom: 10px;
 		margin-top: 16px;
+	}
+
+	/* Breakdown section header with toggle */
+	.section-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		margin-bottom: 10px;
+		margin-top: 16px;
+	}
+
+	.mode-toggle {
+		display: flex;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		overflow: hidden;
+	}
+
+	.mode-btn {
+		background: transparent;
+		border: none;
+		color: var(--text-muted);
+		cursor: pointer;
+		font-size: 11px;
+		font-weight: 500;
+		padding: 3px 10px;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+	}
+
+	.mode-btn:hover {
+		background: var(--bg);
+		color: var(--text);
+	}
+
+	.mode-btn.active {
+		background: var(--accent, #3b82f6);
+		color: #fff;
+	}
+
+	.show-more {
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		color: var(--text-muted);
+		cursor: pointer;
+		font-size: 11px;
+		margin-top: 6px;
+		padding: 4px 10px;
+	}
+
+	.show-more:hover {
+		background: var(--bg);
+		color: var(--text);
 	}
 
 	/* By Kind */

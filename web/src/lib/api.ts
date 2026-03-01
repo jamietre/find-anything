@@ -234,12 +234,19 @@ export interface ScanHistoryPoint {
 	total_size: number;
 }
 
+export interface ExtStat {
+	ext: string;
+	count: number;
+	size: number;
+}
+
 export interface SourceStats {
 	name: string;
 	last_scan: number | null;
 	total_files: number;
 	total_size: number;
 	by_kind: Record<string, KindStats>;
+	by_ext: ExtStat[];
 	history: ScanHistoryPoint[];
 	indexing_error_count: number;
 }

@@ -91,6 +91,7 @@ pub async fn get_stats(
                         total_files: 0,
                         total_size: 0,
                         by_kind: Default::default(),
+                        by_ext: vec![],
                         history: vec![],
                         indexing_error_count: 0,
                         fts_row_count: 0,
@@ -99,10 +100,11 @@ pub async fn get_stats(
                 let conn = db::open(&db_path)?;
                 let last_scan = db::get_last_scan(&conn)?;
                 let (total_files, total_size, by_kind) = db::get_stats(&conn)?;
+                let by_ext = db::get_stats_by_ext(&conn).unwrap_or_default();
                 let history = db::get_scan_history(&conn, 100)?;
                 let indexing_error_count = db::get_indexing_error_count(&conn)?;
                 let fts_row_count = db::get_fts_row_count(&conn).unwrap_or(0);
-                Ok(SourceStats { name: source_name, last_scan, total_files, total_size, by_kind, history, indexing_error_count, fts_row_count })
+                Ok(SourceStats { name: source_name, last_scan, total_files, total_size, by_kind, by_ext, history, indexing_error_count, fts_row_count })
             })
         })
         .collect();

@@ -1186,6 +1186,49 @@ pub fn get_stats(conn: &Connection) -> Result<(usize, i64, HashMap<String, KindS
     Ok((total_files, total_size, by_kind))
 }
 
+/// Returns file counts by extension for outer files (no archive members),
+/// sorted by count descending, limited to 100 rows.
+///
+/// Extension is extracted from the filename component of the path: the part
+/// after the last `.` in the basename.  Files without an extension are omitted.
+pub fn get_stats_by_ext(conn: &Connection) -> Result<Vec<find_common::api::ExtStat>> {
+    let mut stmt = conn.prepare(
+        "WITH parts AS (
+             SELECT
+                 CASE WHEN INSTR(path, '/') > 0
+                      THEN SUBSTR(path, LENGTH(path) - INSTR(REVERSE(path), '/') + 2)
+                      ELSE path
+                 END AS basename,
+                 COALESCE(size, 0) AS size
+             FROM files
+             WHERE path NOT LIKE '%::%'
+         )
+         SELECT
+             LOWER(SUBSTR(basename,
+                          LENGTH(basename) - INSTR(REVERSE(basename), '.') + 2)) AS ext,
+             COUNT(*)               AS cnt,
+             COALESCE(SUM(size), 0) AS total_size
+         FROM parts
+         WHERE INSTR(basename, '.') > 0
+           AND LENGTH(LOWER(SUBSTR(basename,
+                                   LENGTH(basename) - INSTR(REVERSE(basename), '.') + 2))) > 0
+         GROUP BY ext
+         ORDER BY cnt DESC
+         LIMIT 100",
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(find_common::api::ExtStat {
+            ext:   row.get::<_, String>(0)?,
+            count: row.get::<_, i64>(1)? as usize,
+            size:  row.get::<_, i64>(2)?,
+        })
+    })?
+    .collect::<rusqlite::Result<_>>()?;
+
+    Ok(rows)
+}
+
 /// Snapshot the current totals into the scan_history table.
 pub fn append_scan_history(conn: &Connection, scanned_at: i64) -> Result<()> {
     let (total_files, total_size, by_kind) = get_stats(conn)?;
