@@ -172,6 +172,8 @@ fn is_binary_ext(ext: &str) -> bool {
         | "bin" | "img" | "iso" | "dmg" | "vmdk" | "vhd" | "qcow2"
         | "db" | "sqlite" | "sqlite3" | "mdb"
         | "ttf" | "otf" | "woff" | "woff2"
+        // dtSearch and other search-engine binary index formats
+        | "ix" | "ixd" | "ixh"
     )
 }
 
