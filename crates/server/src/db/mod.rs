@@ -34,13 +34,22 @@ pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("opening {}", db_path.display()))?;
     register_scalar_functions(&conn)?;
-    check_schema_version(&conn, db_path)?;
-    conn.execute_batch(include_str!("../schema_v2.sql"))
-        .context("initialising schema")?;
-    migrate_v3(&conn).context("v3 migration")?;
-    migrate_v4(&conn).context("v4 migration")?;
-    migrate_v5(&conn).context("v5 migration")?;
-    migrate_v6(&conn).context("v6 migration")?;
+
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version == 0 {
+        // Brand-new database — initialise the full current schema and stamp the version.
+        conn.execute_batch(include_str!("../schema_v2.sql"))
+            .context("initialising schema")?;
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
+            .context("stamping schema version")?;
+    } else if version != SCHEMA_VERSION {
+        anyhow::bail!(
+            "database schema is v{version} but this server requires v{SCHEMA_VERSION}. \
+             Delete {} and re-run `find-scan --full` to rebuild.",
+            db_path.display()
+        );
+    }
+
     Ok(conn)
 }
 
@@ -68,128 +77,6 @@ pub fn register_scalar_functions(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Check that the database schema version is compatible before touching any tables.
-/// Fails with a clear message if the DB is from an incompatible version.
-fn check_schema_version(conn: &Connection, db_path: &Path) -> Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-
-    // Current version: fine.
-    if version == SCHEMA_VERSION {
-        return Ok(());
-    }
-
-    // v3, v4, and v5 are migratable forward via the migration chain.
-    if version == 3 || version == 4 || version == 5 {
-        return Ok(());
-    }
-
-    // Known incompatible future version or very old version.
-    if version != 0 {
-        anyhow::bail!(
-            "database schema is v{version} but this server requires v{SCHEMA_VERSION}. \
-             Delete {} and re-run `find-scan --full` to rebuild.",
-            db_path.display()
-        );
-    }
-
-    // version == 0: either a brand-new empty DB (fine) or a pre-versioned old DB (not fine).
-    // Distinguish by checking whether `lines` exists without the `chunk_archive` column.
-    let lines_exists: bool = conn
-        .query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='lines'",
-            [],
-            |r| r.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        > 0;
-
-    if lines_exists && conn.prepare("SELECT chunk_archive FROM lines LIMIT 0").is_err() {
-        anyhow::bail!(
-            "database has an incompatible schema (predates chunk-based storage). \
-             Delete {} and re-run `find-scan --full` to rebuild.",
-            db_path.display()
-        );
-    }
-
-    Ok(())
-}
-
-fn migrate_v3(conn: &Connection) -> Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 3 {
-        return Ok(());
-    }
-    conn.execute_batch(
-        "ALTER TABLE files ADD COLUMN indexed_at INTEGER;
-         ALTER TABLE files ADD COLUMN extract_ms INTEGER;
-         CREATE TABLE IF NOT EXISTS scan_history (
-             id          INTEGER PRIMARY KEY AUTOINCREMENT,
-             scanned_at  INTEGER NOT NULL,
-             total_files INTEGER NOT NULL,
-             total_size  INTEGER NOT NULL,
-             by_kind     TEXT    NOT NULL
-         );
-         PRAGMA user_version = 3;",
-    )?;
-    Ok(())
-}
-
-fn migrate_v4(conn: &Connection) -> Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 4 {
-        return Ok(());
-    }
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS indexing_errors (
-             id         INTEGER PRIMARY KEY AUTOINCREMENT,
-             path       TEXT    NOT NULL UNIQUE,
-             error      TEXT    NOT NULL,
-             first_seen INTEGER NOT NULL,
-             last_seen  INTEGER NOT NULL,
-             count      INTEGER NOT NULL DEFAULT 1
-         );
-         PRAGMA user_version = 4;",
-    )?;
-    Ok(())
-}
-
-fn migrate_v5(conn: &Connection) -> Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 5 {
-        return Ok(());
-    }
-    conn.execute_batch(
-        "ALTER TABLE files ADD COLUMN content_hash TEXT;
-         ALTER TABLE files ADD COLUMN canonical_file_id INTEGER REFERENCES files(id) ON DELETE SET NULL;
-         CREATE INDEX IF NOT EXISTS files_content_hash ON files(content_hash)
-             WHERE content_hash IS NOT NULL;
-         CREATE INDEX IF NOT EXISTS files_canonical ON files(canonical_file_id)
-             WHERE canonical_file_id IS NOT NULL;
-         PRAGMA user_version = 5;",
-    )?;
-    Ok(())
-}
-
-fn migrate_v6(conn: &Connection) -> Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    if version >= 6 {
-        return Ok(());
-    }
-    // The lines_fts table may have been created with the default unicode61 tokenizer
-    // if the database predates the trigram tokenizer being added to schema_v2.sql.
-    // The `CREATE VIRTUAL TABLE IF NOT EXISTS` in the schema silently skips recreation,
-    // leaving the old tokenizer in place. Drop and recreate to force trigram.
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS lines_fts;
-         CREATE VIRTUAL TABLE lines_fts USING fts5(
-             content,
-             content       = '',
-             tokenize      = 'trigram'
-         );
-         PRAGMA user_version = 6;",
-    )?;
-    Ok(())
-}
 
 /// Check all existing source databases in `sources_dir` for schema compatibility.
 /// Called at server startup so an incompatible DB causes an immediate fatal error
@@ -206,7 +93,14 @@ pub fn check_all_sources(sources_dir: &Path) -> Result<()> {
         }
         let conn = Connection::open(&path)
             .with_context(|| format!("opening {}", path.display()))?;
-        check_schema_version(&conn, &path)?;
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version != 0 && version != SCHEMA_VERSION {
+            anyhow::bail!(
+                "database schema is v{version} but this server requires v{SCHEMA_VERSION}. \
+                 Delete {} and re-run `find-scan --full` to rebuild.",
+                path.display()
+            );
+        }
     }
     Ok(())
 }
