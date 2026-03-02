@@ -7,13 +7,12 @@ use axum::{
     Json,
 };
 use serde::Deserialize;
-use tokio::task::spawn_blocking;
 
 use find_common::api::{SourceInfo, TreeResponse};
 
 use crate::{db, AppState};
 
-use super::{check_auth, source_db_path};
+use super::{check_auth, run_blocking, source_db_path};
 
 // ── GET /api/v1/sources ───────────────────────────────────────────────────────
 
@@ -79,21 +78,8 @@ pub async fn list_dir(
     }
 
     let prefix = params.prefix.clone();
-    let result = spawn_blocking(move || {
+    run_blocking("list_dir", move || {
         let conn = db::open(&db_path)?;
-        db::list_dir(&conn, &prefix)
-    })
-    .await;
-
-    match result {
-        Ok(Ok(entries)) => Json(TreeResponse { entries }).into_response(),
-        Ok(Err(e)) => {
-            tracing::error!("list_dir error: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-        Err(e) => {
-            tracing::error!("list_dir task error: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        db::list_dir(&conn, &prefix).map(|entries| Json(TreeResponse { entries }))
+    }).await
 }

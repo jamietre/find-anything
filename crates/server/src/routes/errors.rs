@@ -2,18 +2,17 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::IntoResponse,
     Json,
 };
 use serde::Deserialize;
-use tokio::task::spawn_blocking;
 
 use find_common::api::ErrorsResponse;
 
 use crate::{db, AppState};
 
-use super::{check_auth, source_db_path};
+use super::{check_auth, run_blocking, source_db_path};
 
 // ── GET /api/v1/errors?source=X[&limit=200&offset=0] ─────────────────────────
 
@@ -45,19 +44,10 @@ pub async fn get_errors(
     let limit = params.limit.min(1000);
     let offset = params.offset;
 
-    match spawn_blocking(move || {
+    run_blocking("get_errors", move || {
         let conn = db::open(&db_path)?;
         let total = db::get_indexing_error_count(&conn)?;
         let errors = db::get_indexing_errors(&conn, limit, offset)?;
-        Ok::<_, anyhow::Error>(ErrorsResponse { errors, total })
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
-    {
-        Ok(resp) => Json(resp).into_response(),
-        Err(e) => {
-            tracing::error!("get_errors: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        Ok(Json(ErrorsResponse { errors, total }))
+    }).await
 }

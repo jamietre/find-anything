@@ -9,7 +9,6 @@ use axum::{
 };
 use flate2::read::GzDecoder;
 use serde::Deserialize;
-use tokio::task::spawn_blocking;
 
 use find_common::api::{
     InboxDeleteResponse, InboxItem, InboxRetryResponse, InboxShowFile, InboxShowResponse,
@@ -18,7 +17,7 @@ use find_common::api::{
 
 use crate::AppState;
 
-use super::check_auth;
+use super::{check_auth, run_blocking};
 
 // ── GET /api/v1/admin/inbox ───────────────────────────────────────────────────
 
@@ -33,7 +32,7 @@ pub async fn inbox_status(
     let inbox_dir = state.data_dir.join("inbox");
     let failed_dir = inbox_dir.join("failed");
 
-    let result = spawn_blocking(move || -> anyhow::Result<InboxStatusResponse> {
+    run_blocking("inbox_status", move || -> anyhow::Result<_> {
         let now = SystemTime::now();
 
         let read_items = |dir: &std::path::Path| -> Vec<InboxItem> {
@@ -66,17 +65,8 @@ pub async fn inbox_status(
 
         let pending = read_items(&inbox_dir);
         let failed = read_items(&failed_dir);
-        Ok(InboxStatusResponse { pending, failed })
-    })
-    .await;
-
-    match result.unwrap_or_else(|e| Err(anyhow::anyhow!(e))) {
-        Ok(resp) => Json(resp).into_response(),
-        Err(e) => {
-            tracing::error!("inbox_status error: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        Ok(Json(InboxStatusResponse { pending, failed }))
+    }).await
 }
 
 // ── DELETE /api/v1/admin/inbox ────────────────────────────────────────────────
@@ -104,7 +94,7 @@ pub async fn inbox_clear(
     let failed_dir = inbox_dir.join("failed");
     let target = query.target.clone();
 
-    let result = spawn_blocking(move || -> anyhow::Result<usize> {
+    run_blocking("inbox_clear", move || -> anyhow::Result<_> {
         let delete_gz_in = |dir: &std::path::Path| -> usize {
             let rd = match std::fs::read_dir(dir) {
                 Ok(rd) => rd,
@@ -127,17 +117,8 @@ pub async fn inbox_clear(
             "all" => delete_gz_in(&inbox_dir) + delete_gz_in(&failed_dir),
             _ => delete_gz_in(&inbox_dir), // "pending" or anything else
         };
-        Ok(deleted)
-    })
-    .await;
-
-    match result.unwrap_or_else(|e| Err(anyhow::anyhow!(e))) {
-        Ok(deleted) => Json(InboxDeleteResponse { deleted }).into_response(),
-        Err(e) => {
-            tracing::error!("inbox_clear error: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        Ok(Json(InboxDeleteResponse { deleted }))
+    }).await
 }
 
 // ── POST /api/v1/admin/inbox/retry ────────────────────────────────────────────
@@ -153,10 +134,10 @@ pub async fn inbox_retry(
     let inbox_dir = state.data_dir.join("inbox");
     let failed_dir = inbox_dir.join("failed");
 
-    let result = spawn_blocking(move || -> anyhow::Result<usize> {
+    run_blocking("inbox_retry", move || -> anyhow::Result<_> {
         let rd = match std::fs::read_dir(&failed_dir) {
             Ok(rd) => rd,
-            Err(_) => return Ok(0),
+            Err(_) => return Ok(Json(InboxRetryResponse { retried: 0 })),
         };
         let mut count = 0;
         for entry in rd.filter_map(|e| e.ok()) {
@@ -168,17 +149,8 @@ pub async fn inbox_retry(
                 }
             }
         }
-        Ok(count)
-    })
-    .await;
-
-    match result.unwrap_or_else(|e| Err(anyhow::anyhow!(e))) {
-        Ok(retried) => Json(InboxRetryResponse { retried }).into_response(),
-        Err(e) => {
-            tracing::error!("inbox_retry error: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        Ok(Json(InboxRetryResponse { retried: count }))
+    }).await
 }
 
 // ── GET /api/v1/admin/inbox/show ──────────────────────────────────────────────
@@ -200,21 +172,19 @@ pub async fn inbox_show(
     let inbox_dir = state.data_dir.join("inbox");
     let failed_dir = inbox_dir.join("failed");
 
-    let result = spawn_blocking(move || -> anyhow::Result<Option<InboxShowResponse>> {
-        // Normalise: ensure the name ends in .gz
+    run_blocking("inbox_show", move || -> anyhow::Result<_> {
         let filename = if query.name.ends_with(".gz") {
             query.name.clone()
         } else {
             format!("{}.gz", query.name)
         };
 
-        // Look in pending first, then failed.
         let (path, queue) = if inbox_dir.join(&filename).exists() {
             (inbox_dir.join(&filename), "pending")
         } else if failed_dir.join(&filename).exists() {
             (failed_dir.join(&filename), "failed")
         } else {
-            return Ok(None);
+            return Ok(StatusCode::NOT_FOUND.into_response());
         };
 
         let raw = std::fs::read(&path)?;
@@ -231,23 +201,13 @@ pub async fn inbox_show(
             })
             .collect();
 
-        Ok(Some(InboxShowResponse {
+        Ok(Json(InboxShowResponse {
             queue: queue.to_string(),
             source: req.source,
             files,
             delete_paths: req.delete_paths,
             failures: req.indexing_failures,
             scan_timestamp: req.scan_timestamp,
-        }))
-    })
-    .await;
-
-    match result.unwrap_or_else(|e| Err(anyhow::anyhow!(e))) {
-        Ok(Some(resp)) => Json(resp).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => {
-            tracing::error!("inbox_show error: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        }).into_response())
+    }).await
 }

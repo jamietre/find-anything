@@ -2,18 +2,17 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::IntoResponse,
     Json,
 };
 use serde::Deserialize;
-use tokio::task::spawn_blocking;
 
 use find_common::api::FileResponse;
 
 use crate::{archive::ArchiveManager, db, AppState};
 
-use super::{check_auth, source_db_path};
+use super::{check_auth, composite_path, run_blocking, source_db_path};
 
 // ── GET /api/v1/file?source=X&path=Y[&archive_path=Z] ────────────────────────
 //
@@ -43,17 +42,13 @@ pub async fn get_file(
     };
 
     // Build composite path from path + optional archive_path (backward compat).
-    let full_path = match &params.archive_path {
-        Some(ap) if !ap.is_empty() => format!("{}::{}", params.path, ap),
-        _ => params.path.clone(),
-    };
-
+    let full_path = composite_path(&params.path, params.archive_path.as_deref());
     let data_dir = state.data_dir.clone();
-    match spawn_blocking(move || {
+
+    run_blocking("get_file", move || {
         let conn = db::open(&db_path)?;
         let archive_mgr = ArchiveManager::new(data_dir);
 
-        // Query file metadata
         let (kind, mtime, size): (String, Option<i64>, Option<i64>) = conn
             .query_row(
                 "SELECT kind, mtime, size FROM files WHERE path = ?1",
@@ -65,31 +60,13 @@ pub async fn get_file(
         let lines = db::get_file_lines(&conn, &archive_mgr, &full_path)?;
         let total_lines = lines.len();
         // For archive members (path contains "::"), fall back to the outer archive's
-        // error if no per-member error was recorded.  This covers cases like 7z solid
-        // blocks where one failure is stored on the outer archive path rather than on
-        // each of the (potentially thousands of) member paths.
+        // error if no per-member error was recorded.
         let indexing_error = db::get_indexing_error(&conn, &full_path)?.or_else(|| {
             let outer = full_path.split_once("::")?.0;
             db::get_indexing_error(&conn, outer).ok().flatten()
         });
-        Ok::<_, anyhow::Error>(FileResponse {
-            lines,
-            file_kind: kind,
-            total_lines,
-            mtime,
-            size,
-            indexing_error,
-        })
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
-    {
-        Ok(resp) => Json(resp).into_response(),
-        Err(e) => {
-            tracing::error!("get_file: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        Ok(Json(FileResponse { lines, file_kind: kind, total_lines, mtime, size, indexing_error }))
+    }).await
 }
 
 // ── GET /api/v1/files?source=<name> ──────────────────────────────────────────
@@ -111,17 +88,8 @@ pub async fn list_files(
         Err(s) => return (s, Json(serde_json::Value::Null)).into_response(),
     };
 
-    match spawn_blocking(move || {
+    run_blocking("list_files", move || {
         let conn = db::open(&db_path)?;
-        db::list_files(&conn)
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
-    {
-        Ok(files) => Json(files).into_response(),
-        Err(e) => {
-            tracing::error!("list_files: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        db::list_files(&conn).map(Json)
+    }).await
 }

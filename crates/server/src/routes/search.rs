@@ -8,10 +8,10 @@ use axum::{
 };
 use tokio::task::spawn_blocking;
 
-use find_common::api::{SearchResponse, SearchResult};
+use find_common::api::{ContextLine, SearchResponse, SearchResult};
 
 use crate::fuzzy::FuzzyScorer;
-use crate::{archive::ArchiveManager, db, AppState};
+use crate::{archive::ArchiveManager, db, db::search::CandidateRow, AppState};
 
 use super::{check_auth, source_db_path};
 
@@ -104,6 +104,27 @@ fn make_resource_url(base_url: &Option<String>, path: &str) -> Option<String> {
     })
 }
 
+fn make_result(
+    source: &str,
+    base_url: &Option<String>,
+    c: &CandidateRow,
+    score: u32,
+    extra_matches: Vec<ContextLine>,
+) -> SearchResult {
+    SearchResult {
+        source: source.to_string(),
+        path: c.file_path.clone(),
+        archive_path: c.archive_path.clone(),
+        line_number: c.line_number,
+        snippet: c.content.clone(),
+        score,
+        context_lines: vec![],
+        resource_url: make_resource_url(base_url, &c.file_path),
+        aliases: vec![],
+        extra_matches,
+    }
+}
+
 pub async fn search(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
@@ -167,24 +188,10 @@ pub async fn search(
                         .map(|(rep, extras)| {
                             let file_id = rep.file_id;
                             let score = scorer.score(&rep.content).unwrap_or(0);
-                            let extra_matches = extras.into_iter().map(|e| {
-                                find_common::api::ContextLine {
-                                    line_number: e.line_number,
-                                    content: e.content,
-                                }
-                            }).collect();
-                            (SearchResult {
-                                source: source_name.clone(),
-                                path: rep.file_path.clone(),
-                                archive_path: rep.archive_path,
-                                line_number: rep.line_number,
-                                snippet: rep.content,
-                                score,
-                                context_lines: vec![],
-                                resource_url: make_resource_url(&base_url, &rep.file_path),
-                                aliases: vec![],
-                                extra_matches,
-                            }, file_id)
+                            let extra_matches = extras.into_iter()
+                                .map(|e| ContextLine { line_number: e.line_number, content: e.content })
+                                .collect();
+                            (make_result(&source_name, &base_url, &rep, score, extra_matches), file_id)
                         })
                         .collect();
                     let canonical_ids: Vec<i64> = result_pairs.iter().map(|(_, id)| *id).collect();
@@ -219,60 +226,23 @@ pub async fn search(
                 let result_pairs: Vec<(SearchResult, i64)> = match mode.as_str() {
                     "exact" => {
                         // FTS5 trigram is already a substring match — candidates are the answer.
-                        candidates.into_iter().map(|c| {
-                            let file_id = c.file_id;
-                            (SearchResult {
-                                source: source_name.clone(),
-                                path: c.file_path.clone(),
-                                archive_path: c.archive_path,
-                                line_number: c.line_number,
-                                snippet: c.content,
-                                score: 0,
-                                context_lines: vec![],
-                                resource_url: make_resource_url(&base_url, &c.file_path),
-                                aliases: vec![],
-                                extra_matches: vec![],
-                            }, file_id)
-                        }).collect()
+                        candidates.into_iter()
+                            .map(|c| (make_result(&source_name, &base_url, &c, 0, vec![]), c.file_id))
+                            .collect()
                     }
                     "regex" => {
                         let re = regex::RegexBuilder::new(&query).case_insensitive(true).build()?;
                         candidates.into_iter()
                             .filter(|c| re.is_match(&c.content))
-                            .map(|c| {
-                                let file_id = c.file_id;
-                                (SearchResult {
-                                    source: source_name.clone(),
-                                    path: c.file_path.clone(),
-                                    archive_path: c.archive_path,
-                                    line_number: c.line_number,
-                                    snippet: c.content,
-                                    score: 0,
-                                    context_lines: vec![],
-                                    resource_url: make_resource_url(&base_url, &c.file_path),
-                                    aliases: vec![],
-                                    extra_matches: vec![],
-                                }, file_id)
-                            })
+                            .map(|c| (make_result(&source_name, &base_url, &c, 0, vec![]), c.file_id))
                             .collect()
                     }
                     _ /* "fuzzy" */ => {
                         let mut scorer = FuzzyScorer::new(&query);
                         candidates.into_iter()
                             .filter_map(|c| {
-                                let file_id = c.file_id;
-                                scorer.score(&c.content).map(|score| (SearchResult {
-                                    source: source_name.clone(),
-                                    path: c.file_path.clone(),
-                                    archive_path: c.archive_path,
-                                    line_number: c.line_number,
-                                    snippet: c.content,
-                                    score,
-                                    context_lines: vec![],
-                                    resource_url: make_resource_url(&base_url, &c.file_path),
-                                    aliases: vec![],
-                                    extra_matches: vec![],
-                                }, file_id))
+                                scorer.score(&c.content)
+                                    .map(|score| (make_result(&source_name, &base_url, &c, score, vec![]), c.file_id))
                             })
                             .collect()
                     }

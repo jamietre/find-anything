@@ -29,13 +29,41 @@ use std::sync::Arc;
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Json,
 };
 
 use crate::AppState;
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
+
+/// Build a composite path from a base path and an optional legacy `archive_path`.
+/// If `archive_path` is `Some` and non-empty, returns `"{path}::{archive_path}"`.
+pub(super) fn composite_path(path: &str, archive_path: Option<&str>) -> String {
+    match archive_path {
+        Some(ap) if !ap.is_empty() => format!("{path}::{ap}"),
+        _ => path.to_string(),
+    }
+}
+
+/// Run a blocking closure on the blocking thread pool, converting the result to
+/// an HTTP response. On error, logs with the given label and returns 500.
+pub(super) async fn run_blocking<F, T>(label: &'static str, f: F) -> Response
+where
+    F: FnOnce() -> anyhow::Result<T> + Send + 'static,
+    T: IntoResponse + Send + 'static,
+{
+    match tokio::task::spawn_blocking(f)
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
+    {
+        Ok(val) => val.into_response(),
+        Err(e) => {
+            tracing::error!("{label}: {e:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
 
 pub(super) fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
     // 1. Check Authorization: Bearer header (existing API clients).

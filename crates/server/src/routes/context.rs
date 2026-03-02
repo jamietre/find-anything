@@ -2,12 +2,11 @@ use std::sync::Arc;
 
 use axum::{
     extract::{Query, State},
-    http::{HeaderMap, StatusCode},
+    http::HeaderMap,
     response::IntoResponse,
     Json,
 };
 use serde::Deserialize;
-use tokio::task::spawn_blocking;
 
 use find_common::api::{
     ContextBatchRequest, ContextBatchResponse, ContextBatchResult, ContextResponse,
@@ -15,7 +14,7 @@ use find_common::api::{
 
 use crate::{archive::ArchiveManager, db, AppState};
 
-use super::{check_auth, compact_lines, source_db_path};
+use super::{check_auth, compact_lines, composite_path, run_blocking, source_db_path};
 
 // ── GET /api/v1/context ───────────────────────────────────────────────────────
 
@@ -42,14 +41,11 @@ pub async fn get_context(
         Err(s) => return (s, Json(serde_json::Value::Null)).into_response(),
     };
 
-    let full_path = match &params.archive_path {
-        Some(ap) if !ap.is_empty() => format!("{}::{}", params.path, ap),
-        _ => params.path.clone(),
-    };
-
+    let full_path = composite_path(&params.path, params.archive_path.as_deref());
     let window = params.window.unwrap_or(state.config.search.context_window);
     let data_dir = state.data_dir.clone();
-    match spawn_blocking(move || {
+
+    run_blocking("context", move || {
         let conn = db::open(&db_path)?;
         let archive_mgr = ArchiveManager::new(data_dir);
         let kind: String = conn.query_row(
@@ -57,26 +53,10 @@ pub async fn get_context(
             rusqlite::params![full_path],
             |row| row.get(0),
         ).unwrap_or_else(|_| "text".into());
-
-        let raw = db::get_context(
-            &conn,
-            &archive_mgr,
-            &full_path,
-            params.line,
-            window,
-        )?;
+        let raw = db::get_context(&conn, &archive_mgr, &full_path, params.line, window)?;
         let (start, match_index, lines) = compact_lines(raw, params.line);
-        Ok::<_, anyhow::Error>(ContextResponse { start, match_index, lines, kind })
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
-    {
-        Ok(resp) => Json(resp).into_response(),
-        Err(e) => {
-            tracing::error!("context: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        Ok(Json(ContextResponse { start, match_index, lines, kind }))
+    }).await
 }
 
 // ── POST /api/v1/context-batch ────────────────────────────────────────────────
@@ -92,7 +72,7 @@ pub async fn context_batch(
 
     let data_dir = state.data_dir.clone();
 
-    match spawn_blocking(move || {
+    run_blocking("context_batch", move || {
         let archive_mgr = ArchiveManager::new(data_dir.clone());
 
         // Group items by source so we open each DB at most once.
@@ -119,10 +99,7 @@ pub async fn context_batch(
             };
 
             for item in items {
-                let full_path = match &item.archive_path {
-                    Some(ap) if !ap.is_empty() => format!("{}::{}", item.path, ap),
-                    _ => item.path.clone(),
-                };
+                let full_path = composite_path(&item.path, item.archive_path.as_deref());
 
                 let (kind, start, match_index, lines) = match (|| -> anyhow::Result<_> {
                     let kind = conn
@@ -143,15 +120,6 @@ pub async fn context_batch(
             }
         }
 
-        Ok::<_, anyhow::Error>(ContextBatchResponse { results })
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!(e)))
-    {
-        Ok(resp) => Json(resp).into_response(),
-        Err(e) => {
-            tracing::error!("context_batch: {e:#}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
+        Ok(Json(ContextBatchResponse { results }))
+    }).await
 }
