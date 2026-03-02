@@ -150,6 +150,8 @@ async fn main() -> Result<()> {
         .route("/api/v1/stats",          get(routes::get_stats))
         .route("/api/v1/errors",         get(routes::get_errors))
         .route("/api/v1/tree",           get(routes::list_dir))
+        .route("/api/v1/raw",            get(routes::get_raw))
+        .route("/api/v1/auth/session",   post(routes::create_session).delete(routes::delete_session))
         .route("/api/v1/admin/inbox",       get(routes::inbox_status).delete(routes::inbox_clear))
         .route("/api/v1/admin/inbox/retry", post(routes::inbox_retry))
         .route("/api/v1/admin/inbox/show",  get(routes::inbox_show))

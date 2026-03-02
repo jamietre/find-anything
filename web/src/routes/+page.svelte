@@ -6,7 +6,7 @@
 	import SearchView from '$lib/SearchView.svelte';
 	import FileView from '$lib/FileView.svelte';
 	import CommandPalette from '$lib/CommandPalette.svelte';
-	import { search, listSources, getSettings, AuthError } from '$lib/api';
+	import { search, listSources, getSettings, activateSession, AuthError } from '$lib/api';
 	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { getToken, setToken } from '$lib/token';
 	import { contextWindow } from '$lib/settingsStore';
@@ -60,6 +60,8 @@
 		setToken(tokenInput.trim());
 		tokenInput = '';
 		showTokenSetup = false;
+		// Set the session cookie so browser-native requests (e.g. <img src>) work.
+		activateSession();
 		// Re-run initial data load now that we have a token.
 		initialLoad();
 	}
@@ -123,7 +125,11 @@
 	onMount(() => {
 		(async () => {
 			checkToken();
-			if (!showTokenSetup) await initialLoad();
+			if (!showTokenSetup) {
+				// Ensure the session cookie is set so browser-native requests work.
+				activateSession();
+				await initialLoad();
+			}
 
 			const params = new URLSearchParams(location.search);
 			if (params.has('q') || params.has('path')) {

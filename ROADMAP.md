@@ -201,24 +201,20 @@ delete-first at the batch boundary level, not just within a single bulk request.
 
 ---
 
-### 🔴 File Serving & Share URL Mapping (High Priority)
+### ✅ File Serving (v0.5)
 
-Map source names to base URLs in `server.toml` and expose a server endpoint that
-retrieves and serves the actual file bytes, enabling the UI and API clients to open or
-download any indexed file directly.
+Expose a server endpoint that streams the original file bytes, with inline display
+in the UI for images and PDFs, and download for all other types.
 
-- **`[sources.<name>]` config block** — Each source can have an optional
-  `share_url_root` that is a file path or URL prefix (e.g. `file:///mnt/nas/docs`,
-  `smb://server/share`, `https://files.example.com/`). The server uses this to
-  construct a full URL for any file in that source.
-- **`GET /api/v1/file-content?source=X&path=Y`** — Streams the actual file bytes
-  from the server's local filesystem. Authenticated (bearer token required). Supports
-  `Content-Type` detection via `mime_guess`. Respects `Range` headers for large files /
-  media streaming. Returns 404 if the file is not on the server's local filesystem.
-- **UI integration** — "Open" / "Download" button in the detail panel that hits this
-  endpoint; the browser receives the raw file rather than extracted text.
-- **Archive member serving** — For composite paths (`archive.zip::member.txt`), extract
-  and stream the specific member from the ZIP rather than the whole archive.
+- **`[sources.<name>] path = "..."` config** — Each source can have an optional
+  filesystem root path; when set, `GET /api/v1/raw` serves files from that root.
+- **`GET /api/v1/raw?source=X&path=Y`** — Streams the actual file bytes. Authenticated
+  (bearer token or session cookie). Path traversal guard. `Content-Type` via `mime_guess`.
+  `?convert=png` re-encodes non-browser-renderable images (e.g. TIFF) to PNG on the fly.
+- **Cookie auth** — `POST /api/v1/auth/session` sets an `HttpOnly` session cookie so
+  browser-native requests (`<img>`, iframes) authenticate without custom headers.
+- **UI integration** — "View Original" / "Extracted" toggle for images and PDFs;
+  "Download Original" link for all non-archive-member files.
 
 ---
 

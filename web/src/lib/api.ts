@@ -80,6 +80,28 @@ async function apiFetch(url: string, init?: RequestInit): Promise<Response> {
 	return resp;
 }
 
+/**
+ * Sets the find_session cookie so browser-native requests (e.g. <img src>)
+ * can be authenticated without custom headers. Best-effort: header auth still
+ * works if this call fails.
+ */
+export async function activateSession(): Promise<void> {
+	const token = getToken();
+	if (!token) return;
+	await fetch('/api/v1/auth/session', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...authHeaders() },
+		body: JSON.stringify({ token }),
+	}).catch(() => {});
+}
+
+/**
+ * Clears the find_session cookie on the server side.
+ */
+export async function clearSession(): Promise<void> {
+	await fetch('/api/v1/auth/session', { method: 'DELETE' }).catch(() => {});
+}
+
 // ── API calls ─────────────────────────────────────────────────────────────────
 
 export async function listSources(): Promise<SourceInfo[]> {

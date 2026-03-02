@@ -3,7 +3,10 @@ mod bulk;
 mod context;
 mod errors;
 mod file;
+mod raw;
 mod search;
+mod session;
+mod settings;
 mod stats;
 mod tree;
 pub mod upload;
@@ -13,13 +16,13 @@ pub use bulk::bulk;
 pub use context::{context_batch, get_context};
 pub use errors::get_errors;
 pub use file::{get_file, list_files};
+pub use raw::get_raw;
 pub use search::search;
+pub use session::{create_session, delete_session};
 pub use stats::get_stats;
 pub use tree::{list_dir, list_sources};
 pub use upload::{upload_init, upload_patch, upload_status};
 pub use self::settings::get_settings;
-
-mod settings;
 
 use std::sync::Arc;
 
@@ -35,13 +38,27 @@ use crate::AppState;
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 
 pub(super) fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), StatusCode> {
-    let ok = headers
+    // 1. Check Authorization: Bearer header (existing API clients).
+    if headers
         .get("Authorization")
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|t| t == state.config.server.token)
-        .unwrap_or(false);
-    if ok { Ok(()) } else { Err(StatusCode::UNAUTHORIZED) }
+        .unwrap_or(false)
+    {
+        return Ok(());
+    }
+    // 2. Check find_session cookie (browser-native requests like <img src>).
+    if let Some(Ok(cookies)) = headers.get("cookie").map(|v| v.to_str()) {
+        for part in cookies.split(';') {
+            if let Some(val) = part.trim().strip_prefix("find_session=") {
+                if val == state.config.server.token {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Err(StatusCode::UNAUTHORIZED)
 }
 
 pub(super) fn source_db_path(state: &AppState, source: &str) -> Result<std::path::PathBuf, StatusCode> {

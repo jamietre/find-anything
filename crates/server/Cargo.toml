@@ -1,6 +1,6 @@
 [package]
 name = "find-server"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 
 [[bin]]
@@ -35,3 +35,5 @@ zip           = "2"
 flate2        = "1"
 uuid          = { version = "1", features = ["v4"] }
 chrono        = "0.4"
+tokio-util    = { version = "0.7", features = ["io"] }
+image         = "0.25"

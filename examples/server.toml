@@ -14,6 +14,14 @@ data_dir = "/home/user/.local/share/find-anything"
 # Generate one with: openssl rand -hex 32
 token = "change-me"
 
+# Per-source filesystem roots (optional).
+# When a source has a path configured, the server can serve original files via
+# GET /api/v1/raw, enabling inline image display and direct file downloads in
+# the web UI.
+#
+# [sources.my-source]
+# path = "/mnt/nas/my-source"
+
 [search]
 # Default number of results per query when the client does not specify a limit.
 default_limit = 50

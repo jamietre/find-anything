@@ -417,6 +417,17 @@ pub struct ServerAppConfig {
     pub extraction: ExtractionSettings,
     #[serde(default)]
     pub log: LogConfig,
+    /// Per-source server configuration (e.g. filesystem root for raw file serving).
+    #[serde(default)]
+    pub sources: std::collections::HashMap<String, ServerSourceConfig>,
+}
+
+/// Server-side configuration for a named source.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ServerSourceConfig {
+    /// Filesystem root for this source. When set, the server can serve
+    /// original files via GET /api/v1/raw.
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

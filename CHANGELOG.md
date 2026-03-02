@@ -9,7 +9,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-01
+
 ### Added
+- **Serve original files (`GET /api/v1/raw`)** — the server can now stream original files directly from the filesystem; configure a root path per source via `[sources.<name>] path = "/..."` in `server.toml`; the endpoint validates paths (rejects `..`, leading `/`, and `::` archive-member paths) and canonicalizes to prevent traversal attacks
+- **Cookie-based auth (`POST /api/v1/auth/session`)** — sets an `HttpOnly; SameSite=Strict` session cookie so browser-native requests (`<img src>`, iframes, download links) authenticate without custom headers; `check_auth()` now accepts either the `Authorization: Bearer` header or the `find_session` cookie; existing API clients are unaffected
+- **Original file view in FileViewer** — images and PDFs show a "View Original" / "Extracted" toggle; all other file types show a "Download Original" link; TIFF and other non-browser-renderable images are converted to PNG on the fly via the `image` crate; download links always serve the real original file
 - **Extension breakdown in stats panel** — the "By Kind" breakdown now has a Kind / Extension pill toggle; Extension mode shows file counts and sizes by file extension (top 20, with a "Show all N extensions" button); data is computed by new `get_stats_by_ext` SQL function using custom `file_basename` / `file_ext` SQLite scalar functions registered at connection open time (SQLite has no built-in equivalent)
 
 ### Fixed

@@ -31,6 +31,18 @@
 	/** Metadata lines (line_number === 0, excluding the path line itself). */
 	let metaLines: { content: string }[] = [];
 
+	// Original file view
+	let showOriginal = false;
+	$: isArchiveMember = path.includes('::');
+	$: rawUrl = `/api/v1/raw?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
+	// All images and PDFs can be shown inline (server converts non-native formats to PNG).
+	$: isInlineKind = fileKind === 'image' || fileKind === 'pdf';
+	// For images the browser can't render natively, request server-side PNG conversion.
+	const BROWSER_IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','svg','svgz','avif','bmp','ico']);
+	$: needsConversion = fileKind === 'image' && !BROWSER_IMAGE_EXTS.has((path.split('.').pop() ?? '').toLowerCase());
+	$: rawInlineUrl = needsConversion ? rawUrl + '&convert=png' : rawUrl;
+	$: fileName = path.split('/').pop() ?? path;
+
 	// Detect if file is markdown
 	$: isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
 
@@ -87,6 +99,8 @@
 			size = data.size;
 			fileKind = data.file_kind ?? null;
 			indexingError = data.indexing_error ?? null;
+			// Default to showing the original for images; extracted text for everything else.
+			showOriginal = fileKind === 'image';
 		} catch (e) {
 			error = String(e);
 		} finally {
@@ -144,6 +158,15 @@
 					📝 {markdownFormat ? 'Raw' : 'Format'}
 				</button>
 			{/if}
+			{#if !isArchiveMember}
+				{#if isInlineKind}
+					<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}
+							title="Toggle original file view">
+						{showOriginal ? 'Extracted' : 'View Original'}
+					</button>
+				{/if}
+				<a href={rawUrl} download={fileName} class="toolbar-btn">Download Original</a>
+			{/if}
 			<div class="metadata">
 				{#if fileKind}
 					<span class="meta-item kind-badge" title="File type">{fileKind}</span>
@@ -163,35 +186,46 @@
 				{/each}
 			</div>
 		{/if}
-		<div class="code-container">
-			{#if markdownFormat && isMarkdown}
-				<div class="markdown-content">
-					{@html renderedMarkdown}
-				</div>
-			{:else if codeLines.length === 0 && metaLines.length === 0}
-				<div class="no-content">No text content or metadata available for this file.</div>
-			{:else}
-				<table class="code-table" cellspacing="0" cellpadding="0">
-					<tbody>
-						{#each codeLines as line, i}
-							{@const lineNum = lineOffsets[i] ?? i + 1}
-							<!-- svelte-ignore a11y-click-events-have-key-events -->
-							<!-- svelte-ignore a11y-no-static-element-interactions -->
-							<tr
-								id="line-{lineNum}"
-								class="code-row"
-								class:target={highlightedSet.has(lineNum)}
-								on:click={(e) => handleLineClick(lineNum, e)}
-							>
-								<td class="td-ln">{lineNum}</td>
-								<td class="td-arrow">{lineNum === arrowLine ? '▶' : ''}</td>
-								<td class="td-code" class:wrap={wordWrap}><code>{@html line}</code></td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			{/if}
-		</div>
+		{#if showOriginal && isInlineKind && !isArchiveMember}
+			<div class="original-panel">
+				{#if fileKind === 'image'}
+					<img src={rawInlineUrl} alt={path} class="original-image" />
+				{:else}
+					<iframe src={rawUrl} title="Original file" class="original-iframe"></iframe>
+				{/if}
+			</div>
+		{/if}
+		{#if !(showOriginal && isInlineKind && !isArchiveMember)}
+			<div class="code-container">
+				{#if markdownFormat && isMarkdown}
+					<div class="markdown-content">
+						{@html renderedMarkdown}
+					</div>
+				{:else if codeLines.length === 0 && metaLines.length === 0}
+					<div class="no-content">No text content or metadata available for this file.</div>
+				{:else}
+					<table class="code-table" cellspacing="0" cellpadding="0">
+						<tbody>
+							{#each codeLines as line, i}
+								{@const lineNum = lineOffsets[i] ?? i + 1}
+								<!-- svelte-ignore a11y-click-events-have-key-events -->
+								<!-- svelte-ignore a11y-no-static-element-interactions -->
+								<tr
+									id="line-{lineNum}"
+									class="code-row"
+									class:target={highlightedSet.has(lineNum)}
+									on:click={(e) => handleLineClick(lineNum, e)}
+								>
+									<td class="td-ln">{lineNum}</td>
+									<td class="td-arrow">{lineNum === arrowLine ? '▶' : ''}</td>
+									<td class="td-code" class:wrap={wordWrap}><code>{@html line}</code></td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				{/if}
+			</div>
+		{/if}
 	{/if}
 </div>
 
@@ -347,7 +381,32 @@
 		line-height: 1.6;
 	}
 
-	.indexing-error-banner {
+	.original-panel {
+		flex: 1;
+		overflow: auto;
+		display: flex;
+		flex-direction: column;
+		background: var(--bg);
+	}
+
+	.original-image {
+		max-width: 100%;
+		max-height: 100%;
+		object-fit: contain;
+		margin: auto;
+		display: block;
+		padding: 16px;
+	}
+
+	.original-iframe {
+		flex: 1;
+		width: 100%;
+		height: 100%;
+		border: none;
+		min-height: 400px;
+	}
+
+.indexing-error-banner {
 		padding: 8px 16px;
 		background: rgba(230, 162, 60, 0.12);
 		border-bottom: 1px solid rgba(230, 162, 60, 0.3);
