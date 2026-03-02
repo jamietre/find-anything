@@ -162,7 +162,7 @@
 				{#if isInlineKind}
 					<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}
 							title="Toggle original file view">
-						{showOriginal ? 'Extracted' : 'View Original'}
+						{showOriginal ? 'View Extracted' : 'View Original'}
 					</button>
 				{/if}
 				<a href={rawUrl} download={fileName} class="toolbar-btn">Download Original</a>

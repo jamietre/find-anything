@@ -1,3 +1,5 @@
+import type { DirEntry } from './api';
+
 /**
  * Unified file path representation for files and archive members.
  *
@@ -73,4 +75,47 @@ export class FilePath {
 	static fromParts(outer: string, inner: string | null): FilePath {
 		return new FilePath(inner ? `${outer}::${inner}` : outer);
 	}
+}
+
+/**
+ * Split an entry path into { path, archivePath } for file-open events.
+ *
+ * For composite paths ("archive.zip::member.txt") the split is at the first
+ * "::" — the outer file path goes to `path`, the member path to `archivePath`.
+ * For plain paths the result has only `path`.
+ */
+export function splitEntryPath(entryPath: string): { path: string; archivePath?: string } {
+	const i = entryPath.indexOf('::');
+	if (i >= 0) {
+		return { path: entryPath.slice(0, i), archivePath: entryPath.slice(i + 2) };
+	}
+	return { path: entryPath };
+}
+
+/**
+ * Return the API prefix to use when listing children of an expandable tree entry.
+ *
+ * Archive entries (kind="archive") append "::" so the server queries composite
+ * paths. Directory entries already have a trailing "/" from the server.
+ */
+export function childListPrefix(entry: Pick<DirEntry, 'kind' | 'path'>): string {
+	return entry.kind === 'archive' ? entry.path + '::' : entry.path;
+}
+
+/**
+ * Return true if a tree entry should auto-expand to reveal the given active path.
+ *
+ * - Directories expand when activePath lives inside them (prefix match on "/").
+ * - Archives expand when activePath is the archive itself or one of its members
+ *   (exact match, or prefix match on "::").
+ */
+export function shouldExpandEntry(
+	entry: Pick<DirEntry, 'entry_type' | 'path'>,
+	activePath: string
+): boolean {
+	if (entry.entry_type === 'dir') {
+		return activePath.startsWith(entry.path);
+	}
+	// archive
+	return activePath === entry.path || activePath.startsWith(entry.path + '::');
 }

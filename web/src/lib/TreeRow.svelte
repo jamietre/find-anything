@@ -2,6 +2,7 @@
 	import { createEventDispatcher } from 'svelte';
 	import { listDir, listArchiveMembers } from '$lib/api';
 	import type { DirEntry } from '$lib/api';
+	import { splitEntryPath, shouldExpandEntry } from '$lib/filePath';
 
 	export let source: string;
 	export let entry: DirEntry;
@@ -22,13 +23,7 @@
 
 	// Auto-expand directories and archives if activePath is a descendant or exact match.
 	$: if (isExpandable && activePath) {
-		// For directories: expand if activePath is inside this directory
-		// For archives: expand if activePath matches exactly OR points to an archive member
-		const shouldExpand = entry.entry_type === 'dir'
-			? activePath.startsWith(entry.path)
-			: activePath === entry.path || activePath.startsWith(entry.path + '::');
-
-		if (shouldExpand && !expanded) {
+		if (shouldExpandEntry(entry, activePath) && !expanded) {
 			expandDir();
 		}
 	}
@@ -75,22 +70,8 @@
 	}
 
 	function openFile() {
-		// For composite paths ("archive.zip::member.txt"), split into path + archivePath.
-		const i = entry.path.indexOf('::');
-		if (i >= 0) {
-			dispatch('open', {
-				source,
-				path: entry.path.slice(0, i),
-				kind: entry.kind ?? 'text',
-				archivePath: entry.path.slice(i + 2),
-			});
-		} else {
-			dispatch('open', {
-				source,
-				path: entry.path,
-				kind: entry.kind ?? 'text',
-			});
-		}
+		const { path, archivePath } = splitEntryPath(entry.path);
+		dispatch('open', { source, path, kind: entry.kind ?? 'text', archivePath });
 	}
 </script>
 

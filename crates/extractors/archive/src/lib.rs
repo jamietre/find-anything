@@ -1,17 +1,3 @@
-// Probe for `std::alloc::set_alloc_error_hook` stabilisation.
-//
-// Run: cargo check -p find-extract-archive --features probe_alloc_hook
-//
-// If it compiles → the hook is stable on your toolchain; subprocess isolation
-// can be replaced with an in-process alloc error hook.  See the upgrade path
-// in docs/plans/034-7z-oom-crash.md and tracking issue rust-lang/rust#51245.
-#[cfg(feature = "probe_alloc_hook")]
-pub fn _probe_alloc_error_hook() {
-    // If this compiles without the `allocator_api` / `alloc_error_hook` feature
-    // gate, `set_alloc_error_hook` has been stabilised.
-    std::alloc::set_alloc_error_hook(|_layout| {});
-}
-
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -733,6 +719,29 @@ fn make_filename_line(name: &str) -> Vec<IndexLine> {
 }
 
 
+/// Wrapper around `dispatch_from_bytes` that catches panics from buggy parsers.
+///
+/// Some malformed files (e.g. XLS files with a garbage allocation-size field in
+/// their OLE header) can cause extractors to panic with "capacity overflow" rather
+/// than returning an `Err`.  Since `dispatch_from_bytes` runs in-process inside the
+/// archive extractor, an uncaught panic kills the entire subprocess and fails the
+/// whole archive.  `catch_unwind` intercepts these panics and logs a warning so the
+/// remaining members are still processed.
+///
+/// Note: OOM aborts (`handle_alloc_error`) are NOT catchable — this only handles
+/// regular `panic!()` calls, which includes "capacity overflow" in `raw_vec`.
+fn dispatch_catching_panics(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        find_extract_dispatch::dispatch_from_bytes(bytes, name, cfg)
+    })) {
+        Ok(lines) => lines,
+        Err(_) => {
+            warn!("extractor panicked for '{}'; skipping content", name);
+            vec![]
+        }
+    }
+}
+
 /// Extract an archive member from raw bytes.
 ///
 /// Single-file compressed formats (.gz/.bz2/.xz) are decompressed inline and
@@ -788,7 +797,7 @@ fn extract_member_bytes(mut bytes: Vec<u8>, entry_name: &str, display_prefix: &s
                         .and_then(|s| s.to_str())
                         .unwrap_or(entry_name);
                     let display_name = format!("{display_prefix}::{inner_name}");
-                    let content_lines = find_extract_dispatch::dispatch_from_bytes(&inner_bytes, &display_name, cfg);
+                    let content_lines = dispatch_catching_panics(&inner_bytes, &display_name, cfg);
                     let with_path = content_lines.into_iter().map(|mut l| {
                         l.archive_path = Some(entry_name.to_string());
                         l
@@ -805,7 +814,7 @@ fn extract_member_bytes(mut bytes: Vec<u8>, entry_name: &str, display_prefix: &s
 
     // ── All other formats: unified dispatch ───────────────────────────────────
     let display_name = format!("{display_prefix}::{entry_name}");
-    let content_lines = find_extract_dispatch::dispatch_from_bytes(&bytes, &display_name, cfg);
+    let content_lines = dispatch_catching_panics(&bytes, &display_name, cfg);
     let with_path = content_lines.into_iter().map(|mut l| {
         l.archive_path = Some(entry_name.to_string());
         l

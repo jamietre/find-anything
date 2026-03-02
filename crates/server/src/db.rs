@@ -1108,7 +1108,9 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
             // first (e.g. "::" in "docs/inner.zip::file.txt") would produce a
             // child name containing a slash, breaking the tree and causing the
             // UI to recurse infinitely.
-            let sep_pos = match (rest.find("::"), rest.find('/')) {
+            let colon_pos = rest.find("::");
+            let slash_pos = rest.find('/');
+            let sep_pos = match (colon_pos, slash_pos) {
                 (Some(a), Some(b)) => Some(a.min(b)),
                 (a, b) => a.or(b),
             };
@@ -1116,18 +1118,34 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
                 let child_name = &rest[..pos];
                 // Only create virtual dir if we haven't seen a real file with this path
                 if !seen_files.contains(child_name) && seen_dirs.insert(child_name.to_string()) {
-                    // Append "/" so the next listDir call gets a properly-terminated prefix.
-                    // Without this, strip_prefix() leaves a leading "/" in `rest`, sep_pos
-                    // hits position 0, child_name is empty, and the same path is returned
-                    // forever → infinite UI recursion.
-                    dirs.push(DirEntry {
-                        name: child_name.to_string(),
-                        path: format!("{}{}/", prefix, child_name),
-                        entry_type: "dir".to_string(),
-                        kind: None,
-                        size: None,
-                        mtime: None,
-                    });
+                    if colon_pos == Some(pos) {
+                        // The separator is "::" — child_name is a nested archive.
+                        // Return it as a file with kind="archive" so the UI calls
+                        // listArchiveMembers (appends "::") rather than listDir
+                        // (appends "/", which finds nothing since members use "::").
+                        files.push(DirEntry {
+                            name: child_name.to_string(),
+                            path: format!("{}{}", prefix, child_name),
+                            entry_type: "file".to_string(),
+                            kind: Some("archive".to_string()),
+                            size: None,
+                            mtime: None,
+                        });
+                    } else {
+                        // The separator is "/" — child_name is a subdirectory.
+                        // Append "/" so the next listDir call gets a properly-terminated
+                        // prefix. Without this, strip_prefix() leaves a leading "/" in
+                        // `rest`, sep_pos hits position 0, child_name is empty, and the
+                        // same path is returned forever → infinite UI recursion.
+                        dirs.push(DirEntry {
+                            name: child_name.to_string(),
+                            path: format!("{}{}/", prefix, child_name),
+                            entry_type: "dir".to_string(),
+                            kind: None,
+                            size: None,
+                            mtime: None,
+                        });
+                    }
                 }
             } else {
                 // Leaf member within the archive.
@@ -1474,5 +1492,257 @@ mod tests {
         let q = build_fts_query("test^query", false).unwrap();
         assert!(!q.contains('^'));
         assert!(q.contains("testquery") || q.contains("test"));
+    }
+
+    // ── list_dir ─────────────────────────────────────────────────────────────
+    //
+    // These tests use an in-memory SQLite database with just the `files` table
+    // so they run without touching the filesystem.
+
+    fn test_db() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE files (
+                id    INTEGER PRIMARY KEY AUTOINCREMENT,
+                path  TEXT    NOT NULL UNIQUE,
+                mtime INTEGER NOT NULL,
+                size  INTEGER NOT NULL,
+                kind  TEXT    NOT NULL DEFAULT 'text'
+            );",
+        )
+        .unwrap();
+        conn
+    }
+
+    fn ins(conn: &rusqlite::Connection, path: &str, kind: &str) {
+        conn.execute(
+            "INSERT INTO files (path, mtime, size, kind) VALUES (?1, 0, 0, ?2)",
+            rusqlite::params![path, kind],
+        )
+        .unwrap();
+    }
+
+    fn names(entries: &[DirEntry]) -> Vec<&str> {
+        entries.iter().map(|e| e.name.as_str()).collect()
+    }
+
+    // ── root listing ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn list_dir_root_flat_files() {
+        let conn = test_db();
+        ins(&conn, "README.md", "text");
+        ins(&conn, "main.rs", "text");
+        let entries = list_dir(&conn, "").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().all(|e| e.entry_type == "file"));
+    }
+
+    #[test]
+    fn list_dir_root_shows_subdirectory() {
+        let conn = test_db();
+        ins(&conn, "src/main.rs", "text");
+        ins(&conn, "src/lib.rs", "text");
+        let entries = list_dir(&conn, "").unwrap();
+        assert_eq!(entries.len(), 1);
+        let dir = &entries[0];
+        assert_eq!(dir.entry_type, "dir");
+        assert_eq!(dir.name, "src");
+        assert_eq!(dir.path, "src/");
+    }
+
+    #[test]
+    fn list_dir_root_skips_archive_members() {
+        // Composite paths must not appear in the root listing — they're only
+        // visible when the outer archive is explicitly expanded.
+        let conn = test_db();
+        ins(&conn, "archive.zip", "archive");
+        ins(&conn, "archive.zip::member.txt", "text");
+        let entries = list_dir(&conn, "").unwrap();
+        // Only the outer archive, not the member.
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "archive.zip");
+        assert_eq!(entries[0].kind.as_deref(), Some("archive"));
+    }
+
+    #[test]
+    fn list_dir_dirs_sorted_before_files() {
+        let conn = test_db();
+        ins(&conn, "README.md", "text");
+        ins(&conn, "src/main.rs", "text");
+        let entries = list_dir(&conn, "").unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry_type, "dir");
+        assert_eq!(entries[1].entry_type, "file");
+    }
+
+    // ── subdirectory listing ──────────────────────────────────────────────────
+
+    #[test]
+    fn list_dir_subdir() {
+        let conn = test_db();
+        ins(&conn, "src/main.rs", "text");
+        ins(&conn, "src/lib.rs", "text");
+        let entries = list_dir(&conn, "src/").unwrap();
+        let mut ns = names(&entries);
+        ns.sort_unstable();
+        assert_eq!(ns, ["lib.rs", "main.rs"]);
+        assert!(entries.iter().all(|e| e.entry_type == "file"));
+    }
+
+    // ── archive member listing ────────────────────────────────────────────────
+
+    #[test]
+    fn list_dir_archive_flat_members() {
+        let conn = test_db();
+        ins(&conn, "data.zip", "archive");
+        ins(&conn, "data.zip::a.txt", "text");
+        ins(&conn, "data.zip::b.txt", "text");
+        let entries = list_dir(&conn, "data.zip::").unwrap();
+        let mut ns = names(&entries);
+        ns.sort_unstable();
+        assert_eq!(ns, ["a.txt", "b.txt"]);
+        assert!(entries.iter().all(|e| e.entry_type == "file"));
+    }
+
+    #[test]
+    fn list_dir_archive_with_inner_subdir() {
+        let conn = test_db();
+        ins(&conn, "data.zip::docs/readme.txt", "text");
+        ins(&conn, "data.zip::src/main.rs", "text");
+        let entries = list_dir(&conn, "data.zip::").unwrap();
+        // Both children are virtual dirs.
+        assert!(entries.iter().all(|e| e.entry_type == "dir"));
+        let mut ns = names(&entries);
+        ns.sort_unstable();
+        assert_eq!(ns, ["docs", "src"]);
+        // Paths must end with "/" so the next listDir call gets the right prefix.
+        assert!(entries.iter().all(|e| e.path.ends_with('/')));
+    }
+
+    #[test]
+    fn list_dir_archive_subdir_listing() {
+        let conn = test_db();
+        ins(&conn, "data.zip::docs/a.txt", "text");
+        ins(&conn, "data.zip::docs/b.txt", "text");
+        let entries = list_dir(&conn, "data.zip::docs/").unwrap();
+        let mut ns = names(&entries);
+        ns.sort_unstable();
+        assert_eq!(ns, ["a.txt", "b.txt"]);
+    }
+
+    // ── nested archive (regression for the "inner zip shows Empty" bug) ───────
+
+    /// When an archive member is itself an archive, listing the outer archive
+    /// must return it as entry_type="file" with kind="archive" (not as a "dir"
+    /// with a trailing "/"). The UI uses kind="archive" to call
+    /// listArchiveMembers (which appends "::") instead of listDir (which appends
+    /// "/", finding nothing because members use "::" not "/").
+    #[test]
+    fn list_dir_nested_archive_returned_as_archive_file() {
+        let conn = test_db();
+        // Only the members are indexed; the inner zip itself has no row.
+        ins(&conn, "outer.zip::inner.zip::data.txt", "text");
+        ins(&conn, "outer.zip::inner.zip::notes.txt", "text");
+
+        let entries = list_dir(&conn, "outer.zip::").unwrap();
+        assert_eq!(entries.len(), 1, "expected exactly one child");
+
+        let inner = &entries[0];
+        assert_eq!(inner.name, "inner.zip");
+        assert_eq!(inner.entry_type, "file",
+            "nested archive must be entry_type='file', not 'dir'");
+        assert_eq!(inner.kind.as_deref(), Some("archive"),
+            "nested archive must have kind='archive' so the UI calls listArchiveMembers");
+        assert_eq!(inner.path, "outer.zip::inner.zip",
+            "path must not have a trailing '/' or '::'");
+    }
+
+    /// Drilling into the nested archive must return its members.
+    #[test]
+    fn list_dir_nested_archive_members() {
+        let conn = test_db();
+        ins(&conn, "outer.zip::inner.zip::data.txt", "text");
+        ins(&conn, "outer.zip::inner.zip::notes.txt", "text");
+
+        // The UI calls listArchiveMembers(source, "outer.zip::inner.zip")
+        // which translates to listDir(source, "outer.zip::inner.zip::").
+        let entries = list_dir(&conn, "outer.zip::inner.zip::").unwrap();
+        let mut ns = names(&entries);
+        ns.sort_unstable();
+        assert_eq!(ns, ["data.txt", "notes.txt"]);
+        assert!(entries.iter().all(|e| e.entry_type == "file"));
+    }
+
+    /// If the inner archive IS explicitly indexed as a row (kind="archive"),
+    /// it should still appear correctly via the real-file path in the DB.
+    #[test]
+    fn list_dir_nested_archive_with_explicit_row() {
+        let conn = test_db();
+        ins(&conn, "outer.zip::inner.zip", "archive");
+        ins(&conn, "outer.zip::inner.zip::data.txt", "text");
+
+        let entries = list_dir(&conn, "outer.zip::").unwrap();
+        assert_eq!(entries.len(), 1);
+        let inner = &entries[0];
+        assert_eq!(inner.name, "inner.zip");
+        // Whether the row comes from the explicit entry or the virtual inference,
+        // the result must be kind="archive" and no trailing "/" in the path.
+        assert_eq!(inner.kind.as_deref(), Some("archive"));
+        assert!(!inner.path.ends_with('/'), "path must not end with '/'");
+        assert!(!inner.path.ends_with("::"), "path must not end with '::'");
+    }
+
+    /// Three levels of nesting: outer.zip :: middle.zip :: inner.zip :: file.txt
+    #[test]
+    fn list_dir_triple_nested_archive() {
+        let conn = test_db();
+        ins(&conn, "outer.zip::middle.zip::inner.zip::file.txt", "text");
+
+        // Listing outer.zip should show middle.zip as kind="archive".
+        let entries = list_dir(&conn, "outer.zip::").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "middle.zip");
+        assert_eq!(entries[0].kind.as_deref(), Some("archive"));
+        assert_eq!(entries[0].path, "outer.zip::middle.zip");
+
+        // Listing middle.zip should show inner.zip as kind="archive".
+        let entries = list_dir(&conn, "outer.zip::middle.zip::").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "inner.zip");
+        assert_eq!(entries[0].kind.as_deref(), Some("archive"));
+        assert_eq!(entries[0].path, "outer.zip::middle.zip::inner.zip");
+
+        // Listing inner.zip should show the file.
+        let entries = list_dir(&conn, "outer.zip::middle.zip::inner.zip::").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "file.txt");
+        assert_eq!(entries[0].entry_type, "file");
+    }
+
+    /// A nested archive next to regular files and subdirs in an outer archive.
+    #[test]
+    fn list_dir_mixed_archive_contents() {
+        let conn = test_db();
+        ins(&conn, "outer.zip::plain.txt", "text");
+        ins(&conn, "outer.zip::subdir/readme.md", "text");
+        ins(&conn, "outer.zip::nested.zip::inside.txt", "text");
+
+        let entries = list_dir(&conn, "outer.zip::").unwrap();
+        // Dirs first, then files.
+        let dirs: Vec<_> = entries.iter().filter(|e| e.entry_type == "dir").collect();
+        let files: Vec<_> = entries.iter().filter(|e| e.entry_type == "file").collect();
+
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs[0].name, "subdir");
+        assert!(dirs[0].path.ends_with('/'));
+
+        assert_eq!(files.len(), 2);
+        let nested = files.iter().find(|e| e.name == "nested.zip").unwrap();
+        assert_eq!(nested.kind.as_deref(), Some("archive"));
+        assert_eq!(nested.path, "outer.zip::nested.zip");
+
+        let plain = files.iter().find(|e| e.name == "plain.txt").unwrap();
+        assert_eq!(plain.entry_type, "file");
     }
 }

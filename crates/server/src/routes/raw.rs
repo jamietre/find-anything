@@ -85,6 +85,24 @@ pub async fn get_raw(
     }
 
     // If convert=png is requested, decode the image and re-encode as PNG.
+    // Build Content-Disposition with the real filename so browser PDF/image
+    // viewers show the actual name rather than "raw" (the endpoint path).
+    let display_filename = canonical_full
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("file");
+    // For convert=png the extension changes, so use the stem + ".png".
+    let png_filename = canonical_full
+        .file_stem()
+        .and_then(|n| n.to_str())
+        .map(|stem| format!("{stem}.png"))
+        .unwrap_or_else(|| "file.png".to_string());
+    // Sanitize: strip any double-quotes to avoid breaking the header value.
+    let safe_name = display_filename.replace('"', "");
+    let safe_png_name = png_filename.replace('"', "");
+    let disposition = format!("inline; filename=\"{safe_name}\"");
+    let png_disposition = format!("inline; filename=\"{safe_png_name}\"");
+
     if params.convert.as_deref() == Some("png") {
         let bytes = match tokio::fs::read(&canonical_full).await {
             Ok(b) => b,
@@ -108,7 +126,7 @@ pub async fn get_raw(
         return Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, "image/png")
-            .header(header::CONTENT_DISPOSITION, "inline")
+            .header(header::CONTENT_DISPOSITION, png_disposition)
             .body(Body::from(png_bytes))
             .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
     }
@@ -126,7 +144,7 @@ pub async fn get_raw(
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, mime.essence_str())
-        .header(header::CONTENT_DISPOSITION, "inline")
+        .header(header::CONTENT_DISPOSITION, disposition)
         .body(body)
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
