@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::UNIX_EPOCH;
 
 use anyhow::Result;
@@ -122,11 +123,18 @@ pub async fn run_scan(
     let log_interval = std::time::Duration::from_secs(5);
     let mut last_log = std::time::Instant::now();
 
-    // Per-directory caches: keyed by directory path.
-    // Each directory's effective ScanConfig (after applying ancestor .index overrides)
-    // is computed once and reused for all files in that directory.
-    let mut dir_scan_cache: HashMap<PathBuf, ScanConfig> = HashMap::new();
-    let mut dir_excludes_cache: HashMap<PathBuf, GlobSet> = HashMap::new();
+    // Wrap global config in Arc once so all cache entries can share it without cloning.
+    let scan_arc: Arc<ScanConfig> = Arc::new(scan.clone());
+
+    // Per-directory caches.
+    // dir_scan_cache: effective ScanConfig per directory.  Arc lets directories that
+    // share the same effective config (no .index override in their subtree) share one
+    // allocation rather than holding thousands of independent Vec<String> clones.
+    let mut dir_scan_cache: HashMap<PathBuf, Arc<ScanConfig>> = HashMap::new();
+    // dir_excludes_cache: compiled GlobSet per unique ScanConfig.  Keyed by the raw
+    // pointer of the Arc<ScanConfig> so identical configs automatically share one
+    // compiled GlobSet regardless of how many directories use that config.
+    let mut dir_excludes_cache: HashMap<*const ScanConfig, Arc<GlobSet>> = HashMap::new();
 
     // Sort by relative path for deterministic, reproducible processing order.
     // HashMap iteration order is randomised per-process, so without this the
@@ -155,14 +163,15 @@ pub async fn run_scan(
         }
 
         // Resolve effective config for this file's directory (cached).
-        let eff_scan = resolve_effective_scan(abs_path, paths, scan, &mut dir_scan_cache);
+        let eff_scan = resolve_effective_scan(abs_path, paths, &scan_arc, &mut dir_scan_cache);
 
-        // Get (or build) the GlobSet for this directory's effective excludes.
-        let dir = abs_path.parent().map(|p| p.to_path_buf()).unwrap_or_default();
-        if !dir_excludes_cache.contains_key(&dir) {
-            dir_excludes_cache.insert(dir.clone(), build_globset(&eff_scan.exclude)?);
+        // Get (or build) the GlobSet for this config.  All directories that share the
+        // same effective ScanConfig share one compiled GlobSet (keyed by Arc pointer).
+        let scan_ptr = Arc::as_ptr(&eff_scan);
+        if let std::collections::hash_map::Entry::Vacant(e) = dir_excludes_cache.entry(scan_ptr) {
+            e.insert(Arc::new(build_globset(&eff_scan.exclude)?));
         }
-        let eff_excludes = &dir_excludes_cache[&dir];
+        let eff_excludes = Arc::clone(&dir_excludes_cache[&scan_ptr]);
 
         let size = size_of(abs_path).unwrap_or(0);
         let kind = extract::detect_kind(abs_path).to_string();
@@ -367,16 +376,16 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
 fn resolve_effective_scan(
     file_path: &Path,
     roots: &[String],
-    global: &ScanConfig,
-    dir_cache: &mut HashMap<PathBuf, ScanConfig>,
-) -> ScanConfig {
+    global: &Arc<ScanConfig>,
+    dir_cache: &mut HashMap<PathBuf, Arc<ScanConfig>>,
+) -> Arc<ScanConfig> {
     let dir = match file_path.parent() {
         Some(d) => d.to_path_buf(),
-        None => return global.clone(),
+        None => return Arc::clone(global),
     };
 
     if let Some(cached) = dir_cache.get(&dir) {
-        return cached.clone();
+        return Arc::clone(cached);
     }
 
     // Find which root this file lives under (pick the longest matching root).
@@ -393,7 +402,7 @@ fn resolve_effective_scan(
         .max_by_key(|rp| rp.as_os_str().len());
 
     let Some(root) = root else {
-        return global.clone();
+        return Arc::clone(global);
     };
 
     // Collect ancestors from root down to dir (inclusive), root first.
@@ -412,22 +421,26 @@ fn resolve_effective_scan(
     ancestors.reverse(); // root → dir order
 
     // Find the deepest ancestor already in the cache to avoid redundant work.
-    let mut eff = global.clone();
+    // Using Arc::clone here is O(1) — no ScanConfig data is copied.
+    let mut eff: Arc<ScanConfig> = Arc::clone(global);
     let mut start_idx = 0;
     for (i, ancestor) in ancestors.iter().enumerate().rev() {
         if let Some(cached) = dir_cache.get(ancestor) {
-            eff = cached.clone();
+            eff = Arc::clone(cached);
             start_idx = i + 1;
             break;
         }
     }
 
     // Apply .index overrides for uncached ancestors and populate the cache.
+    // When no override is found for an ancestor, Arc::clone shares the existing
+    // allocation — no ScanConfig clone occurs.  A new Arc is only allocated when
+    // an actual .index override changes the config for that subtree.
     for ancestor in &ancestors[start_idx..] {
         if let Some(ov) = load_dir_override(ancestor, &global.index_file) {
-            eff = eff.apply_override(&ov);
+            eff = Arc::new(eff.apply_override(&ov));
         }
-        dir_cache.insert(ancestor.clone(), eff.clone());
+        dir_cache.insert(ancestor.clone(), Arc::clone(&eff));
     }
 
     eff
