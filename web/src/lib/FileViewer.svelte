@@ -9,6 +9,7 @@
 		toggleLine
 	} from '$lib/lineSelection';
 	import { profile } from '$lib/profile';
+	import { parseImageDimensions } from '$lib/imageMeta';
 	import { marked } from 'marked';
 
 	export let source: string;
@@ -48,25 +49,10 @@
 		imageLoaded = false;
 		imageError = false;
 	}
-	// Parse image dimensions from metadata lines for aspect-ratio placeholder.
-	// Handles both EXIF ([EXIF:ImageWidth]/[EXIF:ImageLength]) and basic extractor
-	// ([IMAGE:dimensions] WxH) formats.
-	let imgWidth: number | null = null;
-	let imgHeight: number | null = null;
-	$: {
-		imgWidth = null;
-		imgHeight = null;
-		for (const l of metaLines) {
-			const w = l.content.match(/^\[EXIF:ImageWidth\]\s+(\d+)/);
-			if (w) imgWidth = parseInt(w[1]);
-			const h = l.content.match(/^\[EXIF:ImageLength\]\s+(\d+)/);
-			if (h) imgHeight = parseInt(h[1]);
-			const dims = l.content.match(/^\[IMAGE:dimensions\]\s+(\d+)x(\d+)/);
-			if (dims) { imgWidth = parseInt(dims[1]); imgHeight = parseInt(dims[2]); }
-		}
-	}
-	$: placeholderStyle = (imgWidth && imgHeight)
-		? `width: min(${imgWidth}px, 100%); aspect-ratio: ${imgWidth} / ${imgHeight}; max-height: min(${imgHeight}px, 100%); min-height: 0;`
+	// Parsed image dimensions for the aspect-ratio loading placeholder.
+	$: imgDims = parseImageDimensions(metaLines);
+	$: placeholderStyle = imgDims
+		? `width: min(${imgDims.width}px, 100%); aspect-ratio: ${imgDims.width} / ${imgDims.height}; max-height: min(${imgDims.height}px, 100%); min-height: 0;`
 		: '';
 	// archivePath is set when this file is a member of an archive.
 	// path is always the outer (real) file path — it never contains '::'.
@@ -88,6 +74,11 @@
 		? `/api/v1/raw?source=${encodeURIComponent(source)}&path=${encodeURIComponent(rawInlinePath)}&convert=png`
 		: `/api/v1/raw?source=${encodeURIComponent(source)}&path=${encodeURIComponent(rawInlinePath)}`;
 	$: fileName = path.split('/').pop() ?? path;
+	// Member download: only ZIP archives support direct member extraction from the raw endpoint.
+	// TAR, 7z, gz, etc. require full-stream reads so we fall back to downloading the outer archive.
+	$: outerExt = (path.split('.').pop() ?? '').toLowerCase();
+	$: canDownloadMember = isArchiveMember && outerExt === 'zip';
+	$: memberFileName = archivePath ? (archivePath.split('/').pop() ?? archivePath) : '';
 
 	// Detect if file is markdown
 	$: isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
@@ -236,9 +227,13 @@
 					</button>
 				{/if}
 			{/if}
-			<a href={rawUrl} download={fileName} class="toolbar-btn">
-				{isArchiveMember ? 'Download Archive' : 'Download Original'}
-			</a>
+			{#if canDownloadMember}
+				<a href={rawInlineUrl} download={memberFileName} class="toolbar-btn">Download</a>
+			{:else}
+				<a href={rawUrl} download={fileName} class="toolbar-btn">
+					{isArchiveMember || fileKind === 'archive' ? 'Download Archive' : 'Download Original'}
+				</a>
+			{/if}
 			<div class="metadata">
 				{#if fileKind}
 					<span class="meta-item kind-badge" title="File type">{fileKind}</span>
@@ -588,12 +583,16 @@
 	/* Image full-width view */
 	.image-full-panel {
 		flex: 1;
-		overflow-y: auto;
+		overflow: auto;
 		background: var(--bg);
+		display: flex;
+		align-items: flex-start;
+		justify-content: center;
+		padding: 16px;
 	}
 
 	.image-full {
-		width: 100%;
+		max-width: 100%;
 		height: auto;
 		display: block;
 	}

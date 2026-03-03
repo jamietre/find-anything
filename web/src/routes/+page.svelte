@@ -284,7 +284,7 @@
 		fileSource = e.detail.source;
 		currentFile = FilePath.fromParts(e.detail.path, e.detail.archivePath ?? null);
 		fileSelection = [];
-		if (e.detail.showAsDirectory || (e.detail.kind === 'archive' && !e.detail.archivePath)) {
+		if (e.detail.showAsDirectory) {
 			panelMode = 'dir';
 			currentDirPrefix = currentFile.full + '::';
 		} else {

@@ -189,6 +189,7 @@
 		padding: 0;
 		color: var(--text);
 		flex-shrink: 0;
+		font-size: 14px;
 	}
 
 	.expand-arrow:hover {

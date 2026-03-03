@@ -14,6 +14,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 use find_common::config::{default_config_path, parse_client_config};
 use find_common::logging::LogIgnoreFilter;
+use scan::{ScanOptions, ScanSource};
 
 #[derive(Parser)]
 #[command(name = "find-scan", about = "Index files and submit to find-anything server")]
@@ -29,6 +30,13 @@ struct Args {
     /// Suppress per-file processing logs (only log warnings, errors, and summary)
     #[arg(long)]
     quiet: bool,
+
+    /// Dry run: walk the filesystem and compare with the server's current state,
+    /// but do not extract content or submit any changes. Prints a summary of
+    /// how many files would be added, modified, unchanged, and deleted.
+    /// Cannot be combined with a single-file argument.
+    #[arg(long)]
+    dry_run: bool,
 
     /// Scan a single file instead of all configured sources. The file must be
     /// under one of the configured source paths. Mtime checking is skipped —
@@ -64,7 +72,17 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let opts = ScanOptions {
+        full: args.full,
+        quiet: args.quiet,
+        dry_run: args.dry_run,
+    };
+
     // Single-file mode: scan one specific file and exit.
+    if opts.dry_run && args.file.is_some() {
+        anyhow::bail!("--dry-run cannot be combined with a single-file argument");
+    }
+
     if let Some(path) = args.file {
         let abs = std::fs::canonicalize(&path)
             .with_context(|| format!("cannot access {}", path.display()))?;
@@ -98,32 +116,24 @@ async fn main() -> Result<()> {
         let rel_path = rel.to_string_lossy().into_owned();
 
         tracing::info!("Scanning single file: {} (source: {}, rel: {})", abs.display(), source.name, rel_path);
-        scan::scan_single_file(
-            &client,
-            &source.name,
-            &source.paths,
-            &rel_path,
-            &abs,
-            &config.scan,
-            source.base_url.as_deref(),
-            args.quiet,
-        ).await?;
+        let scan_source = ScanSource {
+            name: &source.name,
+            paths: &source.paths,
+            base_url: source.base_url.as_deref(),
+        };
+        scan::scan_single_file(&client, &scan_source, &rel_path, &abs, &config.scan, &opts).await?;
         return Ok(());
     }
 
     // Scan all configured sources
     for source in &config.sources {
         tracing::info!("Scanning source: {}", source.name);
-        scan::run_scan(
-            &client,
-            &source.name,
-            &source.paths,
-            &config.scan,
-            source.base_url.as_deref(),
-            args.full,
-            args.quiet,
-        )
-        .await?;
+        let scan_source = ScanSource {
+            name: &source.name,
+            paths: &source.paths,
+            base_url: source.base_url.as_deref(),
+        };
+        scan::run_scan(&client, &scan_source, &config.scan, &opts).await?;
     }
 
     Ok(())

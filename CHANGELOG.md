@@ -9,6 +9,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+- **`find-scan --dry-run`** — scan the filesystem and report counts of new/modified/unchanged/to-delete files without submitting anything to the server
+- **`parseImageDimensions` utility** — extracts image dimensions from indexed metadata lines, handling all three tag families: `[EXIF:PixelXDimension]`/`[EXIF:PixelYDimension]`, `[EXIF:ImageWidth]`/`[EXIF:ImageLength]`, and `[IMAGE:dimensions] WxH`
+
+### Changed
+- **`run_scan` refactored to use structs** — introduced `ScanOptions` (`full`, `quiet`, `dry_run`) and `ScanSource` (`name`, `paths`, `base_url`) to replace long parameter lists, per project convention
+- **Archive member download button** — ZIP members now show "Download" (direct member extraction); non-ZIP archive members and archive files themselves show "Download Archive"; regular files unchanged ("Download Original")
+- **"View Extracted" image no longer stretches small images** — full-width image view now uses `max-width: 100%` and centers the image; tiny images render at natural size instead of being blown up to fill the panel
+- **Tree expand arrow larger** — increased from 11 px to 14 px for easier clicking
+- **Clicking a ZIP file in the tree shows FileViewer** — previously set `panelMode = 'dir'` which hid the FileViewer; now opens the FileViewer so "Download Archive" and metadata are accessible
+
 ---
 
 ## [0.5.1] - 2026-03-03

@@ -66,25 +66,34 @@ to the server. Run periodically (e.g. via cron or systemd timer) to keep the
 index up to date.
 
 ```
-find-scan [OPTIONS]
+find-scan [OPTIONS] [FILE]
 ```
 
-| Option            | Description                                                         |
-| ----------------- | ------------------------------------------------------------------- |
-| `--config <PATH>` | Client config file (default: `~/.config/find-anything/client.toml`) |
-| `--full`          | Force a full re-index of every file regardless of mtime             |
+| Argument / Option | Description                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------ |
+| `[FILE]`          | Scan a single file instead of all sources. The file must be under a configured source path. Mtime checking is skipped — the file is always re-indexed. |
+| `--config <PATH>` | Client config file (default: `~/.config/find-anything/client.toml`)                             |
+| `--full`          | Force a full re-index of every file regardless of mtime                                          |
+| `--quiet`         | Suppress per-file processing logs; only warnings, errors, and the final summary are printed      |
+| `--dry-run`       | Walk the filesystem and compare with server state without extracting or submitting anything; prints how many files would be added, modified, unchanged, and deleted. Cannot be combined with `[FILE]`. |
 
 Without `--full`, only files whose modification time has changed since the last
 scan are re-indexed; deleted files are removed from the index.
 
-**Example**
+**Examples**
 
 ```sh
 # Incremental scan
 find-scan
 
+# Preview what would change without touching the index
+find-scan --dry-run
+
 # Full reindex after config changes or server wipe
 find-scan --full
+
+# Re-index a single file immediately (e.g. after manually editing it)
+find-scan /home/user/documents/notes.md
 ```
 
 ---

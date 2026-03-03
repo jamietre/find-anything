@@ -39,15 +39,27 @@ fn hash_file(path: &Path) -> Option<String> {
 const MAX_FAILURES_PER_BATCH: usize = 100;
 const MAX_ERROR_LEN: usize = 500;
 
+/// Per-invocation options for `run_scan` and `scan_single_file`.
+pub struct ScanOptions {
+    pub full: bool,
+    pub quiet: bool,
+    pub dry_run: bool,
+}
+
+/// Source-specific parameters for `run_scan` and `scan_single_file`.
+pub struct ScanSource<'a> {
+    pub name: &'a str,
+    pub paths: &'a [String],
+    pub base_url: Option<&'a str>,
+}
+
 pub async fn run_scan(
     api: &ApiClient,
-    source_name: &str,
-    paths: &[String],
+    source: &ScanSource<'_>,
     scan: &ScanConfig,
-    base_url: Option<&str>,
-    full: bool,
-    quiet: bool,
+    opts: &ScanOptions,
 ) -> Result<()> {
+    let (source_name, paths, base_url) = (source.name, source.paths, source.base_url);
     // Build global exclusion GlobSet for the walk phase.
     let excludes = build_globset(&scan.exclude)?;
 
@@ -105,7 +117,7 @@ pub async fn run_scan(
         local_files.len(),
     );
 
-    let mut ctx = ScanContext::new(api, source_name, paths, base_url, scan, quiet);
+    let mut ctx = ScanContext::new(api, source_name, paths, base_url, scan, opts.quiet);
 
     let mut indexed: usize = 0;
     let mut skipped: usize = 0;
@@ -123,7 +135,7 @@ pub async fn run_scan(
     for (rel_path, abs_path) in local_entries {
         // Check mtime before any further work so unchanged files are skipped cheaply.
         let mtime = mtime_of(abs_path).unwrap_or(0);
-        if !full {
+        if !opts.full {
             let server_mtime = server_files.get(rel_path.as_str()).copied();
             match server_mtime {
                 None => { new_files += 1; }                  // new file — index it
@@ -141,11 +153,34 @@ pub async fn run_scan(
         }
 
         indexed += 1;
-        process_file(&mut ctx, rel_path, abs_path, mtime).await?;
+        if !opts.dry_run {
+            process_file(&mut ctx, rel_path, abs_path, mtime).await?;
+        }
+    }
+
+    let deleted = to_delete.len();
+
+    if opts.dry_run {
+        if opts.full {
+            info!(
+                "dry-run complete — {} files found (all would be reindexed), {} to delete",
+                local_files.len(),
+                deleted
+            );
+        } else {
+            info!(
+                "dry-run complete — {} files found, {} new, {} modified, {} unchanged, {} to delete",
+                local_files.len(),
+                new_files,
+                modified,
+                skipped,
+                deleted
+            );
+        }
+        return Ok(());
     }
 
     // Final batch: remaining files + all deletes.
-    let deleted = to_delete.len();
     if deleted > 0 {
         info!("deleting {deleted} removed files");
     }
@@ -422,19 +457,16 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
 /// of the source's configured paths. Processes the file identically to a file
 /// discovered during a full scan — subprocess extraction, OOM server-fallback,
 /// archive streaming — but skips the walk, mtime check, and deletion step.
-#[allow(clippy::too_many_arguments)]
 pub async fn scan_single_file(
     api: &ApiClient,
-    source_name: &str,
-    paths: &[String],
+    source: &ScanSource<'_>,
     rel_path: &str,
     abs_path: &Path,
     scan: &ScanConfig,
-    base_url: Option<&str>,
-    quiet: bool,
+    opts: &ScanOptions,
 ) -> Result<()> {
     let mtime = mtime_of(abs_path).unwrap_or(0);
-    let mut ctx = ScanContext::new(api, source_name, paths, base_url, scan, quiet);
+    let mut ctx = ScanContext::new(api, source.name, source.paths, source.base_url, scan, opts.quiet);
     process_file(&mut ctx, rel_path, abs_path, mtime).await?;
     ctx.submit(vec![]).await?;
     info!("done");
