@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+---
+
+## [0.5.1] - 2026-03-03
+
 ### Added
 - **Image split view** — images now open in a split layout by default: image on the left, EXIF/metadata on the right; "View Extracted" button switches to a full-width scrollable image view; "View Split" returns to the split layout
 - **Duplicate file links in detail view** — when a file is a dedup alias, the canonical copy's path now appears in the metadata panel as `DUPLICATE: <clickable link>`; clicking navigates directly to that copy; handles both regular files and archive members
