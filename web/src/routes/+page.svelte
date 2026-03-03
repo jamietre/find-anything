@@ -489,29 +489,24 @@
 
 	.global-sidebar {
 		flex-shrink: 0;
-		overflow: hidden;
-		display: flex;
-		flex-direction: column;
-		background: var(--bg-secondary);
-		border-right: 1px solid var(--border);
-	}
-
-	/* In file-view mode, sidebar fills the flex container height */
-	.page-layout.file-view .global-sidebar {
-		height: 100%;
-	}
-
-	/* In search mode, sidebar is sticky and full-height */
-	.page-layout:not(.file-view) .global-sidebar {
 		position: sticky;
 		top: 0;
 		height: 100vh;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
 		align-self: flex-start;
+		background: var(--bg-secondary);
+		border-right: 1px solid var(--border);
 	}
 
 	.resize-handle {
 		width: 4px;
 		flex-shrink: 0;
+		position: sticky;
+		top: 0;
+		height: 100vh;
+		align-self: flex-start;
 		cursor: col-resize;
 		background: var(--border);
 		border: none;

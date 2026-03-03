@@ -35,7 +35,7 @@
 		class:active={showTree}
 		title="Toggle file tree"
 		on:click={() => dispatch('treeToggle')}
-	>⊞</button>
+	>◫</button>
 	<div class="search-wrap">
 		<SearchBox
 			{query}

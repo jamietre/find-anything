@@ -45,7 +45,7 @@
 		class:active={showTree}
 		title="Toggle file tree (Ctrl+P to search files)"
 		on:click={() => dispatch('treeToggle')}
-	>⊞</button>
+	>◫</button>
 	<div class="search-wrap">
 		<SearchBox
 			{query}
@@ -87,9 +87,7 @@
 				path={currentFile.outer}
 				archivePath={currentFile.inner}
 				selection={fileSelection}
-				{showTree}
 				on:lineselect={(e) => dispatch('lineselect', e.detail)}
-				on:treeToggle={() => dispatch('treeToggle')}
 			/>
 		{/key}
 	{/if}

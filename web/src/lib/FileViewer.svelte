@@ -15,11 +15,9 @@
 	export let path: string;
 	export let archivePath: string | null = null;
 	export let selection: LineSelection = [];
-	export let showTree = false;
 
 	const dispatch = createEventDispatcher<{
 		lineselect: { selection: LineSelection };
-		treeToggle: void;
 	}>();
 
 	let loading = true;
@@ -156,12 +154,6 @@
 			</div>
 		{/if}
 		<div class="toolbar">
-			<button
-				class="toolbar-btn"
-				class:active={showTree}
-				on:click={() => dispatch('treeToggle')}
-				title="Toggle file tree"
-			>⊞</button>
 			<button class="toolbar-btn" on:click={toggleWordWrap} title="Toggle word wrap">
 				{wordWrap ? '⊟' : '⊞'} Wrap
 			</button>
@@ -376,11 +368,6 @@
 
 	.toolbar-btn:active {
 		transform: translateY(1px);
-	}
-
-	.toolbar-btn.active {
-		color: var(--accent, #58a6ff);
-		border-color: var(--accent, #58a6ff);
 	}
 
 	.meta-panel {

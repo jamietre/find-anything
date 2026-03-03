@@ -6,6 +6,8 @@ mod scan;
 mod subprocess;
 mod upload;
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use clap::Parser;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
@@ -27,6 +29,12 @@ struct Args {
     /// Suppress per-file processing logs (only log warnings, errors, and summary)
     #[arg(long)]
     quiet: bool,
+
+    /// Scan a single file instead of all configured sources. The file must be
+    /// under one of the configured source paths. Mtime checking is skipped —
+    /// the file is always (re-)indexed.
+    #[arg(value_name = "FILE")]
+    file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -53,6 +61,53 @@ async fn main() -> Result<()> {
 
     if config.sources.is_empty() {
         tracing::info!("No sources configured — nothing to scan.");
+        return Ok(());
+    }
+
+    // Single-file mode: scan one specific file and exit.
+    if let Some(path) = args.file {
+        let abs = std::fs::canonicalize(&path)
+            .with_context(|| format!("cannot access {}", path.display()))?;
+        anyhow::ensure!(abs.is_file(), "{} is not a file", abs.display());
+
+        // Find the source whose configured path is the longest prefix of `abs`.
+        let mut best: Option<(&find_common::config::SourceConfig, PathBuf, PathBuf)> = None;
+        for source in &config.sources {
+            for root in &source.paths {
+                let root_canon = std::fs::canonicalize(root).unwrap_or_else(|_| PathBuf::from(root));
+                if let Ok(rel) = abs.strip_prefix(&root_canon) {
+                    let longer = best.as_ref()
+                        .is_none_or(|(_, rc, _)| root_canon.as_os_str().len() > rc.as_os_str().len());
+                    if longer {
+                        best = Some((source, root_canon, rel.to_path_buf()));
+                    }
+                }
+            }
+        }
+        let (source, _, rel) = best.ok_or_else(|| {
+            let paths = config.sources.iter()
+                .flat_map(|s| s.paths.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            anyhow::anyhow!(
+                "{} is not under any configured source path\nConfigured paths: {paths}",
+                abs.display()
+            )
+        })?;
+        let rel_path = rel.to_string_lossy().into_owned();
+
+        tracing::info!("Scanning single file: {} (source: {}, rel: {})", abs.display(), source.name, rel_path);
+        scan::scan_single_file(
+            &client,
+            &source.name,
+            &source.paths,
+            &rel_path,
+            &abs,
+            &config.scan,
+            source.base_url.as_deref(),
+            args.quiet,
+        ).await?;
         return Ok(());
     }
 

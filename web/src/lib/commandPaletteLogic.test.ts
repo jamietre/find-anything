@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { buildItems, filterItems, fuzzyScore, displayPath, archivePathOf } from './commandPaletteLogic';
 import type { FileRecord } from '$lib/api';
 
-const file = (path: string, kind = 'text'): FileRecord => ({ path, kind });
+const file = (path: string, kind = 'text'): FileRecord => ({ path, kind, mtime: 0 });
 
 // ── buildItems ────────────────────────────────────────────────────────────────
 //
@@ -55,9 +55,9 @@ describe('buildItems', () => {
 
 describe('filterItems', () => {
 	const items = [
-		{ path: 'src/main.rs', kind: 'text', source: 's' },
-		{ path: 'src/lib.rs', kind: 'text', source: 's' },
-		{ path: 'docs/readme.md', kind: 'text', source: 's' },
+		{ path: 'src/main.rs', kind: 'text', mtime: 0, source: 's' },
+		{ path: 'src/lib.rs', kind: 'text', mtime: 0, source: 's' },
+		{ path: 'docs/readme.md', kind: 'text', mtime: 0, source: 's' },
 	];
 
 	it('with empty query returns first 50 items scored 0', () => {
@@ -82,6 +82,7 @@ describe('filterItems', () => {
 		const many = Array.from({ length: 100 }, (_, i) => ({
 			path: `file${i}.ts`,
 			kind: 'text',
+			mtime: 0,
 			source: 's',
 		}));
 		expect(filterItems(many, '').length).toBe(50);
