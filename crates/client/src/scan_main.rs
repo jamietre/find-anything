@@ -23,6 +23,10 @@ struct Args {
     /// Force a full reindex regardless of mtime
     #[arg(long)]
     full: bool,
+
+    /// Suppress per-file processing logs (only log warnings, errors, and summary)
+    #[arg(long)]
+    quiet: bool,
 }
 
 #[tokio::main]
@@ -62,6 +66,7 @@ async fn main() -> Result<()> {
             &config.scan,
             source.base_url.as_deref(),
             args.full,
+            args.quiet,
         )
         .await?;
     }

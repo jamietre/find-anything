@@ -12,12 +12,16 @@
 # ── Scan ─────────────────────────────────────────────────────────────────────
 
 [scan]
-max_content_size_mb = 10
-max_line_length   = 120
-follow_symlinks   = false
-include_hidden    = false
-noindex_file      = ".noindex"
-index_file        = ".index"
+max_content_size_mb     = 10
+max_line_length         = 120
+follow_symlinks         = false
+include_hidden          = false
+noindex_file            = ".noindex"
+index_file              = ".index"
+subprocess_timeout_secs = 300
+batch_size              = 200
+batch_bytes             = 8388608   # 8 MB
+batch_interval_secs     = 30
 
 exclude = [
     # ── Development artefacts ─────────────────────────────────────────────

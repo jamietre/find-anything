@@ -34,7 +34,6 @@ use tray_icon::{
 #[cfg(windows)]
 use winit::{
     application::ApplicationHandler,
-    event::Event,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
 };
 

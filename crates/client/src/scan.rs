@@ -23,8 +23,6 @@ use crate::upload;
 
 
 
-const BATCH_SIZE: usize = 200;
-const BATCH_BYTES: usize = 8 * 1024 * 1024; // 8 MB
 
 /// Hash a file's contents using blake3 without reading the whole file into memory.
 fn hash_file(path: &Path) -> Option<String> {
@@ -48,6 +46,7 @@ pub async fn run_scan(
     scan: &ScanConfig,
     base_url: Option<&str>,
     full: bool,
+    quiet: bool,
 ) -> Result<()> {
     // Build global exclusion GlobSet for the walk phase.
     let excludes = build_globset(&scan.exclude)?;
@@ -117,9 +116,14 @@ pub async fn run_scan(
     let mut skipped: usize = 0;
     let mut new_files: usize = 0;   // in local but absent from server DB
     let mut modified: usize = 0;    // mtime changed since last scan
-    let mut batch: Vec<IndexFile> = Vec::with_capacity(BATCH_SIZE);
+    let batch_size = scan.batch_size;
+    let batch_bytes_limit = scan.batch_bytes;
+    let batch_interval = std::time::Duration::from_secs(scan.batch_interval_secs);
+
+    let mut batch: Vec<IndexFile> = Vec::with_capacity(batch_size);
     let mut batch_bytes: usize = 0;
     let mut failures: Vec<IndexingFailure> = Vec::new();
+    let mut last_submit = std::time::Instant::now();
     let log_interval = std::time::Duration::from_secs(5);
     let mut last_log = std::time::Instant::now();
 
@@ -179,12 +183,18 @@ pub async fn run_scan(
 
         indexed += 1;
 
+        if !quiet {
+            info!("Processing {rel_path}");
+        }
+
         if find_extract_archive::accepts(abs_path) {
             // ── Streaming archive extraction ─────────────────────────────────
             // Members are processed one at a time via a bounded channel so that
             // lines are freed after each member is converted to an IndexFile,
             // rather than holding the entire archive's content in memory.
-            info!("extracting archive {rel_path} ({indexed} indexed so far)");
+            if quiet {
+                info!("extracting archive {rel_path} ({indexed} indexed so far)");
+            }
 
             // Hash the outer archive file for dedup (streaming to avoid OOM on large archives).
             let outer_hash = hash_file(abs_path);
@@ -204,8 +214,9 @@ pub async fn run_scan(
             batch.push(outer_file);
             submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], Some(scan_start)).await?;
             batch_bytes = 0;
+            last_submit = std::time::Instant::now();
 
-            lazy_header::set_pending(&abs_path.to_string_lossy());
+            if quiet { lazy_header::set_pending(&abs_path.to_string_lossy()); }
             let (mut member_rx, subprocess_task) = subprocess::start_archive_subprocess(
                 abs_path.to_path_buf(), &eff_scan, &eff_scan.extractor_dir);
 
@@ -254,15 +265,18 @@ pub async fn run_scan(
                     batch_bytes += file_bytes;
                     members_submitted += 1;
                     batch.push(file);
-                    if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
+                    if batch.len() >= batch_size || batch_bytes >= batch_bytes_limit
+                        || (!batch.is_empty() && last_submit.elapsed() >= batch_interval)
+                    {
                         info!("submitting batch — extracting {rel_path} ({} members, {} total)", batch.len(), members_submitted);
                         submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], Some(scan_start)).await?;
                         batch_bytes = 0;
+                        last_submit = std::time::Instant::now();
                     }
                 }
             }
 
-            lazy_header::clear_pending();
+            if quiet { lazy_header::clear_pending(); }
 
             // Check whether the subprocess exited successfully.
             if !subprocess_task.await.unwrap_or(false) && failures.len() < MAX_FAILURES_PER_BATCH {
@@ -276,10 +290,10 @@ pub async fn run_scan(
             // dispatch_from_path handles MIME detection internally: it emits a
             // [FILE:mime] line when no extractor matched the bytes, so we check
             // for that line below to update the kind accordingly.
-            lazy_header::set_pending(&abs_path.to_string_lossy());
+            if quiet { lazy_header::set_pending(&abs_path.to_string_lossy()); }
             let outcome = subprocess::extract_via_subprocess(
                 abs_path, &eff_scan, &eff_scan.extractor_dir).await;
-            lazy_header::clear_pending();
+            if quiet { lazy_header::clear_pending(); }
 
             let lines = match outcome {
                 subprocess::SubprocessOutcome::Ok(lines) => lines,
@@ -326,20 +340,26 @@ pub async fn run_scan(
                 let file_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
                 batch_bytes += file_bytes;
                 batch.push(file);
-                if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
+                if batch.len() >= batch_size || batch_bytes >= batch_bytes_limit
+                    || (!batch.is_empty() && last_submit.elapsed() >= batch_interval)
+                {
                     let total = indexed + skipped;
                     info!("submitting batch — {indexed} indexed of {total} processed so far");
                     submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], Some(scan_start)).await?;
                     batch_bytes = 0;
+                    last_submit = std::time::Instant::now();
                 }
             }
         }
 
-        if batch.len() >= BATCH_SIZE || batch_bytes >= BATCH_BYTES {
+        if batch.len() >= batch_size || batch_bytes >= batch_bytes_limit
+            || (!batch.is_empty() && last_submit.elapsed() >= batch_interval)
+        {
             let total = indexed + skipped;
             info!("submitting batch — {indexed} indexed of {total} processed so far");
             submit_batch(api, source_name, base_url, &mut batch, &mut failures, vec![], Some(scan_start)).await?;
             batch_bytes = 0;
+            last_submit = std::time::Instant::now();
         }
     }
 
@@ -453,7 +473,6 @@ fn walk_paths(
     excludes: &GlobSet,
 ) -> HashMap<String, PathBuf> {
     let mut map = HashMap::new();
-    let mut noindex_dirs: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
     let log_interval = std::time::Duration::from_secs(5);
     let mut last_log = std::time::Instant::now();
 
@@ -465,11 +484,20 @@ fn walk_paths(
             .filter_entry(|e| {
                 let name = e.file_name().to_str().unwrap_or("");
 
-                // Skip hidden directories (avoid descending into .git etc.).
-                // Hidden FILES are handled in the loop body so that control files
-                // (.noindex, .index) are always visible regardless of include_hidden.
-                if e.file_type().is_dir() && !scan.include_hidden && name.starts_with('.') && e.depth() > 0 {
-                    return false;
+                if e.file_type().is_dir() {
+                    // Skip hidden directories (avoid descending into .git etc.).
+                    // Hidden FILES are handled in the loop body so that control files
+                    // (.index) are always visible regardless of include_hidden.
+                    if !scan.include_hidden && name.starts_with('.') && e.depth() > 0 {
+                        return false;
+                    }
+                    // Don't descend into directories that contain a .noindex marker.
+                    // This is checked inline so the progress count is accurate and
+                    // WalkDir never collects files from excluded subtrees.
+                    if e.path().join(&scan.noindex_file).exists() {
+                        tracing::debug!("skipping {} (.noindex present)", e.path().display());
+                        return false;
+                    }
                 }
                 // Exclusion globs (match relative to root)
                 if let Ok(rel) = e.path().strip_prefix(root) {
@@ -486,14 +514,6 @@ fn walk_paths(
             };
             let name = entry.file_name().to_str().unwrap_or("");
 
-            // Detect .noindex marker: record its parent so we can prune after the walk.
-            if name == scan.noindex_file {
-                if let Some(parent) = entry.path().parent() {
-                    tracing::debug!("skipping {} (.noindex present)", parent.display());
-                    noindex_dirs.insert(parent.to_path_buf());
-                }
-                continue;
-            }
             // Skip the .index control file (not a content file).
             if name == scan.index_file {
                 continue;
@@ -517,11 +537,6 @@ fn walk_paths(
                 last_log = std::time::Instant::now();
             }
         }
-    }
-
-    // Prune any files collected under a .noindex directory.
-    if !noindex_dirs.is_empty() {
-        map.retain(|_, abs| !noindex_dirs.iter().any(|d| abs.starts_with(d)));
     }
 
     map

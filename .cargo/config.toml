@@ -1,2 +1,7 @@
 [target.armv7-unknown-linux-gnueabihf]
 linker = "arm-linux-gnueabihf-gcc"
+
+[target.x86_64-pc-windows-gnu]
+# Explicitly link ws2_32 to provide GetHostNameW and other winsock2 symbols
+# required by Rust's libstd for windows-gnu targets.
+rustflags = ["-C", "link-arg=-lws2_32"]

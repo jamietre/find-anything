@@ -2,6 +2,7 @@
 	import { createEventDispatcher, tick } from 'svelte';
 	import { listFiles } from '$lib/api';
 	import type { FileRecord } from '$lib/api';
+	import { buildItems, filterItems, displayPath, archivePathOf } from '$lib/commandPaletteLogic';
 
 	/** Set to true to show the palette. */
 	export let open = false;
@@ -17,10 +18,10 @@
 	let selected = 0;
 	let inputEl: HTMLInputElement;
 
-	// Per-source file list cache.
-	const cache = new Map<string, FileRecord[]>();
-
-	type SourcedFile = FileRecord & { source: string };
+	// Per-source file list cache. Must be `let` (not `const`) so Svelte's
+	// reactivity tracks it — Map mutations don't trigger updates, but
+	// reassigning `cache = cache` after each set does.
+	let cache = new Map<string, FileRecord[]>();
 
 	let loading = false;
 
@@ -31,6 +32,7 @@
 		if (cache.has(source)) return;
 		const records = await listFiles(source);
 		cache.set(source, records);
+		cache = cache; // trigger Svelte reactivity for allItems
 	}
 
 	async function loadAll(srcs: string[]) {
@@ -44,66 +46,8 @@
 		}
 	}
 
-	$: allItems = sources.flatMap((s) =>
-		(cache.get(s) ?? []).map((f): SourcedFile => ({ ...f, source: s }))
-	);
-
-	// Simple character-subsequence fuzzy scorer with exact match boosting.
-	function fuzzyScore(q: string, path: string): number {
-		if (!q) return 0;
-		const ql = q.toLowerCase();
-		const pl = path.toLowerCase();
-
-		// Huge bonus for exact substring match (case-insensitive)
-		if (pl.includes(ql)) {
-			let bonus = 100;
-			// Extra bonus if match is in the filename portion (after last / or ::)
-			const lastSlash = Math.max(pl.lastIndexOf('/'), pl.lastIndexOf('::'));
-			const filename = lastSlash >= 0 ? pl.slice(lastSlash + 1) : pl;
-			if (filename.includes(ql)) bonus += 50;
-			// Extra bonus if match is at the start of filename
-			if (filename.startsWith(ql)) bonus += 50;
-			return bonus;
-		}
-
-		// Fallback to character subsequence matching
-		let qi = 0;
-		let score = 0;
-		let lastMatch = -1;
-		for (let pi = 0; pi < pl.length && qi < ql.length; pi++) {
-			if (pl[pi] === ql[qi]) {
-				if (pi === lastMatch + 1) score += 2;
-				if (pi === 0 || '/-_.'.includes(pl[pi - 1])) score += 3;
-				lastMatch = pi;
-				qi++;
-			}
-		}
-		return qi === ql.length ? score : -1;
-	}
-
-	/** For a composite path "archive.zip::member.txt", returns the member portion. */
-	function archivePathOf(path: string): string | null {
-		const i = path.indexOf('::');
-		return i >= 0 ? path.slice(i + 2) : null;
-	}
-
-	/** Display label for a file record: show archive members as "zip → member". */
-	function displayPath(path: string): string {
-		const i = path.indexOf('::');
-		if (i < 0) return path;
-		const zip = path.slice(0, i);
-		const member = path.slice(i + 2);
-		return `${zip} → ${member}`;
-	}
-
-	$: filtered = (() => {
-		if (!query) return allItems.slice(0, 50).map((f) => ({ ...f, score: 0 }));
-		return allItems
-			.map((f) => ({ ...f, score: fuzzyScore(query, f.path) }))
-			.filter((f) => f.score >= 0)
-			.sort((a, b) => b.score - a.score)
-			.slice(0, 50);
-	})();
+	$: allItems = buildItems(cache, sources);
+	$: filtered = filterItems(allItems, query);
 
 	$: if (filtered) selected = 0;
 

@@ -1,0 +1,5 @@
+[target.x86_64-pc-windows-gnu]
+# The default cross image ships mingw-w64 < 7.0, which is missing GetHostNameW
+# (a winsock2 symbol that Rust's libstd for windows-gnu now requires).
+# The 'edge' image ships a newer mingw-w64 that includes the symbol.
+image = "ghcr.io/cross-rs/x86_64-pc-windows-gnu:edge"

@@ -51,9 +51,24 @@ pub async fn extract_via_subprocess(
         // find-extract-pdf: <path> [max-content-kb] [max-line-length]
         cmd.arg(&max_line_length);
     }
+    // Kill the child process if it is still running when the future is dropped
+    // (i.e. when the timeout fires and the output future is cancelled).
+    cmd.kill_on_drop(true);
 
-    match cmd.output().await {
-        Ok(out) => {
+    let timeout = tokio::time::Duration::from_secs(scan.subprocess_timeout_secs);
+    let result = tokio::time::timeout(timeout, cmd.output()).await;
+
+    match result {
+        Err(_elapsed) => {
+            warn!(
+                "extractor {} timed out after {}s for {}",
+                binary,
+                scan.subprocess_timeout_secs,
+                abs_path.display()
+            );
+            SubprocessOutcome::Failed
+        }
+        Ok(Ok(out)) => {
             relay_subprocess_logs(&out.stderr);
             if out.status.success() {
                 let lines = if is_archive {
@@ -74,7 +89,7 @@ pub async fn extract_via_subprocess(
                 SubprocessOutcome::Failed
             }
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             warn!("failed to run extractor {}: {e:#}", binary);
             SubprocessOutcome::Failed
         }

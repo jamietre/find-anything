@@ -40,7 +40,8 @@
 	.multi-tree {
 		display: flex;
 		flex-direction: column;
-		height: 100%;
+		flex: 1;
+		min-height: 0;
 		overflow-y: auto;
 		background: var(--bg-secondary);
 		border-right: 1px solid var(--border);

@@ -87,7 +87,9 @@
 				path={currentFile.outer}
 				archivePath={currentFile.inner}
 				selection={fileSelection}
+				{showTree}
 				on:lineselect={(e) => dispatch('lineselect', e.detail)}
+				on:treeToggle={() => dispatch('treeToggle')}
 			/>
 		{/key}
 	{/if}

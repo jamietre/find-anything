@@ -23,6 +23,10 @@ struct ScanDefaults {
     max_line_length: usize,
     noindex_file: String,
     index_file: String,
+    subprocess_timeout_secs: u64,
+    batch_size: usize,
+    batch_bytes: usize,
+    batch_interval_secs: u64,
     archives: ArchiveDefaults,
 }
 
@@ -177,6 +181,29 @@ pub struct ScanConfig {
     /// find-extract-* binaries available).  Default: false.
     #[serde(default)]
     pub server_fallback: bool,
+
+    /// Maximum number of seconds to wait for a single file's extraction
+    /// subprocess before killing it and recording a failure.
+    /// Default: 300 (5 minutes).
+    #[serde(default = "default_subprocess_timeout_secs")]
+    pub subprocess_timeout_secs: u64,
+
+    /// Maximum number of files in a single batch submitted to the server.
+    /// Default: 200.
+    #[serde(default = "default_batch_size")]
+    pub batch_size: usize,
+
+    /// Maximum total content bytes in a single batch submitted to the server.
+    /// Default: 8388608 (8 MB).
+    #[serde(default = "default_batch_bytes")]
+    pub batch_bytes: usize,
+
+    /// Submit the current batch if this many seconds have elapsed since the
+    /// last submission, regardless of file count or byte size. Ensures the
+    /// server receives data promptly when individual files are slow to extract.
+    /// Default: 30.
+    #[serde(default = "default_batch_interval_secs")]
+    pub batch_interval_secs: u64,
 }
 
 impl Default for ScanConfig {
@@ -193,6 +220,10 @@ impl Default for ScanConfig {
             index_file: default_index_file(),
             extractor_dir: None,
             server_fallback: false,
+            subprocess_timeout_secs: default_subprocess_timeout_secs(),
+            batch_size: default_batch_size(),
+            batch_bytes: default_batch_bytes(),
+            batch_interval_secs: default_batch_interval_secs(),
         }
     }
 }
@@ -333,11 +364,15 @@ impl Default for WatchConfig {
 }
 
 fn default_debounce_ms() -> u64         { client_defaults().watch.debounce_ms }
-fn default_excludes() -> Vec<String>    { client_defaults().scan.exclude.clone() }
-fn default_max_content_size_mb() -> u64 { client_defaults().scan.max_content_size_mb }
-fn default_max_line_length() -> usize   { client_defaults().scan.max_line_length }
-fn default_noindex_file() -> String     { client_defaults().scan.noindex_file.clone() }
-fn default_index_file() -> String       { client_defaults().scan.index_file.clone() }
+fn default_excludes() -> Vec<String>         { client_defaults().scan.exclude.clone() }
+fn default_max_content_size_mb() -> u64      { client_defaults().scan.max_content_size_mb }
+fn default_max_line_length() -> usize        { client_defaults().scan.max_line_length }
+fn default_noindex_file() -> String          { client_defaults().scan.noindex_file.clone() }
+fn default_index_file() -> String            { client_defaults().scan.index_file.clone() }
+fn default_subprocess_timeout_secs() -> u64  { client_defaults().scan.subprocess_timeout_secs }
+fn default_batch_size() -> usize             { client_defaults().scan.batch_size }
+fn default_batch_bytes() -> usize            { client_defaults().scan.batch_bytes }
+fn default_batch_interval_secs() -> u64      { client_defaults().scan.batch_interval_secs }
 fn default_true() -> bool               { true }
 
 /// Configuration passed to extractor functions.

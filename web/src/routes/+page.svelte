@@ -44,7 +44,7 @@
 	let fileSelection: LineSelection = [];
 	let panelMode: 'file' | 'dir' = 'file';
 	let currentDirPrefix = '';
-	let showTree = false;
+	let showTree = true;
 	let showPalette = false;
 
 	let sidebarWidth: number = $profile.sidebarWidth ?? 240;
@@ -144,7 +144,7 @@
 		})();
 
 		function handleKeydown(e: KeyboardEvent) {
-			if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+			if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p') {
 				e.preventDefault();
 				showPalette = !showPalette;
 			}
@@ -277,7 +277,6 @@
 			: extraLines.length ? extraLines : [];
 		panelMode = 'file';
 		view = 'file';
-		showTree = true;
 		pushState();
 	}
 
@@ -327,7 +326,6 @@
 		fileSource = e.detail.source;
 		fileSelection = [];
 		view = 'file';
-		showTree = true;
 		currentFile = FilePath.fromParts(e.detail.path, e.detail.archivePath);
 		if (e.detail.kind === 'archive') {
 			panelMode = 'dir';
@@ -494,11 +492,13 @@
 		overflow: hidden;
 		display: flex;
 		flex-direction: column;
+		background: var(--bg-secondary);
+		border-right: 1px solid var(--border);
 	}
 
-	/* In file-view mode, sidebar fills full height */
+	/* In file-view mode, sidebar fills the flex container height */
 	.page-layout.file-view .global-sidebar {
-		height: 100vh;
+		height: 100%;
 	}
 
 	/* In search mode, sidebar is sticky and full-height */
