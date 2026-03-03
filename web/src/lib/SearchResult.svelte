@@ -121,12 +121,14 @@
 	{/if}
 
 	<div class="context-lines">
-		{#if result.line_number === 0}
-			<!-- Filename / metadata match — show snippet without line number -->
+		{#if result.line_number === 0 && result.snippet.startsWith('[')}
+			<!-- Metadata match (EXIF, mime, etc.) — show the matched tag -->
 			<div class="line match">
 				<span class="arrow meta-arrow">▶</span>
 				<code class="lc">{result.snippet}</code>
 			</div>
+		{:else if result.line_number === 0}
+			<!-- Path/filename match — path is already shown in the header, skip snippet -->
 		{:else if contextLines.length > 0}
 			{#each contextLines as content, i}
 				{@const lineNum = contextStart + i}

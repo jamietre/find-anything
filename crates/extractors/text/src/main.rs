@@ -36,6 +36,11 @@ fn main() {
         ..Default::default()
     };
 
+    if !find_extract_text::accepts(path) {
+        println!("[]");
+        process::exit(0);
+    }
+
     match find_extract_text::extract(path, &cfg) {
         Ok(lines) => {
             // Output JSON to stdout

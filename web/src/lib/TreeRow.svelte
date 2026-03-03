@@ -181,7 +181,7 @@
 		display: inline-flex;
 		align-items: center;
 		justify-content: center;
-		width: 18px;
+		width: 14px;
 		height: 100%;
 		background: none;
 		border: none;
@@ -189,7 +189,6 @@
 		padding: 0;
 		color: var(--text);
 		flex-shrink: 0;
-		font-size: 14px;
 	}
 
 	.expand-arrow:hover {
@@ -204,7 +203,6 @@
 		border: none;
 		cursor: pointer;
 		padding: 0;
-		padding-left: 4px;
 		color: inherit;
 		font-size: inherit;
 		text-align: left;
@@ -221,6 +219,11 @@
 
 	.row--dir .icon {
 		color: var(--text);
+	}
+
+	.expand-arrow .icon {
+		font-size: 18px;
+		width: 14px;
 	}
 
 	.name {

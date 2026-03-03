@@ -12,6 +12,21 @@
 		openDir: { prefix: string };
 	}>();
 
+	// Compute the parent prefix for the "up" button.
+	// Handles both "/" separators (directories) and "::" separators (archive roots).
+	function parentPrefix(p: string): string | null {
+		if (!p) return null;
+		// Strip the trailing separator ("/" or "::")
+		const s = p.endsWith('::') ? p.slice(0, -2) : p.slice(0, -1);
+		const lastSlash = s.lastIndexOf('/');
+		const lastSep = s.lastIndexOf('::');
+		if (lastSlash === -1 && lastSep === -1) return ''; // one level above root
+		if (lastSep > lastSlash) return s.slice(0, lastSep + 2); // keep "::"
+		return s.slice(0, lastSlash + 1); // keep "/"
+	}
+
+	$: parent = parentPrefix(prefix);
+
 	let entries: DirEntry[] = [];
 	let loading = true;
 	let error: string | null = null;
@@ -63,6 +78,14 @@
 				</tr>
 			</thead>
 			<tbody>
+				{#if parent !== null}
+					<tr class="row row--up" on:click={() => dispatch('openDir', { prefix: parent ?? '' })}>
+						<td class="col-name" colspan="4">
+							<span class="icon-up">↑</span>
+							<span class="name">..</span>
+						</td>
+					</tr>
+				{/if}
 				{#each entries as entry (entry.path)}
 					<tr
 						class="row"
@@ -161,7 +184,23 @@
 		color: var(--accent, #58a6ff);
 	}
 
+	.row--up .name {
+		color: var(--text-muted);
+	}
+
+	.icon-up {
+		display: inline-block;
+		width: 14px;
+		text-align: center;
+		margin-right: 0;
+		color: var(--text-muted);
+		font-size: 14px;
+	}
+
 	.row--dir .icon {
+		font-size: 18px;
+		width: 14px;
+		margin-right: 0;
 		color: var(--accent, #58a6ff);
 	}
 </style>

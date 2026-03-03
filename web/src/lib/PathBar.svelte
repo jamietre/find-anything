@@ -7,30 +7,83 @@
 	/** Effective resolved base URL (server value overridden by user profile). */
 	export let baseUrl: string | null = null;
 
-	const dispatch = createEventDispatcher<{ back: void }>();
+	const dispatch = createEventDispatcher<{
+		back: void;
+		navigate: { type: 'dir'; prefix: string } | { type: 'file'; path: string; kind: string };
+	}>();
 
-	$: displayText = archivePath ? `${path}::${archivePath}` : path;
+	type Segment = {
+		label: string;
+		separator: '/' | '::' | null; // separator BEFORE this segment (null for first)
+		action: { type: 'dir'; prefix: string } | { type: 'file'; path: string; kind: string } | { type: 'current' };
+	};
 
-	$: href = baseUrl
+	$: segments = computeSegments(path, archivePath);
+
+	$: externalHref = baseUrl
 		? baseUrl.replace(/\/+$/, '') + '/' +
 		  path.replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/')
 		: null;
+
+	function computeSegments(outerPath: string, innerPath: string | null): Segment[] {
+		const outerParts = outerPath.split('/');
+		const result: Segment[] = [];
+
+		for (let i = 0; i < outerParts.length; i++) {
+			const cumulative = outerParts.slice(0, i + 1).join('/');
+			const isLast = i === outerParts.length - 1;
+			const sep: '/' | '::' | null = i === 0 ? null : '/';
+
+			if (isLast && !innerPath) {
+				result.push({ label: outerParts[i], separator: sep, action: { type: 'current' } });
+			} else if (isLast && innerPath) {
+				// Last outer segment is an archive — clicking opens its FileViewer
+				result.push({ label: outerParts[i], separator: sep, action: { type: 'file', path: cumulative, kind: 'archive' } });
+			} else {
+				result.push({ label: outerParts[i], separator: sep, action: { type: 'dir', prefix: cumulative + '/' } });
+			}
+		}
+
+		if (innerPath) {
+			const innerParts = innerPath.split('/');
+			for (let i = 0; i < innerParts.length; i++) {
+				const cumulativeInner = innerParts.slice(0, i + 1).join('/');
+				const isLast = i === innerParts.length - 1;
+				const sep: '/' | '::' | null = i === 0 ? '::' : '/';
+
+				if (isLast) {
+					result.push({ label: innerParts[i], separator: sep, action: { type: 'current' } });
+				} else {
+					result.push({ label: innerParts[i], separator: sep, action: { type: 'dir', prefix: `${outerPath}::${cumulativeInner}/` } });
+				}
+			}
+		}
+
+		return result;
+	}
+
+	function handleSegmentClick(seg: Segment) {
+		if (seg.action.type === 'current') return;
+		dispatch('navigate', seg.action);
+	}
 </script>
 
 <div class="path-bar">
 	<button class="back-btn" on:click={() => dispatch('back')}>← results</button>
-	<span class="badge">{source}</span>
-	{#if href}
-		<a
-			class="path-link"
-			{href}
-			target="_blank"
-			rel="noopener noreferrer"
-			title={href}
-		>{displayText}</a>
-	{:else}
-		<span class="path-plain" title={displayText}>{displayText}</span>
-	{/if}
+	<button class="badge" on:click={() => dispatch('navigate', { type: 'dir', prefix: '' })}>{source}</button>
+	<span class="path-plain">
+		{#each segments as seg}
+			{#if seg.separator}<span class="sep">{seg.separator}</span>{/if}
+			{#if seg.action.type === 'current'}
+				<span class="seg seg--current">{seg.label}</span>
+			{:else}
+				<button class="seg seg--link" on:click={() => handleSegmentClick(seg)}>{seg.label}</button>
+			{/if}
+		{/each}
+		{#if externalHref}
+			<a class="external-link" href={externalHref} target="_blank" rel="noopener noreferrer" title="Open in file manager">↗</a>
+		{/if}
+	</span>
 </div>
 
 <style>
@@ -54,6 +107,7 @@
 		border-radius: var(--radius);
 		font-size: 12px;
 		flex-shrink: 0;
+		cursor: pointer;
 	}
 
 	.back-btn:hover {
@@ -68,9 +122,14 @@
 		color: var(--badge-text);
 		font-size: 11px;
 		flex-shrink: 0;
+		border: none;
+		cursor: pointer;
 	}
 
-	.path-link,
+	.badge:hover {
+		opacity: 0.75;
+	}
+
 	.path-plain {
 		font-family: var(--font-mono);
 		font-size: 12px;
@@ -79,18 +138,50 @@
 		white-space: nowrap;
 		flex: 1;
 		min-width: 0;
-	}
-
-	.path-link {
+		display: flex;
+		align-items: baseline;
+		gap: 0;
 		color: var(--accent);
-		text-decoration: none;
 	}
 
-	.path-link:hover {
+	.sep {
+		color: var(--text-dim);
+		padding: 0 1px;
+		user-select: none;
+	}
+
+	.seg {
+		font-family: var(--font-mono);
+		font-size: 12px;
+		white-space: nowrap;
+	}
+
+	.seg--current {
+		color: var(--accent);
+	}
+
+	.seg--link {
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		color: var(--text-muted);
+	}
+
+	.seg--link:hover {
+		color: var(--accent);
 		text-decoration: underline;
 	}
 
-	.path-plain {
+	.external-link {
+		margin-left: 6px;
+		color: var(--text-dim);
+		text-decoration: none;
+		font-size: 11px;
+		flex-shrink: 0;
+	}
+
+	.external-link:hover {
 		color: var(--accent);
 	}
 </style>

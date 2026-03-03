@@ -267,12 +267,10 @@ pub async fn search(
         })
         .collect();
 
-    let mut total = 0usize;
     let mut all_results: Vec<SearchResult> = Vec::new();
     for handle in handles {
         match handle.await.unwrap_or_else(|e| Err(anyhow::anyhow!(e))) {
-            Ok((source_total, mut r)) => {
-                total += source_total;
+            Ok((_source_total, mut r)) => {
                 all_results.append(&mut r);
             }
             Err(e) => tracing::warn!("search source error: {e:#}"),
@@ -291,7 +289,8 @@ pub async fn search(
         .filter(|r| seen.insert((r.source.clone(), r.path.clone(), r.archive_path.clone(), r.line_number)))
         .collect();
 
+    let unique_total = unique.len();
     let results: Vec<_> = unique.into_iter().skip(offset).take(limit).collect();
 
-    Json(SearchResponse { results, total }).into_response()
+    Json(SearchResponse { results, total: unique_total }).into_response()
 }

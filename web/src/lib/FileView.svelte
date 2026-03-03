@@ -72,6 +72,13 @@
 		archivePath={panelMode === 'file' ? currentFile?.inner ?? null : null}
 		{baseUrl}
 		on:back={() => dispatch('back')}
+		on:navigate={(e) => {
+			if (e.detail.type === 'dir') {
+				dispatch('openDir', { prefix: e.detail.prefix });
+			} else {
+				dispatch('openFileFromTree', { source: fileSource, path: e.detail.path, kind: e.detail.kind });
+			}
+		}}
 	/>
 	{#if panelMode === 'dir'}
 		<DirListing

@@ -303,6 +303,7 @@
 
 	function handleOpenDir(e: CustomEvent<{ prefix: string }>) {
 		currentDirPrefix = e.detail.prefix;
+		panelMode = 'dir';
 		pushState();
 	}
 
