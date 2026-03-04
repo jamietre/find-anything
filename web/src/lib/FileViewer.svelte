@@ -2,6 +2,7 @@
 	import { createEventDispatcher, onMount, tick } from 'svelte';
 	import { getFile } from '$lib/api';
 	import { highlightFile } from '$lib/highlight';
+	import DirListing from './DirListing.svelte';
 	import {
 		type LineSelection,
 		selectionSet,
@@ -20,6 +21,7 @@
 	const dispatch = createEventDispatcher<{
 		lineselect: { selection: LineSelection };
 		open: { source: string; path: string; kind: string; archivePath?: string };
+		navigateDir: { prefix: string };
 	}>();
 
 	let loading = true;
@@ -31,6 +33,7 @@
 	let size: number | null = null;
 	let fileKind: string | null = null;
 	let rawContent = '';
+	let isEncrypted = false;
 	let indexingError: string | null = null;
 	/** Metadata lines (line_number === 0, excluding the path line itself). */
 	let metaLines: { content: string }[] = [];
@@ -44,10 +47,13 @@
 	// Image load state — reset whenever the source URL changes
 	let imageLoaded = false;
 	let imageError = false;
+	// PDF load state — reset whenever the source URL changes
+	let pdfLoaded = false;
 	$: {
 		rawInlineUrl;
 		imageLoaded = false;
 		imageError = false;
+		pdfLoaded = false;
 	}
 	// Parsed image dimensions for the aspect-ratio loading placeholder.
 	$: imgDims = parseImageDimensions(metaLines);
@@ -57,6 +63,10 @@
 	// archivePath is set when this file is a member of an archive.
 	// path is always the outer (real) file path — it never contains '::'.
 	$: isArchiveMember = archivePath !== null;
+
+	// For inline archive browsing: tracks the current dir prefix within the archive.
+	let archivePrefix = '';
+	$: if (fileKind === 'archive' && !archivePath && path) archivePrefix = path + '::';
 	// Download/stream URL for the outer file (used for download link and PDF iframe).
 	$: rawUrl = `/api/v1/raw?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
 	// For inline image display, use the composite path for archive members so the
@@ -64,7 +74,7 @@
 	$: rawInlinePath = archivePath ? `${path}::${archivePath}` : path;
 	// Both images and PDFs can be shown inline, including archive members.
 	// The server extracts archive members from the outer ZIP via composite paths.
-	$: canViewInline = fileKind === 'image' || fileKind === 'pdf';
+	$: canViewInline = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted);
 	// For images the browser can't render natively, request server-side PNG conversion.
 	// Check the member's own extension for archive members.
 	const BROWSER_IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','svg','svgz','avif','bmp','ico']);
@@ -146,8 +156,10 @@
 			size = data.size;
 			fileKind = data.file_kind ?? null;
 			indexingError = data.indexing_error ?? null;
-			// Default to showing the original for images; extracted text for everything else.
-			showOriginal = fileKind === 'image';
+			isEncrypted = fileKind === 'pdf' && contentLines.length === 1 && contentLines[0].content === 'Content encrypted';
+			// Default: images always show original; PDFs show original unless encrypted or opened
+			// from search results with a specific line selected (user wants extracted text context).
+			showOriginal = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted && firstLine(selection) === null);
 			imageFullWidth = false;
 		} catch (e) {
 			error = String(e);
@@ -235,7 +247,7 @@
 				</a>
 			{/if}
 			<div class="metadata">
-				{#if fileKind}
+				{#if fileKind && fileKind !== 'raw'}
 					<span class="meta-item kind-badge" title="File type">{fileKind}</span>
 				{/if}
 				{#if size !== null}
@@ -295,12 +307,18 @@
 			{:else}
 				<!-- PDF / other inline kind -->
 				<div class="original-panel">
-					<iframe src={rawInlineUrl} title="Original file" class="original-iframe"></iframe>
+					{#if !pdfLoaded}<div class="pdf-loading"><div class="pdf-spinner"></div></div>{/if}
+					<iframe src={rawInlineUrl} title="Original file" class="original-iframe"
+						class:iframe-hidden={!pdfLoaded}
+						on:load={() => pdfLoaded = true}></iframe>
 				</div>
 			{/if}
 		{:else}
 			<!-- Extracted text / code view -->
 			<div class="code-container">
+				{#if isEncrypted}
+					<div class="encrypted-notice">🔒 This PDF is password-protected and cannot be displayed.</div>
+				{/if}
 				{#if metaLines.length > 0 || duplicatePaths.length > 0}
 					<div class="meta-panel">
 						{#each duplicatePaths as dup}
@@ -318,7 +336,27 @@
 					<div class="markdown-content">
 						{@html renderedMarkdown}
 					</div>
-				{:else if codeLines.length === 0 && metaLines.length === 0 && duplicatePaths.length === 0}
+				{:else if codeLines.length === 0 && metaLines.length === 0 && duplicatePaths.length === 0 && fileKind === 'archive' && !archivePath}
+					<!-- Archive root: show member listing inline -->
+					<DirListing
+						source={source}
+						prefix={archivePrefix}
+						on:openFile={(e) => {
+							const p = e.detail.path;
+							const i = p.indexOf('::');
+							const outerPath = i >= 0 ? p.slice(0, i) : p;
+							const innerPath = i >= 0 ? p.slice(i + 2) : undefined;
+							dispatch('open', { source, path: outerPath, kind: e.detail.kind, archivePath: innerPath });
+						}}
+						on:openDir={(e) => {
+							if (e.detail.prefix.startsWith(path + '::')) {
+								archivePrefix = e.detail.prefix;
+							} else {
+								dispatch('navigateDir', e.detail);
+							}
+						}}
+					/>
+			{:else if codeLines.length === 0 && metaLines.length === 0 && duplicatePaths.length === 0}
 					<div class="no-content">No text content or metadata available for this file.</div>
 				{:else}
 					<table class="code-table" cellspacing="0" cellpadding="0">
@@ -543,6 +581,10 @@
 		min-height: 400px;
 	}
 
+	.iframe-hidden {
+		display: none;
+	}
+
 	/* Image split view */
 	.image-split-panel {
 		flex: 1;
@@ -624,6 +666,26 @@
 		50%       { opacity: 1;   }
 	}
 
+	.pdf-loading {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.pdf-spinner {
+		width: 32px;
+		height: 32px;
+		border: 3px solid rgba(255, 255, 255, 0.08);
+		border-top-color: var(--accent, #58a6ff);
+		border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+	}
+
+	@keyframes spin {
+		to { transform: rotate(360deg); }
+	}
+
 	.img-hidden {
 		display: none;
 	}
@@ -638,6 +700,12 @@
 		align-items: baseline;
 		gap: 6px;
 		flex-shrink: 0;
+	}
+
+	.encrypted-notice {
+		padding: 24px 16px;
+		color: var(--text-muted);
+		font-size: 13px;
 	}
 
 	.error-text {

@@ -9,9 +9,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+---
+
+## [0.5.2] - 2026-03-03
+
 ### Added
 - **`find-scan --dry-run`** — scan the filesystem and report counts of new/modified/unchanged/to-delete files without submitting anything to the server
 - **`parseImageDimensions` utility** — extracts image dimensions from indexed metadata lines, handling all three tag families: `[EXIF:PixelXDimension]`/`[EXIF:PixelYDimension]`, `[EXIF:ImageWidth]`/`[EXIF:ImageLength]`, and `[IMAGE:dimensions] WxH`
+- **PDF defaults to original view** — opening a PDF from the tree or file browser now shows the embedded PDF viewer by default; opening from search results (where extracted-text context is relevant) still defaults to the extracted text view
+- **PDF loading spinner** — a spinner is shown while the PDF iframe loads, replacing the blank panel
+- **Encrypted PDF detection** — PDFs flagged as password-protected at index time (`/Encrypt` token detected) show a "🔒 This PDF is password-protected" notice instead of attempting to display the PDF inline (which would show a browser error)
+- **Symmetric duplicate links** — both the canonical copy and any alias now show each other as `DUPLICATE:` links; previously only the alias showed the canonical, not vice versa
 
 ### Changed
 - **`run_scan` refactored to use structs** — introduced `ScanOptions` (`full`, `quiet`, `dry_run`) and `ScanSource` (`name`, `paths`, `base_url`) to replace long parameter lists, per project convention
@@ -19,6 +27,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **"View Extracted" image no longer stretches small images** — full-width image view now uses `max-width: 100%` and centers the image; tiny images render at natural size instead of being blown up to fill the panel
 - **Tree expand arrow larger** — increased from 11 px to 14 px for easier clicking
 - **Clicking a ZIP file in the tree shows FileViewer** — previously set `panelMode = 'dir'` which hid the FileViewer; now opens the FileViewer so "Download Archive" and metadata are accessible
+- **`kind` badge hidden for `raw` files** — files with `file_kind = "raw"` (e.g. image-based PDFs with no extractable text) no longer show a "raw" badge in the viewer toolbar
+
+### Fixed
+- **Archive indexing resumability** — the client now sends a `mtime=0` sentinel before submitting archive members and a completion upsert with the real mtime afterwards; if indexing is interrupted mid-archive, the next scan detects the `mtime=0` and re-indexes from scratch instead of leaving a partial member set
 
 ---
 

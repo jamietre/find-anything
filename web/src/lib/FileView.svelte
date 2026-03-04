@@ -31,6 +31,7 @@
 		openDirFile: { source: string; path: string; kind: string; archivePath?: string };
 		openDir: { prefix: string };
 		lineselect: { selection: LineSelection };
+		navigateDir: { prefix: string };
 	}>();
 
 	let isTyping = false;
@@ -96,6 +97,7 @@
 				selection={fileSelection}
 				on:lineselect={(e) => dispatch('lineselect', e.detail)}
 				on:open={(e) => dispatch('openDirFile', e.detail)}
+				on:navigateDir={(e) => dispatch('openDir', e.detail)}
 			/>
 		{/key}
 	{/if}

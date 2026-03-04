@@ -291,7 +291,12 @@ fn process_file(
     // skip_inner_delete is set for the stub fallback path (see process_request error
     // handling) to avoid re-triggering this delete while the original failure is still
     // unresolved and the inner members may still be alive.
-    if !skip_inner_delete && is_outer_archive(&file.path, &file.kind) {
+    //
+    // mtime == 0 is the "start of archive indexing" sentinel emitted by the client
+    // before submitting members.  The completion upsert (sent after all members) uses
+    // the real mtime, so we only delete members on the start sentinel — not on the
+    // completion upsert — to avoid erasing members that were just written.
+    if !skip_inner_delete && is_outer_archive(&file.path, &file.kind) && file.mtime == 0 {
         // Collect and remove chunks for all old inner members.
         let like_pat = format!("{}::%", file.path);
         let inner_ids: Vec<i64> = {

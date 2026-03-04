@@ -150,11 +150,35 @@ outer.zip::inner.zip::file.txt   (nested archives)
 - `::` is reserved — cannot appear in regular file paths
 - Members get their `kind` detected from their own filename (not the outer archive)
 - Deletion: `DELETE FROM files WHERE path = 'x' OR path LIKE 'x::%'` cleans up members
-- Re-indexing: server deletes `path LIKE 'archive::%'` members before re-inserting
+- Re-indexing: server deletes `path LIKE 'archive::%'` members **only when the outer file arrives with `mtime=0`** (the start sentinel — see below)
 - Client filters `::` paths from deletion detection (outer files only)
 
 **Tree browsing**: `GET /api/v1/tree?prefix=archive.zip::` lists archive members.
 Archive files (`kind="archive"`) expand in the tree like directories.
+
+### Archive indexing protocol: mtime=0 sentinel
+
+Indexing an archive is a multi-step process that can be interrupted mid-way. To ensure
+the index is always in a consistent state, the client uses a two-phase commit:
+
+**Phase 1 — start:** The outer archive file is submitted with `mtime=0`.
+The server recognises `mtime=0` as the start-of-indexing sentinel and deletes all
+existing inner members (`path LIKE 'archive::%'`) before writing the outer file row.
+
+**Phase 2 — members:** Archive members are streamed and submitted in normal batches.
+
+**Phase 3 — completion:** After all members are flushed, the client sends a second
+upsert for the outer file with its real mtime. The server updates the outer file's
+mtime **without** deleting members (deletion only fires on `mtime=0`).
+
+**Interrupted scan recovery:** If the scan process is killed between phases 1 and 3,
+the outer file retains `mtime=0` in the database. Any real file mtime is always > 0, so
+the next scan sees a mtime mismatch and re-indexes the archive from scratch — no manual
+intervention required.
+
+This also applies to the server-side error fallback path: if the worker fails to process
+an outer archive, it writes a stub with `mtime=0` (via `outer_archive_stub`) so the
+archive is retried on the next scan.
 
 ---
 

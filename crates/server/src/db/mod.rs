@@ -514,7 +514,25 @@ pub fn get_file_lines(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    Ok(resolve_content(archive_mgr, rows))
+    let mut lines = resolve_content(archive_mgr, rows);
+
+    // Inject synthetic line_number=0 entries for all alias paths of this
+    // canonical file.  The existing line_number=0 entry (the canonical's own
+    // path, stored in the ZIP) is already in `lines`.  Adding the alias paths
+    // here means both the canonical view and any alias view show the full set
+    // of duplicate paths — the UI filters out whichever one matches the
+    // currently-viewed file and labels the rest as "DUPLICATE".
+    let mut alias_stmt = conn.prepare(
+        "SELECT path FROM files WHERE canonical_file_id = ?1 ORDER BY path",
+    )?;
+    let alias_paths: Vec<String> = alias_stmt
+        .query_map(params![file_id], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    for alias_path in alias_paths {
+        lines.push(ContextLine { line_number: 0, content: alias_path });
+    }
+
+    Ok(lines)
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────

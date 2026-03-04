@@ -292,19 +292,21 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
         // Hash the outer archive file for dedup (streaming to avoid OOM on large archives).
         let outer_hash = hash_file(abs_path);
 
-        // Submit the outer archive file first, before any member batches.
-        // The server deletes stale inner members when it sees the outer file,
-        // so it must arrive before member batches — not after them.
-        let outer_file = IndexFile {
+        // Submit the outer archive file with mtime=0 (sentinel: members not yet indexed).
+        // The server deletes stale inner members when it receives mtime=0 for an outer
+        // archive, so this must arrive before member batches.  Using mtime=0 means that
+        // if indexing is interrupted before the completion upsert below, the next scan
+        // will see a mtime mismatch (any real mtime > 0) and re-index the archive.
+        let outer_start = IndexFile {
             path: rel_path.to_string(),
-            mtime,
+            mtime: 0,
             size,
-            kind,
+            kind: kind.clone(),
             lines: vec![IndexLine { archive_path: None, line_number: 0, content: rel_path.to_string() }],
             extract_ms: None,
-            content_hash: outer_hash,
+            content_hash: None, // no hash on start sentinel — avoids premature dedup alias
         };
-        ctx.batch.push(outer_file);
+        ctx.batch.push(outer_start);
         ctx.submit(vec![]).await?;
 
         if ctx.quiet { lazy_header::set_pending(&abs_path.to_string_lossy()); }
@@ -380,6 +382,22 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
             info!("submitting batch — extracting {rel_path} ({} members, {members_submitted} total)", ctx.batch.len());
             ctx.submit(vec![]).await?;
         }
+
+        // Completion upsert: update the outer file with its real mtime now that
+        // all members have been submitted.  The server only deletes inner members
+        // when it receives mtime=0, so this upsert simply updates the mtime field
+        // without disturbing any member rows.  If indexing was interrupted before
+        // this point the outer file retains mtime=0, causing the next scan to
+        // re-index the archive from scratch.
+        ctx.batch.push(IndexFile {
+            path: rel_path.to_string(),
+            mtime,
+            size,
+            kind,
+            lines: vec![IndexLine { archive_path: None, line_number: 0, content: rel_path.to_string() }],
+            extract_ms: None,
+            content_hash: outer_hash,
+        });
     } else {
         // ── Non-archive extraction ────────────────────────────────────────────
         // dispatch_from_path handles MIME detection internally: it emits a
