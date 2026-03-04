@@ -32,6 +32,12 @@
 
 	let sources: SourceInfo[] = [];
 	let selectedSources: string[] = [];
+	// ISO date strings bound to the AdvancedSearch inputs (propagated back for controlled state).
+	let dateFromStr = '';
+	let dateToStr = '';
+	// Unix timestamp equivalents sent to the API (undefined = no filter).
+	let dateFromTs: number | undefined;
+	let dateToTs: number | undefined;
 
 	let results: SearchResult[] = [];
 	let totalResults = 0;
@@ -188,7 +194,7 @@
 		if (loadingMore || noMoreResults || query.trim().length < 3) return;
 		loadingMore = true;
 		try {
-			const resp = await search({ q: query, mode, sources: selectedSources, limit: 50, offset: loadOffset });
+			const resp = await search({ q: query, mode, sources: selectedSources, limit: 50, offset: loadOffset, dateFrom: dateFromTs, dateTo: dateToTs });
 			if (resp.results.length === 0) {
 				noMoreResults = true;
 			} else {
@@ -232,7 +238,7 @@
 			window.scrollTo(0, 0);
 		}
 		try {
-			const resp = await search({ q, mode: m, sources: srcs, limit: 50, offset: 0 });
+			const resp = await search({ q, mode: m, sources: srcs, limit: 50, offset: 0, dateFrom: dateFromTs, dateTo: dateToTs });
 			results = resp.results;
 			totalResults = resp.total;
 			loadOffset = resp.results.length; // server cursor starts after page 0
@@ -258,8 +264,13 @@
 		doSearch(query, mode, selectedSources);
 	}
 
-	function handleSourceChange(e: CustomEvent<string[]>) {
-		selectedSources = e.detail;
+	function handleFilterChange(e: CustomEvent<{ sources: string[]; dateFrom?: number; dateTo?: number }>) {
+		selectedSources = e.detail.sources;
+		dateFromTs = e.detail.dateFrom;
+		dateToTs = e.detail.dateTo;
+		// Keep ISO strings in sync so AdvancedSearch inputs remain controlled.
+		dateFromStr = dateFromTs != null ? new Date(dateFromTs * 1000).toISOString().slice(0, 10) : '';
+		dateToStr = dateToTs != null ? new Date(dateToTs * 1000).toISOString().slice(0, 10) : '';
 		if (query.trim()) doSearch(query, mode, selectedSources);
 	}
 
@@ -409,9 +420,11 @@
 				{searching}
 				sources={sourceNames}
 				{selectedSources}
+				dateFrom={dateFromStr}
+				dateTo={dateToStr}
 				on:back={handleBack}
 				on:search={handleSearch}
-				on:sourceChange={handleSourceChange}
+				on:filterChange={handleFilterChange}
 				on:treeToggle={handleTreeToggle}
 				on:openFileFromTree={handleOpenFileFromTree}
 				on:openDirFile={handleOpenDirFile}
@@ -425,13 +438,15 @@
 				{searching}
 				sources={sourceNames}
 				{selectedSources}
+				dateFrom={dateFromStr}
+				dateTo={dateToStr}
 				{results}
 				{totalResults}
 				{searchError}
 				{searchId}
 				{showTree}
 				on:search={handleSearch}
-				on:sourceChange={handleSourceChange}
+				on:filterChange={handleFilterChange}
 				on:open={openFile}
 				on:treeToggle={handleTreeToggle}
 			/>

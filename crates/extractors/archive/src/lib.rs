@@ -25,6 +25,9 @@ pub struct MemberBatch {
     /// When `lines` is empty, the failure applies to the outer archive itself
     /// (e.g. a 7z solid block summary) rather than to a specific member.
     pub skip_reason: Option<String>,
+    /// Unix timestamp (seconds) of this member's internal archive timestamp, if available.
+    /// None means the caller should fall back to the outer archive's filesystem mtime.
+    pub mtime: Option<i64>,
 }
 
 // Internal callback alias for brevity.
@@ -140,6 +143,44 @@ fn dispatch_streaming(path: &Path, kind: &ArchiveKind, cfg: &ExtractorConfig, ca
 // FORMAT-SPECIFIC STREAMING EXTRACTORS
 // ============================================================================
 
+/// Parse the UNIX extended timestamp from a ZIP extra data block (tag 0x5455).
+/// The local-file version has up to three timestamps; only mtime (flags bit 0) is used.
+fn zip_unix_mtime(extra: &[u8]) -> Option<i64> {
+    let mut i = 0;
+    while i + 4 <= extra.len() {
+        let tag = u16::from_le_bytes([extra[i], extra[i + 1]]);
+        let size = u16::from_le_bytes([extra[i + 2], extra[i + 3]]) as usize;
+        i += 4;
+        if i + size > extra.len() { break; }
+        if tag == 0x5455 && size >= 5 {
+            let flags = extra[i];
+            if flags & 0x01 != 0 {
+                let secs = i32::from_le_bytes([extra[i + 1], extra[i + 2], extra[i + 3], extra[i + 4]]);
+                return Some(secs as i64);
+            }
+        }
+        i += size;
+    }
+    None
+}
+
+/// Convert a ZIP DOS datetime to a unix timestamp (seconds since 1970-01-01 UTC).
+/// Returns None when the year is ≤ 1980 (the DOS epoch default, meaning "not set").
+fn zip_dos_to_unix(dt: zip::DateTime) -> Option<i64> {
+    if dt.year() <= 1980 { return None; }
+    let y = dt.year() as i64;
+    let mo = dt.month() as i64;
+    let d = dt.day() as i64;
+    // Shift Jan/Feb to be months 13/14 of the preceding year so leap-day math works out.
+    let (y, m) = if mo <= 2 { (y - 1, mo + 9) } else { (y, mo - 3) };
+    let era = (if y >= 0 { y } else { y - 399 }) / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * m + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146097 + doe - 719468; // days since 1970-01-01
+    Some(days * 86400 + dt.hour() as i64 * 3600 + dt.minute() as i64 * 60 + dt.second() as i64)
+}
+
 fn zip_streaming(path: &Path, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
     let file = File::open(path)?;
     let archive = zip::ZipArchive::new(file).context("opening zip")?;
@@ -172,6 +213,10 @@ fn zip_from_archive<R: Read + std::io::Seek>(
             continue;
         }
 
+        // Extract member timestamp: prefer extended timestamp (UTC), fall back to DOS datetime.
+        let mtime = entry.extra_data().and_then(zip_unix_mtime)
+            .or_else(|| entry.last_modified().and_then(zip_dos_to_unix));
+
         // Multi-file nested archive: recurse without writing to disk where possible.
         if let Some(kind) = detect_kind_from_name(&name) {
             if is_multifile_archive(&kind) {
@@ -197,7 +242,7 @@ fn zip_from_archive<R: Read + std::io::Seek>(
             None
         };
         let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
-        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash, skip_reason });
+        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash, skip_reason, mtime });
     }
     Ok(())
 }
@@ -221,6 +266,8 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cf
         if !cfg.include_hidden && has_hidden_component(&name) {
             continue;
         }
+
+        let mtime = entry.header().mtime().ok().map(|t| t as i64);
 
         // Multi-file nested archive: recurse without writing to disk where possible.
         if let Some(kind) = detect_kind_from_name(&name) {
@@ -249,7 +296,7 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cf
             None
         };
         let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
-        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash, skip_reason });
+        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash, skip_reason, mtime });
     }
     Ok(())
 }
@@ -315,8 +362,17 @@ fn sevenz_process_entry(
     } else {
         None
     };
+    let mtime = if entry.has_last_modified_date {
+        std::time::SystemTime::from(entry.last_modified_date)
+            .duration_since(std::time::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs() as i64)
+    } else {
+        None
+    };
+
     let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
-    callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash, skip_reason });
+    callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash, skip_reason, mtime });
     Ok(true)
 }
 
@@ -377,6 +433,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
                  filenames indexed only",
                 skipped, oversized.len(), largest_block_mb, cfg.max_7z_solid_block_mb,
             )),
+            ..Default::default()
         });
         for (file_idx, block_opt) in archive.stream_map.file_block_index.iter().enumerate() {
             if let Some(bi) = *block_opt {
@@ -450,6 +507,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
                             "unknown block size; cannot safely estimate memory requirement"
                                 .to_string(),
                         ),
+                        ..Default::default()
                     });
                 }
             }
@@ -480,6 +538,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
                         lines: make_filename_line(name),
                         content_hash: None,
                         skip_reason: skip_reason.clone(),
+                        ..Default::default()
                     });
                 }
                 continue;
@@ -535,6 +594,7 @@ fn single_compressed<R: Read>(reader: R, path: &Path, cfg: &ExtractorConfig) -> 
         lines: extract_member_bytes(bytes, &inner_name, path.to_str().unwrap_or(""), cfg),
         content_hash,
         skip_reason: None,
+        mtime: None, // single-file wrapper: caller uses outer archive's filesystem mtime
     })
 }
 
@@ -565,7 +625,7 @@ fn handle_nested_archive(
     callback: CB<'_>,
 ) {
     // Always emit the filename of the nested archive itself.
-    callback(MemberBatch { lines: make_filename_line(outer_name), content_hash: None, skip_reason: None });
+    callback(MemberBatch { lines: make_filename_line(outer_name), content_hash: None, skip_reason: None, mtime: None });
 
     if cfg.max_depth == 0 {
         warn!(
@@ -597,7 +657,7 @@ fn handle_nested_archive(
                 l
             })
             .collect();
-        callback(MemberBatch { lines: p, content_hash: inner_batch.content_hash, skip_reason: inner_batch.skip_reason });
+        callback(MemberBatch { lines: p, content_hash: inner_batch.content_hash, skip_reason: inner_batch.skip_reason, mtime: inner_batch.mtime });
     };
 
     // Use `reader` as `&mut dyn Read` throughout so that tar_streaming<GzDecoder<&mut dyn Read>>

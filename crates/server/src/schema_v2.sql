@@ -25,6 +25,7 @@ CREATE INDEX IF NOT EXISTS files_content_hash ON files(content_hash)
     WHERE content_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS files_canonical ON files(canonical_file_id)
     WHERE canonical_file_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime);
 
 CREATE TABLE IF NOT EXISTS lines (
     id                   INTEGER PRIMARY KEY AUTOINCREMENT,

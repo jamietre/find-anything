@@ -15,7 +15,7 @@ pub mod stats;
 pub mod tree;
 
 pub use search::{
-    document_candidates, fetch_aliases_for_canonical_ids, fts_candidates, fts_count,
+    document_candidates, fetch_aliases_for_canonical_ids, fts_candidates, fts_count, DateFilter,
 };
 pub use stats::{
     append_scan_history, clear_errors_for_paths, get_fts_row_count, get_indexing_error,
@@ -49,6 +49,11 @@ pub fn open(db_path: &Path) -> Result<Connection> {
             db_path.display()
         );
     }
+
+    // Idempotent index additions — safe to run on existing databases at any version.
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime);"
+    ).context("creating mtime index")?;
 
     Ok(conn)
 }

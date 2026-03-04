@@ -116,6 +116,10 @@ export interface SearchParams {
 	sources?: string[];
 	limit?: number;
 	offset?: number;
+	/** Unix timestamp seconds (inclusive lower bound for file mtime). */
+	dateFrom?: number;
+	/** Unix timestamp seconds (inclusive upper bound for file mtime). */
+	dateTo?: number;
 }
 
 export async function search(params: SearchParams): Promise<SearchResponse> {
@@ -127,6 +131,8 @@ export async function search(params: SearchParams): Promise<SearchResponse> {
 	}
 	if (params.limit != null) url.searchParams.set('limit', String(params.limit));
 	if (params.offset != null) url.searchParams.set('offset', String(params.offset));
+	if (params.dateFrom != null) url.searchParams.set('date_from', String(params.dateFrom));
+	if (params.dateTo != null) url.searchParams.set('date_to', String(params.dateTo));
 
 	const resp = await apiFetch(url.toString());
 	if (!resp.ok) {

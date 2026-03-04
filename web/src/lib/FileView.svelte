@@ -2,7 +2,7 @@
 	import { createEventDispatcher } from 'svelte';
 	import { goto } from '$app/navigation';
 	import SearchBox from '$lib/SearchBox.svelte';
-	import SourceSelector from '$lib/SourceSelector.svelte';
+	import AdvancedSearch from '$lib/AdvancedSearch.svelte';
 	import PathBar from '$lib/PathBar.svelte';
 	import FileViewer from '$lib/FileViewer.svelte';
 	import DirListing from '$lib/DirListing.svelte';
@@ -21,11 +21,13 @@
 	export let searching: boolean;
 	export let sources: string[];
 	export let selectedSources: string[];
+	export let dateFrom = '';
+	export let dateTo = '';
 
 	const dispatch = createEventDispatcher<{
 		back: void;
 		search: { query: string; mode: string };
-		sourceChange: string[];
+		filterChange: { sources: string[]; dateFrom?: number; dateTo?: number };
 		treeToggle: void;
 		openFileFromTree: { source: string; path: string; kind: string; archivePath?: string; showAsDirectory?: boolean };
 		openDirFile: { source: string; path: string; kind: string; archivePath?: string };
@@ -57,10 +59,12 @@
 		/>
 	</div>
 	{#if sources.length > 0}
-		<SourceSelector
+		<AdvancedSearch
 			{sources}
-			selected={selectedSources}
-			on:change={(e) => dispatch('sourceChange', e.detail)}
+			{selectedSources}
+			{dateFrom}
+			{dateTo}
+			on:change={(e) => dispatch('filterChange', e.detail)}
 		/>
 	{/if}
 	<button class="gear-btn" title="Settings" on:click={() => goto('/settings')}>⚙</button>

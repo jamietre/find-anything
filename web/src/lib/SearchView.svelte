@@ -2,7 +2,7 @@
 	import { createEventDispatcher } from 'svelte';
 	import { goto } from '$app/navigation';
 	import SearchBox from '$lib/SearchBox.svelte';
-	import SourceSelector from '$lib/SourceSelector.svelte';
+	import AdvancedSearch from '$lib/AdvancedSearch.svelte';
 	import ResultList from '$lib/ResultList.svelte';
 	import type { SearchResult } from '$lib/api';
 
@@ -11,6 +11,8 @@
 	export let searching: boolean;
 	export let sources: string[];
 	export let selectedSources: string[];
+	export let dateFrom = '';
+	export let dateTo = '';
 	export let results: SearchResult[] = [];
 	export let totalResults = 0;
 	export let searchError: string | null = null;
@@ -19,7 +21,7 @@
 
 	const dispatch = createEventDispatcher<{
 		search: { query: string; mode: string };
-		sourceChange: string[];
+		filterChange: { sources: string[]; dateFrom?: number; dateTo?: number };
 		open: SearchResult;
 		treeToggle: void;
 	}>();
@@ -46,10 +48,12 @@
 		/>
 	</div>
 	{#if sources.length > 0}
-		<SourceSelector
+		<AdvancedSearch
 			{sources}
-			selected={selectedSources}
-			on:change={(e) => dispatch('sourceChange', e.detail)}
+			{selectedSources}
+			{dateFrom}
+			{dateTo}
+			on:change={(e) => dispatch('filterChange', e.detail)}
 		/>
 	{/if}
 	<button class="gear-btn" title="Settings" on:click={() => goto('/settings')}>⚙</button>

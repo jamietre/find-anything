@@ -11,7 +11,7 @@ use tokio::task::spawn_blocking;
 use find_common::api::{ContextLine, SearchResponse, SearchResult};
 
 use crate::fuzzy::FuzzyScorer;
-use crate::{archive::ArchiveManager, db, db::search::CandidateRow, AppState};
+use crate::{archive::ArchiveManager, db, db::search::CandidateRow, db::DateFilter, AppState};
 
 use super::{check_auth, source_db_path};
 
@@ -24,6 +24,9 @@ pub struct SearchParams {
     pub source: Vec<String>,
     pub limit: usize,
     pub offset: usize,
+    /// Optional unix timestamp bounds for mtime filtering.
+    pub date_from: Option<i64>,
+    pub date_to: Option<i64>,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for SearchParams {
@@ -36,26 +39,34 @@ impl<S: Send + Sync> FromRequestParts<S> for SearchParams {
         let mut source = Vec::new();
         let mut limit = None;
         let mut offset = None;
+        let mut date_from = None;
+        let mut date_to = None;
 
         for (k, v) in form_urlencoded::parse(raw.as_bytes()) {
             match k.as_ref() {
-                "q"      => q      = Some(v.into_owned()),
-                "mode"   => mode   = Some(v.into_owned()),
-                "source" => source.push(v.into_owned()),
-                "limit"  => limit  = Some(v.parse::<usize>()
+                "q"         => q         = Some(v.into_owned()),
+                "mode"      => mode      = Some(v.into_owned()),
+                "source"    => source.push(v.into_owned()),
+                "limit"     => limit     = Some(v.parse::<usize>()
                     .map_err(|_| (StatusCode::BAD_REQUEST, "invalid limit".to_string()))?),
-                "offset" => offset = Some(v.parse::<usize>()
+                "offset"    => offset    = Some(v.parse::<usize>()
                     .map_err(|_| (StatusCode::BAD_REQUEST, "invalid offset".to_string()))?),
+                "date_from" => date_from = Some(v.parse::<i64>()
+                    .map_err(|_| (StatusCode::BAD_REQUEST, "invalid date_from".to_string()))?),
+                "date_to"   => date_to   = Some(v.parse::<i64>()
+                    .map_err(|_| (StatusCode::BAD_REQUEST, "invalid date_to".to_string()))?),
                 _ => {}
             }
         }
 
         Ok(SearchParams {
-            q:      q.ok_or_else(|| (StatusCode::BAD_REQUEST, "missing 'q'".to_string()))?,
-            mode:   mode.unwrap_or_else(|| "fuzzy".to_string()),
+            q:         q.ok_or_else(|| (StatusCode::BAD_REQUEST, "missing 'q'".to_string()))?,
+            mode:      mode.unwrap_or_else(|| "fuzzy".to_string()),
             source,
-            limit:  limit.unwrap_or(50),
-            offset: offset.unwrap_or(0),
+            limit:     limit.unwrap_or(50),
+            offset:    offset.unwrap_or(0),
+            date_from,
+            date_to,
         })
     }
 }
@@ -160,6 +171,7 @@ pub async fn search(
 
     let data_dir = state.data_dir.clone();
     let offset = params.offset;
+    let date_filter = DateFilter { from: params.date_from, to: params.date_to };
 
     // Only score enough candidates to fill this page plus a buffer for fuzzy
     // filtering. This avoids reading thousands of ZIP chunks for common queries
@@ -181,7 +193,7 @@ pub async fn search(
 
                 // Document mode has its own query path (one result per file).
                 if mode == "document" {
-                    let (doc_total, candidates) = db::document_candidates(&conn, &archive_mgr, &query, scoring_limit)?;
+                    let (doc_total, candidates) = db::document_candidates(&conn, &archive_mgr, &query, scoring_limit, date_filter)?;
                     let mut scorer = FuzzyScorer::new(&query);
                     let result_pairs: Vec<(SearchResult, i64)> = candidates
                         .into_iter()
@@ -217,10 +229,10 @@ pub async fn search(
                 };
 
                 // Fast count via FTS5 only — no ZIP reads, no JOINs.
-                let source_total = db::fts_count(&conn, &fts_query, fts_limit, fts_phrase)?;
+                let source_total = db::fts_count(&conn, &fts_query, fts_limit, fts_phrase, date_filter)?;
 
                 // Score only as many candidates as needed for this page.
-                let candidates = db::fts_candidates(&conn, &archive_mgr, &fts_query, scoring_limit, fts_phrase)?;
+                let candidates = db::fts_candidates(&conn, &archive_mgr, &fts_query, scoring_limit, fts_phrase, date_filter)?;
 
                 // Build (SearchResult, file_id) pairs for alias lookup.
                 let result_pairs: Vec<(SearchResult, i64)> = match mode.as_str() {

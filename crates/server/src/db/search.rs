@@ -8,6 +8,20 @@ use crate::archive::ArchiveManager;
 use super::read_chunk_lines;
 use super::split_composite_path;
 
+/// Optional date range filter applied to `files.mtime` (unix seconds, inclusive).
+/// Either bound may be absent for an open-ended range.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DateFilter {
+    pub from: Option<i64>,
+    pub to: Option<i64>,
+}
+
+impl DateFilter {
+    pub fn is_active(&self) -> bool {
+        self.from.is_some() || self.to.is_some()
+    }
+}
+
 // ── Search ────────────────────────────────────────────────────────────────────
 
 pub struct CandidateRow {
@@ -49,15 +63,35 @@ pub(crate) fn build_fts_query(query: &str, phrase: bool) -> Option<String> {
     }
 }
 
-/// Fast FTS5-only count, capped at `limit`. No ZIP reads, no JOINs.
-/// Used to compute the approximate total result count efficiently.
-pub fn fts_count(conn: &Connection, query: &str, limit: usize, phrase: bool) -> Result<usize> {
+/// Count FTS5 matches, capped at `limit`.
+/// When `date` is active, adds a JOIN to `files` and filters by mtime (slower but bounded).
+pub fn fts_count(conn: &Connection, query: &str, limit: usize, phrase: bool, date: DateFilter) -> Result<usize> {
     let Some(fts_query) = build_fts_query(query, phrase) else {
         return Ok(0);
     };
+    if !date.is_active() {
+        // Fast path: pure FTS5, no ZIP reads, no JOINs.
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM (SELECT 1 FROM lines_fts WHERE lines_fts MATCH ?1 LIMIT ?2)",
+            params![fts_query, limit as i64],
+            |row| row.get(0),
+        )?;
+        return Ok(count as usize);
+    }
+    // Date filter active: need JOIN to files to check mtime.
+    let from = date.from.unwrap_or(i64::MIN);
+    let to = date.to.unwrap_or(i64::MAX);
     let count: i64 = conn.query_row(
-        "SELECT count(*) FROM (SELECT 1 FROM lines_fts WHERE lines_fts MATCH ?1 LIMIT ?2)",
-        params![fts_query, limit as i64],
+        "SELECT count(*) FROM (
+             SELECT 1
+             FROM lines_fts
+             JOIN lines l ON l.id = lines_fts.rowid
+             JOIN files f ON f.id = l.file_id
+             WHERE lines_fts MATCH ?1
+               AND f.mtime BETWEEN ?3 AND ?4
+             LIMIT ?2
+         )",
+        params![fts_query, limit as i64, from, to],
         |row| row.get(0),
     )?;
     Ok(count as usize)
@@ -70,6 +104,7 @@ pub fn fts_candidates(
     query: &str,
     limit: usize,
     phrase: bool,
+    date: DateFilter,
 ) -> Result<Vec<CandidateRow>> {
     let Some(fts_query) = build_fts_query(query, phrase) else {
         return Ok(vec![]);
@@ -85,29 +120,48 @@ pub fn fts_candidates(
         file_id: i64,
     }
 
-    let mut stmt = conn.prepare(
-        "SELECT f.path, f.kind, l.line_number,
-                l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id
-         FROM lines_fts
-         JOIN lines l ON l.id = lines_fts.rowid
-         JOIN files f ON f.id = l.file_id
-         WHERE lines_fts MATCH ?1
-         LIMIT ?2",
-    )?;
+    let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<RawRow> {
+        Ok(RawRow {
+            file_path:     row.get(0)?,
+            file_kind:     row.get(1)?,
+            line_number:   row.get::<_, i64>(2)? as usize,
+            chunk_archive: row.get(3)?,
+            chunk_name:    row.get(4)?,
+            line_offset:   row.get::<_, i64>(5)? as usize,
+            file_id:       row.get(6)?,
+        })
+    };
 
-    let raw: Vec<RawRow> = stmt
-        .query_map(params![fts_query, limit as i64], |row| {
-            Ok(RawRow {
-                file_path:    row.get(0)?,
-                file_kind:    row.get(1)?,
-                line_number:  row.get::<_, i64>(2)? as usize,
-                chunk_archive: row.get(3)?,
-                chunk_name:   row.get(4)?,
-                line_offset:  row.get::<_, i64>(5)? as usize,
-                file_id:      row.get(6)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let raw: Vec<RawRow> = if date.is_active() {
+        let from = date.from.unwrap_or(i64::MIN);
+        let to = date.to.unwrap_or(i64::MAX);
+        let mut stmt = conn.prepare(
+            "SELECT f.path, f.kind, l.line_number,
+                    l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id
+             FROM lines_fts
+             JOIN lines l ON l.id = lines_fts.rowid
+             JOIN files f ON f.id = l.file_id
+             WHERE lines_fts MATCH ?1
+               AND f.mtime BETWEEN ?3 AND ?4
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![fts_query, limit as i64, from, to], map_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT f.path, f.kind, l.line_number,
+                    l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id
+             FROM lines_fts
+             JOIN lines l ON l.id = lines_fts.rowid
+             JOIN files f ON f.id = l.file_id
+             WHERE lines_fts MATCH ?1
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![fts_query, limit as i64], map_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
 
     // Read content from ZIP archives, caching chunks to avoid redundant reads.
     let mut chunk_cache: HashMap<(String, String), Vec<String>> = HashMap::new();
@@ -151,6 +205,7 @@ pub fn document_candidates(
     archive_mgr: &ArchiveManager,
     query: &str,
     limit: usize,
+    date: DateFilter,
 ) -> Result<DocumentCandidates> {
     use std::collections::HashSet;
 
@@ -182,10 +237,35 @@ pub fn document_candidates(
     }
 
     // Intersect: files that have ALL tokens somewhere.
-    let qualifying_ids: HashSet<i64> = per_token_ids
+    let mut qualifying_ids: HashSet<i64> = per_token_ids
         .into_iter()
         .reduce(|a, b| a.intersection(&b).copied().collect())
         .unwrap_or_default();
+
+    // Apply date filter: keep only files whose mtime is within [from, to].
+    if date.is_active() && !qualifying_ids.is_empty() {
+        let from = date.from.unwrap_or(i64::MIN);
+        let to = date.to.unwrap_or(i64::MAX);
+        // Build an IN clause for the current qualifying set.
+        let placeholders: String = qualifying_ids
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("?{}", i + 3))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT id FROM files WHERE id IN ({placeholders}) AND mtime BETWEEN ?1 AND ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let id_params: Vec<Box<dyn rusqlite::ToSql>> = std::iter::once(Box::new(from) as Box<dyn rusqlite::ToSql>)
+            .chain(std::iter::once(Box::new(to) as Box<dyn rusqlite::ToSql>))
+            .chain(qualifying_ids.iter().map(|&id| Box::new(id) as Box<dyn rusqlite::ToSql>))
+            .collect();
+        let filtered: HashSet<i64> = stmt
+            .query_map(rusqlite::params_from_iter(id_params.iter().map(|p| p.as_ref())), |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        qualifying_ids = filtered;
+    }
 
     let total = qualifying_ids.len();
     if total == 0 {
