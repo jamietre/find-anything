@@ -291,7 +291,7 @@ After=network.target
 Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_USER}
-ExecStart=${INSTALL_DIR}/find-server ${CONFIG_FILE}
+ExecStart=${INSTALL_DIR}/find-server --config ${CONFIG_FILE}
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_LOG=find_server=info
@@ -321,7 +321,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=${INSTALL_DIR}/find-server ${CONFIG_FILE}
+ExecStart=${INSTALL_DIR}/find-server --config ${CONFIG_FILE}
 Restart=on-failure
 RestartSec=5s
 Environment=RUST_LOG=find_server=info
