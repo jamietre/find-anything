@@ -341,18 +341,29 @@ EOF
   echo "  Stop:    systemctl --user stop find-watch"
 
 elif command -v systemctl >/dev/null 2>&1 && [ -d "/run/systemd/system" ]; then
-  # systemd is present but user session is unavailable (e.g. Synology DSM).
-  # Write the unit files to a staging location and instruct the user to install them.
-  UNIT_STAGING_WATCH="$HOME/.config/find-anything/find-watch.service"
-  UNIT_STAGING_SCAN="$HOME/.config/find-anything/find-scan.service"
+  # systemd is present but no user session (headless server, Synology DSM, etc.).
+  # Try to install as a system service directly.  Fall back to staging with
+  # instructions if we can't write to /etc/systemd/system.
 
-  cat > "$UNIT_STAGING_WATCH" <<EOF
-[Unit]
+  CURRENT_USER=$(id -un)
+
+  # Determine sudo prefix: empty if root, "sudo" if passwordless sudo available.
+  if [ "$(id -u)" = "0" ]; then
+    SYSD_SUDO=""
+    CAN_INSTALL_SYSTEM=1
+  elif command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    SYSD_SUDO="sudo"
+    CAN_INSTALL_SYSTEM=1
+  else
+    CAN_INSTALL_SYSTEM=0
+  fi
+
+  WATCH_UNIT_CONTENT="[Unit]
 Description=find-anything file watcher
 After=network.target
 
 [Service]
-User=$(id -un)
+User=${CURRENT_USER}
 ExecStart=${INSTALL_DIR}/find-watch --config ${CONFIG_FILE}
 Restart=on-failure
 RestartSec=5s
@@ -360,38 +371,56 @@ Environment=RUST_LOG=find_watch=info
 Environment=PATH=${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin
 
 [Install]
-WantedBy=multi-user.target
-EOF
+WantedBy=multi-user.target"
 
-  cat > "$UNIT_STAGING_SCAN" <<EOF
-[Unit]
+  SCAN_UNIT_CONTENT="[Unit]
 Description=find-anything initial index scan
 After=network.target
 
 [Service]
-User=$(id -un)
+User=${CURRENT_USER}
 Type=oneshot
 ExecStart=${INSTALL_DIR}/find-scan --config ${CONFIG_FILE}
 Environment=RUST_LOG=find_scan=info
-Environment=PATH=${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin
-EOF
+Environment=PATH=${INSTALL_DIR}:/usr/local/bin:/usr/bin:/bin"
 
-  echo ""
-  echo "systemd user sessions are not supported on this system (e.g. Synology DSM)."
-  echo "Service unit files have been written to:"
-  echo "  $UNIT_STAGING_WATCH"
-  echo "  $UNIT_STAGING_SCAN"
-  echo ""
-  echo "To install and start the watcher:"
-  echo ""
-  echo "  sudo mv $UNIT_STAGING_WATCH /etc/systemd/system/find-watch.service"
-  echo "  sudo mv $UNIT_STAGING_SCAN  /etc/systemd/system/find-scan.service"
-  echo "  sudo systemctl daemon-reload"
-  echo "  sudo systemctl enable find-watch"
-  echo "  sudo systemctl start find-watch"
+  if [ "$CAN_INSTALL_SYSTEM" = "1" ]; then
+    printf '%s\n' "$WATCH_UNIT_CONTENT" | $SYSD_SUDO tee /etc/systemd/system/find-watch.service > /dev/null
+    printf '%s\n' "$SCAN_UNIT_CONTENT"  | $SYSD_SUDO tee /etc/systemd/system/find-scan.service  > /dev/null
+    $SYSD_SUDO systemctl daemon-reload
+    $SYSD_SUDO systemctl enable find-watch
+    $SYSD_SUDO systemctl start find-watch
 
-  WATCH_SERVICE_TYPE="system"
-  SCAN_SERVICE_TYPE="system"
+    WATCH_SERVICE_TYPE="system"
+    SCAN_SERVICE_TYPE="system"
+    echo ""
+    echo "find-watch system service installed and started."
+    echo "  Status:  sudo systemctl status find-watch"
+    echo "  Logs:    sudo journalctl -u find-watch -f"
+    echo "  Stop:    sudo systemctl stop find-watch"
+  else
+    # No root/sudo — write to staging and give manual instructions.
+    UNIT_STAGING_WATCH="$HOME/.config/find-anything/find-watch.service"
+    UNIT_STAGING_SCAN="$HOME/.config/find-anything/find-scan.service"
+    printf '%s\n' "$WATCH_UNIT_CONTENT" > "$UNIT_STAGING_WATCH"
+    printf '%s\n' "$SCAN_UNIT_CONTENT"  > "$UNIT_STAGING_SCAN"
+
+    echo ""
+    echo "Could not install system service (sudo not available)."
+    echo "Unit files written to:"
+    echo "  $UNIT_STAGING_WATCH"
+    echo "  $UNIT_STAGING_SCAN"
+    echo ""
+    echo "To install manually:"
+    echo "  sudo mv $UNIT_STAGING_WATCH /etc/systemd/system/find-watch.service"
+    echo "  sudo mv $UNIT_STAGING_SCAN  /etc/systemd/system/find-scan.service"
+    echo "  sudo systemctl daemon-reload"
+    echo "  sudo systemctl enable find-watch"
+    echo "  sudo systemctl start find-watch"
+
+    WATCH_SERVICE_TYPE="system"
+    SCAN_SERVICE_TYPE="system"
+  fi
 
 elif [ "$OS_NAME" = "macos" ]; then
   # macOS: suggest launchd
