@@ -13,6 +13,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [0.5.4] - 2026-03-04
 
+---
+
+## [0.5.4] - 2026-03-04
+
 ### Added
 - **`find-admin delete-source <name>`** — deletes all indexed data for a named source: removes the source SQLite database and scrubs its content chunks from the shared ZIP archives; prompts for confirmation with file count shown unless `--force` is passed; new `DELETE /api/v1/admin/source` server endpoint
 - **Nested ZIP member extraction** — the raw endpoint now supports two-level nested ZIP members (`outer.zip::inner.zip::file`); the maximum supported depth is configurable via `server.download_zip_member_levels` (default 2); deeper nesting returns 403
