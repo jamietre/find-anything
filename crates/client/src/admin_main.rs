@@ -55,6 +55,14 @@ enum Command {
         /// Inbox filename, with or without .gz extension
         name: String,
     },
+    /// Delete all indexed data for a source (DB + content chunks in ZIP archives)
+    DeleteSource {
+        /// Name of the source to delete
+        source: String,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -251,6 +259,42 @@ async fn main() -> Result<()> {
 
             let resp = client.inbox_retry().await.context("retrying inbox")?;
             println!("Retried {} file(s).", resp.retried);
+        }
+
+        Command::DeleteSource { source, force } => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+
+            if !force {
+                let sources = client.get_sources().await.context("fetching sources")?;
+                if !sources.iter().any(|s| s.name == source) {
+                    eprintln!("Source '{}' not found.", source);
+                    std::process::exit(1);
+                }
+                let stats = client.get_stats().await.context("fetching stats")?;
+                let file_count = stats.sources.iter()
+                    .find(|s| s.name == source)
+                    .map(|s| s.total_files)
+                    .unwrap_or(0);
+                eprint!(
+                    "Delete source '{}' ({} files)? This cannot be undone. [y/N] ",
+                    source, file_count
+                );
+                let mut input = String::new();
+                std::io::stdin().read_line(&mut input).context("reading confirmation")?;
+                match input.trim() {
+                    "y" | "Y" => {}
+                    _ => {
+                        eprintln!("Aborted.");
+                        return Ok(());
+                    }
+                }
+            }
+
+            let resp = client.delete_source(&source).await.context("deleting source")?;
+            println!(
+                "Deleted source '{}': {} files, {} chunks removed.",
+                source, resp.files_deleted, resp.chunks_removed,
+            );
         }
 
         Command::InboxShow { name } => {

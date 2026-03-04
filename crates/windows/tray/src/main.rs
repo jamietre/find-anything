@@ -3,6 +3,9 @@
 //! Starts at login (registered by `find-watch install`), shows service status,
 //! file counts, and provides quick actions for scan / start / stop.
 
+// Suppress the console window on Windows.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 // On non-Windows this binary is a stub.
 #[cfg(not(windows))]
 fn main() {
@@ -30,6 +33,22 @@ use find_common::config::ClientConfig;
 use tray_icon::{
     menu::MenuEvent,
     TrayIcon, TrayIconBuilder, TrayIconEvent,
+};
+#[cfg(windows)]
+use windows_sys::core::GUID;
+
+/// Stable GUID for the notification-area icon.
+///
+/// Windows uses this to persist "always show" and ordering preferences across
+/// sessions and application updates.  **Never change this value** — doing so
+/// would be equivalent to registering a brand-new icon and users would lose
+/// their tray configuration.
+#[cfg(windows)]
+const TRAY_GUID: GUID = GUID {
+    data1: 0xC4F2_A831,
+    data2: 0x7E5D,
+    data3: 0x4B9A,
+    data4: [0xB6, 0xD3, 0x1A, 0x2F, 0x8C, 0x0E, 0x47, 0x5B],
 };
 #[cfg(windows)]
 use winit::{
@@ -95,6 +114,7 @@ fn main() -> Result<()> {
         .context("loading stopped icon")?;
 
     let tray_icon = TrayIconBuilder::new()
+        .with_guid(TRAY_GUID)
         .with_tooltip("Find Anything")
         .with_icon(active_icon.clone())
         .with_menu(Box::new(tray_menu.menu.clone()))
@@ -290,7 +310,7 @@ fn parse_config_arg() -> PathBuf {
     }
     // Default config path for Windows.
     dirs_next()
-        .map(|p| p.join("find-anything").join("client.toml"))
+        .map(|p| p.join("FindAnything").join("client.toml"))
         .unwrap_or_else(|| PathBuf::from("client.toml"))
 }
 

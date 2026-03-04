@@ -143,6 +143,33 @@ fn dispatch_streaming(path: &Path, kind: &ArchiveKind, cfg: &ExtractorConfig, ca
 // FORMAT-SPECIFIC STREAMING EXTRACTORS
 // ============================================================================
 
+/// Unix timestamp of 2099-12-31 23:59:59 UTC.
+const UNIX_END_OF_2099: i64 = 4_102_444_799;
+
+/// Sanity-check an archive member's mtime against known Y2K artifacts.
+///
+/// Old ZIP tools often stored 2-digit years in the DOS datetime field, causing
+/// the zip reader to add 1980 and produce years like 2077 or 2097 instead of
+/// the intended 1977 or 1997.  Heuristic:
+///
+/// - Timestamp is in the past or present → accept as-is.
+/// - Timestamp is in the future but ≤ 2099-12-31 → subtract 100 years (Y2K).
+/// - Timestamp is after 2099 → clearly bogus, return None.
+fn sanitize_archive_mtime(ts: i64) -> Option<i64> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    if ts <= now {
+        Some(ts)
+    } else if ts <= UNIX_END_OF_2099 {
+        // Approximate: 100 Julian years = 100 * 365.25 * 86400
+        Some(ts - 3_155_760_000)
+    } else {
+        None
+    }
+}
+
 /// Parse the UNIX extended timestamp from a ZIP extra data block (tag 0x5455).
 /// The local-file version has up to three timestamps; only mtime (flags bit 0) is used.
 fn zip_unix_mtime(extra: &[u8]) -> Option<i64> {
@@ -214,8 +241,10 @@ fn zip_from_archive<R: Read + std::io::Seek>(
         }
 
         // Extract member timestamp: prefer extended timestamp (UTC), fall back to DOS datetime.
+        // Sanitize to catch Y2K artifacts (2-digit years misread as 20xx).
         let mtime = entry.extra_data().and_then(zip_unix_mtime)
-            .or_else(|| entry.last_modified().and_then(zip_dos_to_unix));
+            .or_else(|| entry.last_modified().and_then(zip_dos_to_unix))
+            .and_then(sanitize_archive_mtime);
 
         // Multi-file nested archive: recurse without writing to disk where possible.
         if let Some(kind) = detect_kind_from_name(&name) {
@@ -267,7 +296,7 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cf
             continue;
         }
 
-        let mtime = entry.header().mtime().ok().map(|t| t as i64);
+        let mtime = entry.header().mtime().ok().map(|t| t as i64).and_then(sanitize_archive_mtime);
 
         // Multi-file nested archive: recurse without writing to disk where possible.
         if let Some(kind) = detect_kind_from_name(&name) {
@@ -367,6 +396,7 @@ fn sevenz_process_entry(
             .duration_since(std::time::UNIX_EPOCH)
             .ok()
             .map(|d| d.as_secs() as i64)
+            .and_then(sanitize_archive_mtime)
     } else {
         None
     };

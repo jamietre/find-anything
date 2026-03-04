@@ -6,5 +6,12 @@ declare global {
 		// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 		interface PageState {}
 	}
+
+	interface Window {
+		find_anything_config?: {
+			/** Maximum ZIP nesting levels supported for member download/inline view. */
+			download_zip_member_levels: number;
+		};
+	}
 }
 export {};

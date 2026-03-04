@@ -10,10 +10,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::{
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, State},
     http::{header, StatusCode},
     response::IntoResponse,
-    routing::{get, head, patch, post},
+    routing::{delete, get, head, patch, post},
     Router,
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
@@ -42,32 +42,40 @@ struct Args {
 #[folder = "../../web/build/"]
 struct WebAssets;
 
-async fn serve_static(uri: axum::http::Uri) -> impl IntoResponse {
+async fn serve_static(
+    State(state): State<Arc<AppState>>,
+    uri: axum::http::Uri,
+) -> impl IntoResponse {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
 
     match WebAssets::get(path) {
         Some(content) => {
+            if path == "index.html" {
+                return serve_index_html(&state, content.data.as_ref()).into_response();
+            }
             let mime = mime_guess::from_path(path).first_or_octet_stream();
-            (
-                [(header::CONTENT_TYPE, mime.essence_str())],
-                content.data,
-            )
-                .into_response()
+            ([(header::CONTENT_TYPE, mime.essence_str())], content.data).into_response()
         }
         None => {
             // SPA fallback — serve index.html for any unknown path so the
             // SvelteKit client-side router can handle it.
             match WebAssets::get("index.html") {
-                Some(content) => (
-                    [(header::CONTENT_TYPE, "text/html")],
-                    content.data,
-                )
-                    .into_response(),
+                Some(content) => serve_index_html(&state, content.data.as_ref()).into_response(),
                 None => StatusCode::NOT_FOUND.into_response(),
             }
         }
     }
+}
+
+fn serve_index_html(state: &AppState, html: &[u8]) -> impl IntoResponse {
+    let config_json = serde_json::json!({
+        "download_zip_member_levels": state.config.server.download_zip_member_levels,
+    });
+    let script = format!("<script>window.find_anything_config={config_json};</script>");
+    let html_str = String::from_utf8_lossy(html);
+    let injected = html_str.replacen("</head>", &format!("{script}</head>"), 1);
+    ([(header::CONTENT_TYPE, "text/html")], injected).into_response()
 }
 
 pub struct AppState {
@@ -152,6 +160,7 @@ async fn main() -> Result<()> {
         .route("/api/v1/tree",           get(routes::list_dir))
         .route("/api/v1/raw",            get(routes::get_raw))
         .route("/api/v1/auth/session",   post(routes::create_session).delete(routes::delete_session))
+        .route("/api/v1/admin/source",      delete(routes::delete_source))
         .route("/api/v1/admin/inbox",       get(routes::inbox_status).delete(routes::inbox_clear))
         .route("/api/v1/admin/inbox/retry", post(routes::inbox_retry))
         .route("/api/v1/admin/inbox/show",  get(routes::inbox_show))

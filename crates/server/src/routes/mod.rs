@@ -11,7 +11,7 @@ mod stats;
 mod tree;
 pub mod upload;
 
-pub use admin::{inbox_clear, inbox_retry, inbox_show, inbox_status};
+pub use admin::{delete_source, inbox_clear, inbox_retry, inbox_show, inbox_status};
 pub use bulk::bulk;
 pub use context::{context_batch, get_context};
 pub use errors::get_errors;

@@ -9,7 +9,7 @@
   #define BinDir "..\..\target\x86_64-pc-windows-msvc\release"
 #endif
 
-#define AppName "find-anything"
+#define AppName "FindAnything"
 #define AppPublisher "Jamie Treworgy"
 #define AppURL "https://github.com/jamietre/find-anything"
 #define ServiceName "FindAnythingWatcher"
@@ -73,6 +73,10 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
 Filename: "{app}\find-watch.exe"; Parameters: "install --config ""{app}\client.toml"""; \
   StatusMsg: "Registering file watcher service..."; Flags: runhidden
 
+; Start the tray icon immediately after install
+Filename: "{app}\find-tray.exe"; Flags: nowait; \
+  StatusMsg: "Starting system tray icon..."
+
 ; Post-install: run initial scan and start service (shown on Finish page)
 Filename: "{app}\scan-and-start.bat"; \
   Description: "Run initial scan and start file watcher (recommended)"; \
@@ -89,9 +93,13 @@ var
   ServerPage: TWizardPage;
   ServerUrlEdit: TEdit;
   TokenEdit: TEdit;
+  SourceNameEdit: TEdit;
 
   DirsPage: TWizardPage;
   DirsMemo: TMemo;
+
+  ConfigPage: TWizardPage;
+  ConfigMemo: TMemo;
 
 // ── Helper: check if a path is already in the user PATH ───────────────────────
 
@@ -127,13 +135,57 @@ begin
   Result := R;
 end;
 
+// ── Helper: build client.toml content from current page inputs ────────────────
+
+function BuildToml(): string;
+var
+  ServerUrl, Token, SourceName: string;
+  Lines: TStringList;
+  I: Integer;
+  PathsStr, EscapedPath: string;
+  FirstPath: Boolean;
+begin
+  ServerUrl  := Trim(ServerUrlEdit.Text);
+  Token      := Trim(TokenEdit.Text);
+  SourceName := Trim(SourceNameEdit.Text);
+  if SourceName = '' then SourceName := 'Home';
+
+  Lines := TStringList.Create;
+  try
+    Lines.Text := DirsMemo.Text;
+    PathsStr  := '';
+    FirstPath := True;
+    for I := 0 to Lines.Count - 1 do
+    begin
+      EscapedPath := Trim(Lines[I]);
+      if EscapedPath <> '' then
+      begin
+        if not FirstPath then
+          PathsStr := PathsStr + ', ';
+        PathsStr  := PathsStr + '"' + TomlEscape(EscapedPath) + '"';
+        FirstPath := False;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+
+  Result :=
+    '[server]' + #13#10 +
+    'url   = "' + TomlEscape(ServerUrl) + '"' + #13#10 +
+    'token = "' + TomlEscape(Token) + '"' + #13#10 + #13#10 +
+    '[[sources]]' + #13#10 +
+    'name  = "' + TomlEscape(SourceName) + '"' + #13#10 +
+    'paths = [' + PathsStr + ']' + #13#10;
+end;
+
 // ── Create custom wizard pages ────────────────────────────────────────────────
 
 procedure InitializeWizard;
 var
-  LabelUrl, LabelToken, LabelDirs: TLabel;
+  LabelUrl, LabelToken, LabelSourceName, LabelDirs, LabelConfig: TLabel;
 begin
-  // Page 1: Server connection
+  // ── Page 1: Server connection ──────────────────────────────────────────────
   ServerPage := CreateCustomPage(wpSelectDir, 'Server Connection',
     'Enter the URL and bearer token for your find-anything server.');
 
@@ -142,11 +194,11 @@ begin
   LabelUrl.Parent := ServerPage.Surface;
   LabelUrl.Top := 8;
   LabelUrl.Left := 0;
-  LabelUrl.Width := ServerPage.SurfaceWidth;
+  LabelUrl.AutoSize := True;
 
   ServerUrlEdit := TEdit.Create(ServerPage);
   ServerUrlEdit.Parent := ServerPage.Surface;
-  ServerUrlEdit.Top := 26;
+  ServerUrlEdit.Top := 28;
   ServerUrlEdit.Left := 0;
   ServerUrlEdit.Width := ServerPage.SurfaceWidth;
   ServerUrlEdit.Text := 'http://localhost:8765';
@@ -154,18 +206,32 @@ begin
   LabelToken := TLabel.Create(ServerPage);
   LabelToken.Caption := 'Bearer Token:';
   LabelToken.Parent := ServerPage.Surface;
-  LabelToken.Top := 62;
+  LabelToken.Top := 72;
   LabelToken.Left := 0;
-  LabelToken.Width := ServerPage.SurfaceWidth;
+  LabelToken.AutoSize := True;
 
   TokenEdit := TEdit.Create(ServerPage);
   TokenEdit.Parent := ServerPage.Surface;
-  TokenEdit.Top := 80;
+  TokenEdit.Top := 92;
   TokenEdit.Left := 0;
   TokenEdit.Width := ServerPage.SurfaceWidth;
   TokenEdit.PasswordChar := '*';
 
-  // Page 2: Directories to watch
+  LabelSourceName := TLabel.Create(ServerPage);
+  LabelSourceName.Caption := 'Source Name (label for this machine''s files on the server):';
+  LabelSourceName.Parent := ServerPage.Surface;
+  LabelSourceName.Top := 136;
+  LabelSourceName.Left := 0;
+  LabelSourceName.AutoSize := True;
+
+  SourceNameEdit := TEdit.Create(ServerPage);
+  SourceNameEdit.Parent := ServerPage.Surface;
+  SourceNameEdit.Top := 156;
+  SourceNameEdit.Left := 0;
+  SourceNameEdit.Width := ServerPage.SurfaceWidth;
+  SourceNameEdit.Text := 'Home';
+
+  // ── Page 2: Directories to watch ──────────────────────────────────────────
   DirsPage := CreateCustomPage(ServerPage.ID, 'Directories to Watch',
     'These directories will be indexed and kept in sync.');
 
@@ -174,16 +240,37 @@ begin
   LabelDirs.Parent := DirsPage.Surface;
   LabelDirs.Top := 8;
   LabelDirs.Left := 0;
-  LabelDirs.Width := DirsPage.SurfaceWidth;
+  LabelDirs.AutoSize := True;
 
   DirsMemo := TMemo.Create(DirsPage);
   DirsMemo.Parent := DirsPage.Surface;
-  DirsMemo.Top := 26;
+  DirsMemo.Top := 28;
   DirsMemo.Left := 0;
   DirsMemo.Width := DirsPage.SurfaceWidth;
   DirsMemo.Height := DirsPage.SurfaceHeight - 40;
   DirsMemo.ScrollBars := ssVertical;
   DirsMemo.Lines.Add(GetEnv('USERPROFILE'));
+
+  // ── Page 3: Review / edit generated config ────────────────────────────────
+  ConfigPage := CreateCustomPage(DirsPage.ID, 'Review Configuration',
+    'Review and edit the generated client.toml before it is written.');
+
+  LabelConfig := TLabel.Create(ConfigPage);
+  LabelConfig.Caption := 'Configuration file (client.toml) — edit if needed:';
+  LabelConfig.Parent := ConfigPage.Surface;
+  LabelConfig.Top := 8;
+  LabelConfig.Left := 0;
+  LabelConfig.AutoSize := True;
+
+  ConfigMemo := TMemo.Create(ConfigPage);
+  ConfigMemo.Parent := ConfigPage.Surface;
+  ConfigMemo.Top := 28;
+  ConfigMemo.Left := 0;
+  ConfigMemo.Width := ConfigPage.SurfaceWidth;
+  ConfigMemo.Height := ConfigPage.SurfaceHeight - 40;
+  ConfigMemo.ScrollBars := ssVertical;
+  ConfigMemo.Font.Name := 'Courier New';
+  ConfigMemo.Font.Size := 9;
 end;
 
 // ── Validate inputs before leaving pages ─────────────────────────────────────
@@ -206,6 +293,12 @@ begin
       Result := False;
       Exit;
     end;
+    if Trim(SourceNameEdit.Text) = '' then
+    begin
+      MsgBox('Please enter a source name.', mbError, MB_OK);
+      Result := False;
+      Exit;
+    end;
   end;
 
   if CurPageID = DirsPage.ID then
@@ -216,6 +309,8 @@ begin
       Result := False;
       Exit;
     end;
+    // Populate config preview so the user can review/edit it
+    ConfigMemo.Text := BuildToml();
   end;
 end;
 
@@ -223,48 +318,11 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
-  ConfigPath, TomlContent: string;
-  ServerUrl, Token: string;
-  Lines: TStringList;
-  I: Integer;
-  PathsStr, EscapedPath: string;
-  FirstPath: Boolean;
+  ConfigPath: string;
 begin
   if CurStep = ssPostInstall then
   begin
     ConfigPath := ExpandConstant('{app}\client.toml');
-    ServerUrl  := Trim(ServerUrlEdit.Text);
-    Token      := Trim(TokenEdit.Text);
-
-    // Build the paths array from the memo (one path per non-empty line)
-    Lines := TStringList.Create;
-    try
-      Lines.Text := DirsMemo.Text;
-      PathsStr  := '';
-      FirstPath := True;
-      for I := 0 to Lines.Count - 1 do
-      begin
-        EscapedPath := Trim(Lines[I]);
-        if EscapedPath <> '' then
-        begin
-          if not FirstPath then
-            PathsStr := PathsStr + ', ';
-          PathsStr  := PathsStr + '"' + TomlEscape(EscapedPath) + '"';
-          FirstPath := False;
-        end;
-      end;
-    finally
-      Lines.Free;
-    end;
-
-    TomlContent :=
-      '[server]' + #13#10 +
-      'url   = "' + TomlEscape(ServerUrl) + '"' + #13#10 +
-      'token = "' + TomlEscape(Token) + '"' + #13#10 + #13#10 +
-      '[[sources]]' + #13#10 +
-      'name  = "home"' + #13#10 +
-      'paths = [' + PathsStr + ']' + #13#10;
-
-    SaveStringToFile(ConfigPath, TomlContent, False);
+    SaveStringToFile(ConfigPath, ConfigMemo.Text, False);
   end;
 end;

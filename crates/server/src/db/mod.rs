@@ -132,6 +132,28 @@ pub(crate) fn read_chunk_lines<'a>(
     })
 }
 
+// ── Source-level helpers ──────────────────────────────────────────────────────
+
+/// Collect all chunk refs from every line in this source database.
+/// Used by the source-delete route to clean up ZIP archives.
+pub fn collect_all_chunk_refs(conn: &Connection) -> Result<Vec<ChunkRef>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT chunk_archive, chunk_name FROM lines",
+    )?;
+    let refs = stmt
+        .query_map([], |row| {
+            Ok(ChunkRef { archive_name: row.get(0)?, chunk_name: row.get(1)? })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(refs)
+}
+
+/// Count all files in this source database.
+pub fn count_files(conn: &Connection) -> Result<usize> {
+    let n: i64 = conn.query_row("SELECT COUNT(*) FROM files", [], |r| r.get(0))?;
+    Ok(n as usize)
+}
+
 // ── File listing (for deletion detection) ────────────────────────────────────
 
 pub fn list_files(conn: &Connection) -> Result<Vec<FileRecord>> {

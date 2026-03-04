@@ -462,6 +462,13 @@ pub struct InboxRetryResponse {
     pub retried: usize,
 }
 
+/// `DELETE /api/v1/admin/source` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceDeleteResponse {
+    pub files_deleted: usize,
+    pub chunks_removed: usize,
+}
+
 /// Summary of one file within an inbox batch, returned by `GET /api/v1/admin/inbox/show`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxShowFile {

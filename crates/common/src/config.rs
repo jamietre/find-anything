@@ -59,6 +59,7 @@ struct ServerDefaults {
 #[derive(Deserialize)]
 struct ServerSettingsDefaults {
     bind: String,
+    download_zip_member_levels: usize,
 }
 
 #[derive(Deserialize)]
@@ -475,9 +476,15 @@ pub struct ServerAppSettings {
     /// None = auto-detect (same dir as the executable, then PATH).
     #[serde(default)]
     pub extractor_dir: Option<String>,
+    /// Maximum number of ZIP nesting levels supported for member download/inline view.
+    /// 1 = only direct members (outer.zip::file).
+    /// 2 = one level of nesting (outer.zip::inner.zip::file). Default: 2.
+    #[serde(default = "default_download_zip_member_levels")]
+    pub download_zip_member_levels: usize,
 }
 
 fn default_bind() -> String { server_defaults().server.bind.clone() }
+fn default_download_zip_member_levels() -> usize { server_defaults().server.download_zip_member_levels }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchSettings {

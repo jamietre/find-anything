@@ -178,8 +178,10 @@ async fn serve_archive_member(
         }
     }
 
-    // nested archive members (outer::mid::inner) — only one level supported
-    if member_name.contains("::") {
+    // Enforce configured nesting limit. depth = number of '::' separators in the full path + 1.
+    // member_name carries everything after the first '::' split, so its '::' count = depth - 1.
+    let member_depth = member_name.matches("::").count() + 1;
+    if member_depth > state.config.server.download_zip_member_levels {
         return StatusCode::UNPROCESSABLE_ENTITY.into_response();
     }
 
@@ -208,6 +210,9 @@ async fn serve_archive_member(
     let convert = convert.map(|s| s.to_owned());
 
     tokio::task::spawn_blocking(move || -> Response {
+        // Refuse to buffer very large members (>64 MB) to avoid OOM.
+        const MAX_MEMBER_BYTES: u64 = 64 * 1024 * 1024;
+
         let file = match std::fs::File::open(&canonical_outer) {
             Ok(f) => f,
             Err(_) => return StatusCode::NOT_FOUND.into_response(),
@@ -216,28 +221,67 @@ async fn serve_archive_member(
             Ok(z) => z,
             Err(_) => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
         };
-        let mut entry = match zip.by_name(&member_name) {
-            Ok(e) => e,
-            Err(_) => return StatusCode::NOT_FOUND.into_response(),
-        };
-        // Refuse to buffer very large members (>64 MB) to avoid OOM.
-        const MAX_MEMBER_BYTES: u64 = 64 * 1024 * 1024;
-        if entry.size() > MAX_MEMBER_BYTES {
-            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-        }
-        let mut bytes = Vec::with_capacity(entry.size() as usize);
-        if entry.read_to_end(&mut bytes).is_err() {
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
 
-        let filename = std::path::Path::new(&member_name)
+        // Nested member: outer.zip::inner.zip::file — extract the intermediate
+        // ZIP from the outer archive, then extract the target file from that.
+        let (bytes, leaf_name) = if let Some((mid_path, leaf)) = member_name.split_once("::") {
+            // Step 1: read the intermediate ZIP from the outer archive.
+            let mid_bytes = {
+                let mut mid_entry = match zip.by_name(mid_path) {
+                    Ok(e) => e,
+                    Err(_) => return StatusCode::NOT_FOUND.into_response(),
+                };
+                if mid_entry.size() > MAX_MEMBER_BYTES {
+                    return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+                }
+                let mut b = Vec::with_capacity(mid_entry.size() as usize);
+                if mid_entry.read_to_end(&mut b).is_err() {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+                b
+            };
+            // Step 2: open the intermediate ZIP and extract the target file.
+            let cursor = std::io::Cursor::new(mid_bytes);
+            let mut inner_zip = match zip::ZipArchive::new(cursor) {
+                Ok(z) => z,
+                Err(_) => return StatusCode::UNPROCESSABLE_ENTITY.into_response(),
+            };
+            let mut inner_entry = match inner_zip.by_name(leaf) {
+                Ok(e) => e,
+                Err(_) => return StatusCode::NOT_FOUND.into_response(),
+            };
+            if inner_entry.size() > MAX_MEMBER_BYTES {
+                return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+            }
+            let mut b = Vec::with_capacity(inner_entry.size() as usize);
+            if inner_entry.read_to_end(&mut b).is_err() {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            (b, leaf.to_owned())
+        } else {
+            // Single-level member.
+            let mut entry = match zip.by_name(&member_name) {
+                Ok(e) => e,
+                Err(_) => return StatusCode::NOT_FOUND.into_response(),
+            };
+            if entry.size() > MAX_MEMBER_BYTES {
+                return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+            }
+            let mut b = Vec::with_capacity(entry.size() as usize);
+            if entry.read_to_end(&mut b).is_err() {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+            (b, member_name.clone())
+        };
+
+        let filename = std::path::Path::new(&leaf_name)
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("file")
             .replace('"', "");
 
         if convert.as_deref() == Some("png") {
-            let png_name = std::path::Path::new(&member_name)
+            let png_name = std::path::Path::new(&leaf_name)
                 .file_stem()
                 .and_then(|n| n.to_str())
                 .map(|s| format!("{s}.png"))
@@ -261,8 +305,7 @@ async fn serve_archive_member(
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
         }
 
-        let mime = mime_guess::from_path(&member_name)
-            .first_or_octet_stream();
+        let mime = mime_guess::from_path(&leaf_name).first_or_octet_stream();
         Response::builder()
             .status(StatusCode::OK)
             .header(header::CONTENT_TYPE, mime.essence_str())

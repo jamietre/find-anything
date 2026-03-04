@@ -7,8 +7,9 @@ use std::io::Write;
 
 use find_common::api::{
     AppSettingsResponse, BulkRequest, ContextResponse, FileRecord, InboxDeleteResponse,
-    InboxRetryResponse, InboxShowResponse, InboxStatusResponse, SearchResponse, SourceInfo,
-    StatsResponse, UploadInitRequest, UploadInitResponse, UploadPatchResponse, UploadStatusResponse,
+    InboxRetryResponse, InboxShowResponse, InboxStatusResponse, SearchResponse, SourceDeleteResponse,
+    SourceInfo, StatsResponse, UploadInitRequest, UploadInitResponse, UploadPatchResponse,
+    UploadStatusResponse,
 };
 
 pub struct ApiClient {
@@ -203,6 +204,26 @@ impl ApiClient {
                 .await
                 .context("parsing inbox show response")?,
         ))
+    }
+
+    /// DELETE /api/v1/admin/source?source=<name>
+    pub async fn delete_source(&self, source: &str) -> Result<SourceDeleteResponse> {
+        let resp = self
+            .client
+            .delete(self.url("/api/v1/admin/source"))
+            .bearer_auth(&self.token)
+            .query(&[("source", source)])
+            .send()
+            .await
+            .context("DELETE /api/v1/admin/source")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            anyhow::bail!("source '{}' not found", source);
+        }
+        resp.error_for_status()
+            .context("delete source status")?
+            .json::<SourceDeleteResponse>()
+            .await
+            .context("parsing delete source response")
     }
 
     /// POST /api/v1/admin/inbox/retry

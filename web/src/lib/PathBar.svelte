@@ -66,6 +66,16 @@
 		if (seg.action.type === 'current') return;
 		dispatch('navigate', seg.action);
 	}
+
+	$: fullPath = archivePath ? `${path}::${archivePath}` : path;
+
+	let copied = false;
+	function copyPath() {
+		navigator.clipboard.writeText(fullPath).then(() => {
+			copied = true;
+			setTimeout(() => (copied = false), 1500);
+		});
+	}
 </script>
 
 <div class="path-bar">
@@ -80,10 +90,22 @@
 				<button class="seg seg--link" on:click={() => handleSegmentClick(seg)}>{seg.label}</button>
 			{/if}
 		{/each}
-		{#if externalHref}
-			<a class="external-link" href={externalHref} target="_blank" rel="noopener noreferrer" title="Open in file manager">↗</a>
-		{/if}
 	</span>
+	<button class="copy-btn" class:copied on:click={copyPath} title="Copy path to clipboard">
+		{#if copied}
+			<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+				<polyline points="2,7 5,10 11,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+			</svg>
+		{:else}
+			<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+				<rect x="4" y="1" width="8" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
+				<path d="M2 4H1.5A1.5 1.5 0 0 0 0 5.5v6A1.5 1.5 0 0 0 1.5 13H8A1.5 1.5 0 0 0 9.5 11.5V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+			</svg>
+		{/if}
+	</button>
+	{#if externalHref}
+		<a class="external-link" href={externalHref} target="_blank" rel="noopener noreferrer" title="Open in file manager">↗</a>
+	{/if}
 </div>
 
 <style>
@@ -173,8 +195,29 @@
 		text-decoration: underline;
 	}
 
+	.copy-btn {
+		background: none;
+		border: none;
+		padding: 2px 4px;
+		cursor: pointer;
+		color: var(--text-dim);
+		flex-shrink: 0;
+		display: flex;
+		align-items: center;
+		border-radius: 3px;
+		transition: color 0.15s;
+	}
+
+	.copy-btn:hover {
+		color: var(--accent);
+	}
+
+	.copy-btn.copied {
+		color: #3fb950;
+	}
+
 	.external-link {
-		margin-left: 6px;
+		margin-left: 4px;
 		color: var(--text-dim);
 		text-decoration: none;
 		font-size: 11px;

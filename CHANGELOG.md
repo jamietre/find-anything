@@ -11,6 +11,28 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ---
 
+## [0.5.4] - 2026-03-04
+
+### Added
+- **`find-admin delete-source <name>`** — deletes all indexed data for a named source: removes the source SQLite database and scrubs its content chunks from the shared ZIP archives; prompts for confirmation with file count shown unless `--force` is passed; new `DELETE /api/v1/admin/source` server endpoint
+- **Nested ZIP member extraction** — the raw endpoint now supports two-level nested ZIP members (`outer.zip::inner.zip::file`); the maximum supported depth is configurable via `server.download_zip_member_levels` (default 2); deeper nesting returns 403
+- **Copy-path button in PathBar** — a clipboard icon next to the file path copies the full composite path (`archive.zip::member`) to the clipboard; icon swaps to a checkmark for 1.5 s after copying
+- **Windows installer: source name field** — the installer now prompts for a source name (default `Home`) instead of hardcoding `"home"` in the generated `client.toml`
+- **Windows installer: config review page** — a new "Review Configuration" wizard page shows the generated `client.toml` in a monospace editor before it is written; users can freely edit it
+- **Windows installer: tray autostart** — `find-tray.exe` is now launched immediately at the end of installation (not just added to registry autostart); `scan-and-start.bat` also starts the tray after the initial scan
+
+### Changed
+- **Windows install directory** — changed from `%LOCALAPPDATA%\find-anything` to `%LOCALAPPDATA%\FindAnything`
+- **Windows tray icon** — updated to use the same magnifier icon as the web UI favicon
+- **Windows tray: no console window** — `find-tray.exe` is now built with `windows_subsystem = "windows"`; no CMD window appears on launch, and running it from a terminal detaches immediately
+- **Windows tray: stable notification-area GUID** — `TrayIconBuilder::with_guid` is now set to a hard-coded app-specific GUID; Windows uses this to persist "always show" preferences across application updates (previously the icon had to be re-pinned after each reinstall)
+- **Windows installer spacing** — increased padding between labels and input boxes; labels use `AutoSize = True` to avoid truncation
+
+### Fixed
+- **Archive member mtime Y2K correction** — old ZIP tools that stored 2-digit years in the DOS datetime field produced future timestamps (e.g. 2077 instead of 1977); timestamps more than 0 seconds in the future but ≤ 2099 are now corrected by subtracting 100 years; timestamps after 2099 are discarded
+
+---
+
 ## [0.5.3] - 2026-03-04
 
 ### Added

@@ -84,11 +84,23 @@
 		? `/api/v1/raw?source=${encodeURIComponent(source)}&path=${encodeURIComponent(rawInlinePath)}&convert=png`
 		: `/api/v1/raw?source=${encodeURIComponent(source)}&path=${encodeURIComponent(rawInlinePath)}`;
 	$: fileName = path.split('/').pop() ?? path;
-	// Member download: only ZIP archives support direct member extraction from the raw endpoint.
-	// TAR, 7z, gz, etc. require full-stream reads so we fall back to downloading the outer archive.
+	// Member download: the server can extract members from ZIP archives up to a configured
+	// nesting depth (window.find_anything_config.download_zip_member_levels).
+	// TAR, 7z, etc. are not supported — fall back to downloading the outer archive.
+	const downloadZipMemberLevels: number =
+		(typeof window !== 'undefined' && window.find_anything_config?.download_zip_member_levels) || 1;
 	$: outerExt = (path.split('.').pop() ?? '').toLowerCase();
-	$: canDownloadMember = isArchiveMember && outerExt === 'zip';
-	$: memberFileName = archivePath ? (archivePath.split('/').pop() ?? archivePath) : '';
+	$: canDownloadMember = (() => {
+		if (!isArchiveMember || outerExt !== 'zip') return false;
+		const parts = (archivePath ?? '').split('::');
+		// Every intermediate segment (all but the last) must also be a ZIP.
+		for (let i = 0; i < parts.length - 1; i++) {
+			if ((parts[i].split('.').pop() ?? '').toLowerCase() !== 'zip') return false;
+		}
+		// Total nesting depth = number of '::' in the composite path.
+		return parts.length <= downloadZipMemberLevels;
+	})();
+	$: memberFileName = archivePath ? (archivePath.split('/').pop()?.split('::').pop() ?? archivePath) : '';
 
 	// Detect if file is markdown
 	$: isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');

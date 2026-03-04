@@ -7,17 +7,20 @@ use axum::{
     response::IntoResponse,
     Json,
 };
+use anyhow::Context;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 
 use find_common::api::{
     InboxDeleteResponse, InboxItem, InboxRetryResponse, InboxShowFile, InboxShowResponse,
-    InboxStatusResponse,
+    InboxStatusResponse, SourceDeleteResponse,
 };
 
+use crate::archive::ArchiveManager;
 use crate::AppState;
+use crate::db;
 
-use super::{check_auth, run_blocking};
+use super::{check_auth, run_blocking, source_db_path};
 
 // ── GET /api/v1/admin/inbox ───────────────────────────────────────────────────
 
@@ -209,5 +212,54 @@ pub async fn inbox_show(
             failures: req.indexing_failures,
             scan_timestamp: req.scan_timestamp,
         }).into_response())
+    }).await
+}
+
+// ── DELETE /api/v1/admin/source ───────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct DeleteSourceQuery {
+    source: String,
+}
+
+pub async fn delete_source(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<DeleteSourceQuery>,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let db_path = match source_db_path(&state, &query.source) {
+        Ok(p) => p,
+        Err(s) => return (s, Json(serde_json::Value::Null)).into_response(),
+    };
+
+    if !db_path.exists() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "source not found" }))).into_response();
+    }
+
+    let data_dir = state.data_dir.clone();
+
+    run_blocking("delete_source", move || -> anyhow::Result<_> {
+        let conn = db::open(&db_path)?;
+
+        let files_deleted = db::count_files(&conn)?;
+        let chunk_refs = db::collect_all_chunk_refs(&conn)?;
+        let chunks_removed = chunk_refs.len();
+
+        // Close the DB before deleting it.
+        drop(conn);
+
+        let mut archive_mgr = ArchiveManager::new(data_dir);
+        if !chunk_refs.is_empty() {
+            archive_mgr.remove_chunks(chunk_refs)?;
+        }
+
+        std::fs::remove_file(&db_path)
+            .with_context(|| format!("removing {}", db_path.display()))?;
+
+        Ok(Json(SourceDeleteResponse { files_deleted, chunks_removed }))
     }).await
 }
