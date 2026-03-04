@@ -293,3 +293,5 @@ This project follows semantic versioning (MAJOR.MINOR.PATCH):
 3. Update `ROADMAP.md` to mark features as completed in the appropriate version section
 4. Add a summary of changes to the `[Unreleased]` section of `CHANGELOG.md` as work is done
 5. When cutting a release, move the `[Unreleased]` entries to a new versioned section (e.g. `## [0.2.5] - YYYY-MM-DD`)
+6. When creating the git tag, include an annotated message with bullet points summarising the high-level features and major bug fixes (e.g. `git tag -a v0.5.2 -m $'v0.5.2\n\n- PDF viewer improvements\n- Symmetric duplicate links\n- Archive indexing resumability'`)
+7. Create a GitHub release using `gh release create <tag> --title "<tag>" --notes "..."` with the same high-level bullet points as release notes
