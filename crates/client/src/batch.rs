@@ -178,6 +178,9 @@ pub async fn submit_batch(
 ) -> Result<()> {
     let files = std::mem::take(batch);
     let indexing_failures = std::mem::take(failures);
+    if files.is_empty() && delete_paths.is_empty() && indexing_failures.is_empty() {
+        return Ok(());
+    }
     api.bulk(&BulkRequest {
         source: source_name.to_string(),
         files,

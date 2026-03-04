@@ -63,7 +63,7 @@ pub async fn start_inbox_worker(data_dir: PathBuf, status: StatusHandle) -> Resu
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if path.extension() == Some(OsStr::new("gz")) {
-                let mtime = tokio::fs::metadata(&path).await
+                let mtime = entry.metadata().await
                     .ok()
                     .and_then(|m| m.modified().ok())
                     .unwrap_or(std::time::UNIX_EPOCH);
