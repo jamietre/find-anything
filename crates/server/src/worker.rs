@@ -54,11 +54,25 @@ pub async fn start_inbox_worker(data_dir: PathBuf, status: StatusHandle) -> Resu
             }
         };
 
+        // Collect all pending .gz files and sort by modification time so that
+        // batches are processed in the order they were submitted.  Without this,
+        // read_dir returns files in filesystem hash order (arbitrary), which can
+        // cause a completion-upsert batch to be processed before its own
+        // outer-start batch, leaving the outer archive with mtime=0.
+        let mut gz_files: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if path.extension() == Some(OsStr::new("gz")) {
-                process_request_async(&data_dir, &path, &failed_dir, status.clone()).await;
+                let mtime = tokio::fs::metadata(&path).await
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                gz_files.push((mtime, path));
             }
+        }
+        gz_files.sort_unstable_by_key(|(mtime, _)| *mtime);
+        for (_, path) in gz_files {
+            process_request_async(&data_dir, &path, &failed_dir, status.clone()).await;
         }
     }
 }

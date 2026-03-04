@@ -111,13 +111,22 @@ pub async fn run_scan(
         .map(|s| s.to_string())
         .collect();
 
+    let deleted = to_delete.len();
     info!(
         "{} to delete; processing {} local files...",
-        to_delete.len(),
+        deleted,
         local_files.len(),
     );
 
     let mut ctx = ScanContext::new(api, source_name, paths, base_url, scan, opts.quiet);
+
+    // Submit deletions immediately so removed files are gone before new/modified
+    // files are indexed.  This also ensures renames (delete + add) don't leave a
+    // stale entry visible while the new path is being indexed.
+    if !opts.dry_run && deleted > 0 {
+        info!("deleting {deleted} removed files");
+        ctx.submit(to_delete).await?;
+    }
 
     let mut indexed: usize = 0;
     let mut skipped: usize = 0;
@@ -158,8 +167,6 @@ pub async fn run_scan(
         }
     }
 
-    let deleted = to_delete.len();
-
     if opts.dry_run {
         if opts.full {
             info!(
@@ -180,11 +187,8 @@ pub async fn run_scan(
         return Ok(());
     }
 
-    // Final batch: remaining files + all deletes.
-    if deleted > 0 {
-        info!("deleting {deleted} removed files");
-    }
-    ctx.submit(to_delete).await?;
+    // Final batch: flush any remaining indexed files.
+    ctx.submit(vec![]).await?;
 
     info!("scan complete — {indexed} indexed ({new_files} new, {modified} modified), {skipped} unchanged, {deleted} deleted");
     Ok(())
