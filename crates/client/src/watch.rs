@@ -185,11 +185,7 @@ fn find_source(path: &Path, map: &SourceMap) -> Option<(String, String, PathBuf)
         }
     }
     best.map(|(root, name, _)| {
-        let rel = path
-            .strip_prefix(root)
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
+        let rel = normalise_path_sep(&path.strip_prefix(root).unwrap().to_string_lossy());
         (name.clone(), rel, root.clone())
     })
 }
@@ -211,12 +207,25 @@ fn is_excluded(abs_path: &Path, source_map: &SourceMap, excludes: &GlobSet) -> b
     // Find the root for this path and check relative path against excludes.
     for (root, _, _) in source_map {
         if let Ok(rel) = abs_path.strip_prefix(root) {
-            if excludes.is_match(rel) {
+            let rel_normalised = normalise_path_sep(&rel.to_string_lossy());
+            if excludes.is_match(&*rel_normalised) {
                 return true;
             }
         }
     }
     false
+}
+
+/// On Windows, replace backslash separators with forward slashes so paths are
+/// stored consistently. On Unix, backslash is a valid filename character.
+#[cfg(windows)]
+fn normalise_path_sep(s: &str) -> String {
+    s.replace('\\', "/")
+}
+
+#[cfg(not(windows))]
+fn normalise_path_sep(s: &str) -> String {
+    s.to_string()
 }
 
 // ── Event accumulation ────────────────────────────────────────────────────────

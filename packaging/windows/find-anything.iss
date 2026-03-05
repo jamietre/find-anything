@@ -44,6 +44,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "{#BinDir}\find-anything.exe";       DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-scan.exe";           DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-watch.exe";          DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BinDir}\find-admin.exe";          DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-server.exe";         DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-tray.exe";           DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-extract-text.exe";   DestDir: "{app}"; Flags: ignoreversion
@@ -70,7 +71,7 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
 
 [Run]
 ; Register the Windows service (runs during install, before finish page)
-Filename: "{app}\find-watch.exe"; Parameters: "install --config ""{app}\client.toml"""; \
+Filename: "{app}\find-watch.exe"; Parameters: "install --config ""{userhome}\.config\FindAnything\client.toml"""; \
   StatusMsg: "Registering file watcher service..."; Flags: runhidden
 
 ; Start the tray icon immediately after install
@@ -319,10 +320,13 @@ end;
 procedure CurStepChanged(CurStep: TSetupStep);
 var
   ConfigPath: string;
+  ConfigDir: string;
 begin
   if CurStep = ssPostInstall then
   begin
-    ConfigPath := ExpandConstant('{app}\client.toml');
+    ConfigDir := ExpandConstant('{userhome}\.config\FindAnything');
+    ForceDirectories(ConfigDir);
+    ConfigPath := ConfigDir + '\client.toml';
     SaveStringToFile(ConfigPath, ConfigMemo.Text, False);
   end;
 end;

@@ -667,10 +667,23 @@ fn walk_paths(
 fn relative_path(abs: &Path, roots: &[String]) -> String {
     for root in roots {
         if let Ok(rel) = abs.strip_prefix(root) {
-            return rel.to_string_lossy().to_string();
+            return normalise_path_sep(&rel.to_string_lossy());
         }
     }
-    abs.to_string_lossy().to_string()
+    normalise_path_sep(&abs.to_string_lossy())
+}
+
+/// On Windows, replace backslash separators with forward slashes so that
+/// paths are stored consistently regardless of platform. On Unix, backslash
+/// is a valid filename character and must not be replaced.
+#[cfg(windows)]
+fn normalise_path_sep(s: &str) -> String {
+    s.replace('\\', "/")
+}
+
+#[cfg(not(windows))]
+fn normalise_path_sep(s: &str) -> String {
+    s.to_string()
 }
 
 fn mtime_of(path: &Path) -> Option<i64> {

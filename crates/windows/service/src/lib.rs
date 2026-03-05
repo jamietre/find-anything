@@ -73,6 +73,23 @@ pub fn install_service(config_path: &Path, service_name: &str) -> Result<()> {
         .set_description(SERVICE_DESCRIPTION)
         .context("setting service description")?;
 
+    // Grant BUILTIN\Users the ability to start, stop, and query the service so
+    // the tray app can control it without requiring Administrator privileges.
+    // SDDL breakdown:
+    //   SY = Local System (full control)
+    //   BA = Administrators (full control)
+    //   BU = Users (start RP, stop WP, query LC/CC/SW/LO/CR, read RC)
+    //   IU = Interactive Users (query only)
+    //   SU = Service Users (query only)
+    let sddl = "D:(A;;CCLCSWRPWPDTLOCRRC;;;SY)\
+                 (A;;CCDCLCSWRPWPDTLOCRSDRCWDWO;;;BA)\
+                 (A;;CCLCSWRPWPDTLOCRRC;;;BU)\
+                 (A;;CCLCSWLOCRRC;;;IU)\
+                 (A;;CCLCSWLOCRRC;;;SU)";
+    let _ = std::process::Command::new("sc.exe")
+        .args(["sdset", service_name, sddl])
+        .output(); // best-effort; non-fatal if it fails
+
     // Register tray app in HKCU Run so it starts at user login.
     let tray_exe = current_exe
         .parent()

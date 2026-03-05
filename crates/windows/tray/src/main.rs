@@ -297,12 +297,7 @@ fn parse_config_arg() -> PathBuf {
         }
     }
     // Default config path for Windows.
-    dirs_next()
-        .map(|p| p.join("FindAnything").join("client.toml"))
+    std::env::var_os("USERPROFILE")
+        .map(|p| PathBuf::from(p).join(".config").join("FindAnything").join("client.toml"))
         .unwrap_or_else(|| PathBuf::from("client.toml"))
-}
-
-#[cfg(windows)]
-fn dirs_next() -> Option<PathBuf> {
-    std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
 }

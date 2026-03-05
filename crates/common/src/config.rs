@@ -585,8 +585,9 @@ pub fn default_server_config_path() -> String {
 ///
 /// 1. `FIND_ANYTHING_CONFIG` environment variable (if set)
 /// 2. `$XDG_CONFIG_HOME/find-anything/client.toml` (if `XDG_CONFIG_HOME` is set)
-/// 3. `/etc/find-anything/client.toml` (when running as root, e.g. system service)
-/// 4. `~/.config/find-anything/client.toml` (default)
+/// 3. `/etc/find-anything/client.toml` (when running as root, e.g. system service) [Unix only]
+/// 4. `%USERPROFILE%\.config\FindAnything\client.toml` [Windows]
+/// 5. `~/.config/find-anything/client.toml` [Unix default]
 pub fn default_config_path() -> String {
     if let Ok(p) = std::env::var("FIND_ANYTHING_CONFIG") {
         return p;
@@ -598,6 +599,11 @@ pub fn default_config_path() -> String {
     #[cfg(unix)]
     if unsafe { libc::getuid() } == 0 {
         return "/etc/find-anything/client.toml".into();
+    }
+    // On Windows use %USERPROFILE%\.config\FindAnything\client.toml
+    #[cfg(windows)]
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        return format!("{profile}\\.config\\FindAnything\\client.toml");
     }
     let home = std::env::var("HOME").unwrap_or_default();
     format!("{home}/.config/find-anything/client.toml")
