@@ -116,9 +116,24 @@ pub struct ServerConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceConfig {
     pub name: String,
-    pub paths: Vec<String>,
+
+    /// Root directory for this source. All indexed paths are relative to this.
+    /// The server can map this to a filesystem path for raw file serving.
+    pub path: String,
+
     #[serde(default)]
     pub base_url: Option<String>,
+
+    /// Only index files whose relative path matches at least one of these glob
+    /// patterns. Use forward slashes as separators (backslashes are normalised
+    /// automatically). If empty, all files under the source root are indexed.
+    ///
+    /// Example:
+    /// ```toml
+    /// include = ["Users/alice/**", "data/**"]
+    /// ```
+    #[serde(default)]
+    pub include: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

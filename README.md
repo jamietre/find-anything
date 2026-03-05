@@ -194,7 +194,8 @@ token = "change-me"
 
 [[sources]]
 name  = "home"
-paths = ["/home/alice/documents", "/home/alice/projects"]
+path = "/home/alice"
+include = ["documents/**", "projects/**"]
 
 [scan]
 exclude = ["**/.git/**", "**/node_modules/**", "**/target/**"]

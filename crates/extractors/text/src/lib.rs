@@ -161,6 +161,17 @@ pub fn is_text_ext(ext: &str) -> bool {
     )
 }
 
+/// Returns true if `path` has a known-binary extension, meaning there is no
+/// useful text to extract and the file need not be read beyond a small MIME-sniff
+/// buffer.  This is the same logic as `is_binary_ext` but exposed for callers
+/// (e.g. `find-extract-dispatch`) that want to short-circuit before reading.
+pub fn is_binary_ext_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(is_binary_ext)
+        .unwrap_or(false)
+}
+
 fn is_binary_ext(ext: &str) -> bool {
     matches!(
         ext.to_lowercase().as_str(),
@@ -172,7 +183,9 @@ fn is_binary_ext(ext: &str) -> bool {
         | "class" | "jar" | "pyc" | "pyd"
         | "o" | "a" | "lib" | "obj" | "wasm"
         | "deb" | "rpm" | "pkg" | "msi" | "snap" | "flatpak"
-        | "bin" | "img" | "iso" | "dmg" | "vmdk" | "vhd" | "qcow2"
+        // Disk / VM images
+        | "bin" | "img" | "iso" | "dmg" | "vmdk" | "vhd" | "vhdx" | "vdi"
+        | "qcow2" | "ova"
         | "db" | "sqlite" | "sqlite3" | "mdb"
         | "ttf" | "otf" | "woff" | "woff2"
         // dtSearch and other search-engine binary index formats

@@ -214,37 +214,21 @@ printf "Source name (identifies this machine in search results) [%s]: " "$DEFAUL
 read -r SOURCE_NAME </dev/tty
 SOURCE_NAME="${SOURCE_NAME:-$DEFAULT_SOURCE_NAME}"
 
-printf "Directories to index (semicolon-separated) [%s]: " "$HOME"
-read -r DIRS_INPUT </dev/tty
-if [ -z "$DIRS_INPUT" ]; then
-  DIRS_INPUT="$HOME"
+printf "Directory to index [%s]: " "$HOME"
+read -r DIR_INPUT </dev/tty
+if [ -z "$DIR_INPUT" ]; then
+  DIR_INPUT="$HOME"
 fi
 
 # ── Write client.toml ─────────────────────────────────────────────────────────
 
 mkdir -p "$CONFIG_DIR"
 
-# Build TOML paths array from semicolon-separated input
-PATHS_TOML=""
-FIRST=1
-OLD_IFS="$IFS"
-IFS=';'
-for dir in $DIRS_INPUT; do
-  # Escape backslashes and quotes (unlikely on Linux but be safe)
-  escaped="$(printf '%s' "$dir" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-  if [ "$FIRST" = "1" ]; then
-    PATHS_TOML="\"$escaped\""
-    FIRST=0
-  else
-    PATHS_TOML="$PATHS_TOML, \"$escaped\""
-  fi
-done
-IFS="$OLD_IFS"
-
-# Escape URL, token, and source name for TOML
+# Escape URL, token, source name, and path for TOML
 SERVER_URL_ESC="$(printf '%s' "$SERVER_URL" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 TOKEN_ESC="$(printf '%s' "$TOKEN" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 SOURCE_NAME_ESC="$(printf '%s' "$SOURCE_NAME" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+DIR_ESC="$(printf '%s' "$DIR_INPUT" | sed 's/\\/\\\\/g; s/"/\\"/g')"
 
 cat > "$CONFIG_FILE" <<EOF
 [server]
@@ -252,9 +236,10 @@ url   = "$SERVER_URL_ESC"
 token = "$TOKEN_ESC"
 
 [[sources]]
-name  = "$SOURCE_NAME_ESC"
-paths = [$PATHS_TOML]
+name = "$SOURCE_NAME_ESC"
+path = "$DIR_ESC"
 # base_url = ""   # Optional: public URL prefix for file links in search results
+# include  = []   # Glob patterns to limit indexing (e.g. ["docs/**", "src/**"])
 
 [scan]
 # max_file_size_mb = 10   # Skip files larger than this (MB)

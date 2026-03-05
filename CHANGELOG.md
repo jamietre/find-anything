@@ -9,6 +9,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+- **`find-extract-dispatch` standalone binary** — unknown file types now route through `find-extract-dispatch` (instead of `find-extract-text`) so the full dispatch pipeline (PDF → media → HTML → office → EPUB → PE → text → MIME fallback) applies even when invoked as a subprocess
+- **Windows dev scripts** — `config/update-win.sh` copies cross-compiled binaries directly to the local Windows install path for quick iteration; `mise run build-win` builds Windows binaries without invoking the Inno Setup installer
+
+### Fixed
+- **Locked / inaccessible files no longer hang the scan** — three-layer defence prevents `find-scan` from blocking on Windows files held open by other processes (e.g. the live WSL2 `ext4.vhdx` held by Hyper-V): (1) known binary extensions (`.vhdx`, `.vmdk`, `.vdi`, `.ova`, `.iso`, etc.) skip `File::open` entirely in both extraction and content hashing; (2) unknown extensions are sniff-tested with 512 bytes before reading further — binary content is rejected immediately without reading the full file; (3) any remaining I/O error logs a warning and skips the file rather than failing the scan
+- **Windows include filter with bare drive root** — `path = "C:"` is now normalised to `C:/` so `strip_prefix` produces clean relative paths and include filters work correctly
+- **Windows include filter subdirectory traversal** — directory pruning now correctly descends into subdirectories within `**` wildcard patterns (e.g. `Users/jamie/**` now indexes all files under `Users/jamie/`, not just files in the root of `Users/jamie/`)
+- **Missing batch-submit log on final flush** — the last batch (submitted after the scan loop ends) now logs "submitting batch — N files, M deletes" consistently with all other batch submissions
+- **Empty files incorrectly deduplicated** — `hash_file` now returns no hash for 0-byte files; previously all empty files shared the same blake3-of-empty-bytes hash, causing them to be linked as duplicates of each other regardless of type or location
+
 ---
 
 ## [0.5.5] - 2026-03-04

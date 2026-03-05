@@ -47,7 +47,8 @@ Source: "{#BinDir}\find-watch.exe";          DestDir: "{app}"; Flags: ignorevers
 Source: "{#BinDir}\find-admin.exe";          DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-server.exe";         DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-tray.exe";           DestDir: "{app}"; Flags: ignoreversion
-Source: "{#BinDir}\find-extract-text.exe";   DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BinDir}\find-extract-text.exe";     DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BinDir}\find-extract-dispatch.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-extract-pdf.exe";    DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-extract-media.exe";  DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BinDir}\find-extract-archive.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -97,7 +98,7 @@ var
   SourceNameEdit: TEdit;
 
   DirsPage: TWizardPage;
-  DirsMemo: TMemo;
+  DirEdit: TEdit;
 
   ConfigPage: TWizardPage;
   ConfigMemo: TMemo;
@@ -140,44 +141,22 @@ end;
 
 function BuildToml(): string;
 var
-  ServerUrl, Token, SourceName: string;
-  Lines: TStringList;
-  I: Integer;
-  PathsStr, EscapedPath: string;
-  FirstPath: Boolean;
+  ServerUrl, Token, SourceName, RootDir: string;
 begin
   ServerUrl  := Trim(ServerUrlEdit.Text);
   Token      := Trim(TokenEdit.Text);
   SourceName := Trim(SourceNameEdit.Text);
   if SourceName = '' then SourceName := 'Home';
-
-  Lines := TStringList.Create;
-  try
-    Lines.Text := DirsMemo.Text;
-    PathsStr  := '';
-    FirstPath := True;
-    for I := 0 to Lines.Count - 1 do
-    begin
-      EscapedPath := Trim(Lines[I]);
-      if EscapedPath <> '' then
-      begin
-        if not FirstPath then
-          PathsStr := PathsStr + ', ';
-        PathsStr  := PathsStr + '"' + TomlEscape(EscapedPath) + '"';
-        FirstPath := False;
-      end;
-    end;
-  finally
-    Lines.Free;
-  end;
+  RootDir    := Trim(DirEdit.Text);
+  if RootDir = '' then RootDir := GetEnv('USERPROFILE');
 
   Result :=
     '[server]' + #13#10 +
     'url   = "' + TomlEscape(ServerUrl) + '"' + #13#10 +
     'token = "' + TomlEscape(Token) + '"' + #13#10 + #13#10 +
     '[[sources]]' + #13#10 +
-    'name  = "' + TomlEscape(SourceName) + '"' + #13#10 +
-    'paths = [' + PathsStr + ']' + #13#10;
+    'name = "' + TomlEscape(SourceName) + '"' + #13#10 +
+    'path = "' + TomlEscape(RootDir) + '"' + #13#10;
 end;
 
 // ── Create custom wizard pages ────────────────────────────────────────────────
@@ -232,25 +211,23 @@ begin
   SourceNameEdit.Width := ServerPage.SurfaceWidth;
   SourceNameEdit.Text := 'Home';
 
-  // ── Page 2: Directories to watch ──────────────────────────────────────────
-  DirsPage := CreateCustomPage(ServerPage.ID, 'Directories to Watch',
-    'These directories will be indexed and kept in sync.');
+  // ── Page 2: Directory to watch ──────────────────────────────────────────────
+  DirsPage := CreateCustomPage(ServerPage.ID, 'Directory to Watch',
+    'The root directory to index and keep in sync.');
 
   LabelDirs := TLabel.Create(DirsPage);
-  LabelDirs.Caption := 'Enter one directory path per line:';
+  LabelDirs.Caption := 'Root directory (all files under this path will be indexed):';
   LabelDirs.Parent := DirsPage.Surface;
   LabelDirs.Top := 8;
   LabelDirs.Left := 0;
   LabelDirs.AutoSize := True;
 
-  DirsMemo := TMemo.Create(DirsPage);
-  DirsMemo.Parent := DirsPage.Surface;
-  DirsMemo.Top := 28;
-  DirsMemo.Left := 0;
-  DirsMemo.Width := DirsPage.SurfaceWidth;
-  DirsMemo.Height := DirsPage.SurfaceHeight - 40;
-  DirsMemo.ScrollBars := ssVertical;
-  DirsMemo.Lines.Add(GetEnv('USERPROFILE'));
+  DirEdit := TEdit.Create(DirsPage);
+  DirEdit.Parent := DirsPage.Surface;
+  DirEdit.Top := 28;
+  DirEdit.Left := 0;
+  DirEdit.Width := DirsPage.SurfaceWidth;
+  DirEdit.Text := GetEnv('USERPROFILE');
 
   // ── Page 3: Review / edit generated config ────────────────────────────────
   ConfigPage := CreateCustomPage(DirsPage.ID, 'Review Configuration',

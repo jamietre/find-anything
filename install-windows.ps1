@@ -82,7 +82,7 @@ token = "$Token"
 
 [[sources]]
 name  = "home"
-paths = ["$WatchDirToml"]
+path = "$WatchDirToml"
 "@ | Set-Content $ClientConfig -Encoding UTF8
 
 # ── Register find-watch as a Windows service ──────────────────────────────────

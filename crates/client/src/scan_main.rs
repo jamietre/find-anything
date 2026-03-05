@@ -91,21 +91,18 @@ async fn main() -> Result<()> {
         // Find the source whose configured path is the longest prefix of `abs`.
         let mut best: Option<(&find_common::config::SourceConfig, PathBuf, PathBuf)> = None;
         for source in &config.sources {
-            for root in &source.paths {
-                let root_canon = std::fs::canonicalize(root).unwrap_or_else(|_| PathBuf::from(root));
-                if let Ok(rel) = abs.strip_prefix(&root_canon) {
-                    let longer = best.as_ref()
-                        .is_none_or(|(_, rc, _)| root_canon.as_os_str().len() > rc.as_os_str().len());
-                    if longer {
-                        best = Some((source, root_canon, rel.to_path_buf()));
-                    }
+            let root_canon = std::fs::canonicalize(&source.path).unwrap_or_else(|_| PathBuf::from(&source.path));
+            if let Ok(rel) = abs.strip_prefix(&root_canon) {
+                let longer = best.as_ref()
+                    .is_none_or(|(_, rc, _)| root_canon.as_os_str().len() > rc.as_os_str().len());
+                if longer {
+                    best = Some((source, root_canon, rel.to_path_buf()));
                 }
             }
         }
         let (source, _, rel) = best.ok_or_else(|| {
             let paths = config.sources.iter()
-                .flat_map(|s| s.paths.iter())
-                .cloned()
+                .map(|s| s.path.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
             anyhow::anyhow!(
@@ -113,13 +110,14 @@ async fn main() -> Result<()> {
                 abs.display()
             )
         })?;
-        let rel_path = rel.to_string_lossy().into_owned();
+        let rel_path = scan::normalise_path_sep(&rel.to_string_lossy());
 
         tracing::info!("Scanning single file: {} (source: {}, rel: {})", abs.display(), source.name, rel_path);
         let scan_source = ScanSource {
             name: &source.name,
-            paths: &source.paths,
+            paths: std::slice::from_ref(&source.path),
             base_url: source.base_url.as_deref(),
+            include: &source.include,
         };
         scan::scan_single_file(&client, &scan_source, &rel_path, &abs, &config.scan, &opts).await?;
         return Ok(());
@@ -130,8 +128,9 @@ async fn main() -> Result<()> {
         tracing::info!("Scanning source: {}", source.name);
         let scan_source = ScanSource {
             name: &source.name,
-            paths: &source.paths,
+            paths: std::slice::from_ref(&source.path),
             base_url: source.base_url.as_deref(),
+            include: &source.include,
         };
         scan::run_scan(&client, &scan_source, &config.scan, &opts).await?;
     }

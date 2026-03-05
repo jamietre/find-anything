@@ -18,8 +18,8 @@ use crate::api::ApiClient;
 use crate::batch::build_index_files;
 use crate::subprocess;
 
-/// (root_path, source_name, root_str)
-type SourceMap = Vec<(PathBuf, String, String)>;
+/// (root_path, source_name, root_str, include_globset)
+type SourceMap = Vec<(PathBuf, String, String, GlobSet)>;
 
 /// What to do with a path after debounce.
 #[derive(Debug)]
@@ -38,7 +38,7 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
 
     info!("find-watch starting — watching {} source(s):", config.sources.len());
     for src in &config.sources {
-        info!("  source {:?}: {:?}", src.name, src.paths);
+        info!("  source {:?}: {:?}", src.name, src.path);
     }
 
     let debounce_ms = config.watch.debounce_ms;
@@ -53,7 +53,7 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
         notify::Config::default(),
     )?;
 
-    for (root, _, _) in &source_map {
+    for (root, _, _, _) in &source_map {
         watcher.watch(root, RecursiveMode::Recursive)?;
         info!("watching {:?}", root);
     }
@@ -101,9 +101,16 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
             }
 
             // Find which source this file belongs to (also returns the source root).
-            let Some((source_name, rel_path, source_root)) = find_source(&abs_path, &source_map) else {
+            let Some((source_name, rel_path, source_root, source_includes)) =
+                find_source(&abs_path, &source_map)
+            else {
                 continue;
             };
+
+            // Apply source-level include filter.
+            if !source_includes.is_empty() && !source_includes.is_match(&*rel_path) {
+                continue;
+            }
 
             // Resolve per-directory effective config: check for .noindex and .index files
             // on the ancestor chain. No caching is needed for watch (events are infrequent).
@@ -165,28 +172,28 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
 fn build_source_map(sources: &[SourceConfig]) -> SourceMap {
     let mut map = Vec::new();
     for src in sources {
-        for root_str in &src.paths {
-            let root = PathBuf::from(root_str);
-            map.push((root, src.name.clone(), root_str.clone()));
-        }
+        let root_str = normalise_root(&src.path);
+        let root = PathBuf::from(&root_str);
+        let includes = build_globset(&src.include).unwrap_or_default();
+        map.push((root, src.name.clone(), root_str, includes));
     }
     map
 }
 
-/// Return `(source_name, rel_path, source_root)` for a given absolute path.
+/// Return `(source_name, rel_path, source_root, include_globset)` for a given absolute path.
 /// Picks the most-specific (longest) matching root.
-fn find_source(path: &Path, map: &SourceMap) -> Option<(String, String, PathBuf)> {
-    let mut best: Option<(&PathBuf, &String, &String)> = None;
-    for (root, name, root_str) in map {
+fn find_source<'a>(path: &Path, map: &'a SourceMap) -> Option<(String, String, PathBuf, &'a GlobSet)> {
+    let mut best: Option<(&PathBuf, &String, &String, &GlobSet)> = None;
+    for (root, name, root_str, includes) in map {
         if path.starts_with(root)
-            && best.is_none_or(|(b, _, _)| root.as_os_str().len() > b.as_os_str().len())
+            && best.is_none_or(|(b, _, _, _)| root.as_os_str().len() > b.as_os_str().len())
         {
-            best = Some((root, name, root_str));
+            best = Some((root, name, root_str, includes));
         }
     }
-    best.map(|(root, name, _)| {
+    best.map(|(root, name, _, includes)| {
         let rel = normalise_path_sep(&path.strip_prefix(root).unwrap().to_string_lossy());
-        (name.clone(), rel, root.clone())
+        (name.clone(), rel, root.clone(), includes)
     })
 }
 
@@ -195,7 +202,9 @@ fn find_source(path: &Path, map: &SourceMap) -> Option<(String, String, PathBuf)
 fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pat in patterns {
-        builder.add(Glob::new(pat)?);
+        // Normalise backslashes so Windows-style patterns work correctly.
+        let pat = pat.replace('\\', "/");
+        builder.add(Glob::new(&pat)?);
         if let Some(dir_pat) = pat.strip_suffix("/**") {
             builder.add(Glob::new(dir_pat)?);
         }
@@ -205,7 +214,7 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
 
 fn is_excluded(abs_path: &Path, source_map: &SourceMap, excludes: &GlobSet) -> bool {
     // Find the root for this path and check relative path against excludes.
-    for (root, _, _) in source_map {
+    for (root, _, _, _) in source_map {
         if let Ok(rel) = abs_path.strip_prefix(root) {
             let rel_normalised = normalise_path_sep(&rel.to_string_lossy());
             if excludes.is_match(&*rel_normalised) {
@@ -225,6 +234,22 @@ fn normalise_path_sep(s: &str) -> String {
 
 #[cfg(not(windows))]
 fn normalise_path_sep(s: &str) -> String {
+    s.to_string()
+}
+
+/// On Windows, normalise a bare drive letter like `"C:"` to `"C:/"` so that
+/// `starts_with` and `strip_prefix` work correctly against absolute paths.
+#[cfg(windows)]
+fn normalise_root(s: &str) -> String {
+    if s.len() == 2 && s.as_bytes()[1] == b':' {
+        format!("{s}/")
+    } else {
+        s.to_string()
+    }
+}
+
+#[cfg(not(windows))]
+fn normalise_root(s: &str) -> String {
     s.to_string()
 }
 

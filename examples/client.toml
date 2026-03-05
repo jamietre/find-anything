@@ -5,15 +5,17 @@ token = "local-dev-token-abc123"
 # Multiple sources can be defined, each with a unique name
 [[sources]]
 name = "code"
-paths = ["/home/user/code"]
+path = "/home/user/code"
 # Optional: base URL for constructing resource links in search results
 base_url = "file:///home/user/code"
 
 [[sources]]
 name = "data"
-paths = ["/home/user/data"]
+path = "/home/user/data"
 # base_url can use any protocol: file://, http://, https://, smb://, etc.
 # base_url = "https://github.com/owner/repo/blob/main"
+# Optional: only index files matching these glob patterns (forward slashes).
+# include = ["reports/**", "exports/**"]
 
 [scan]
 exclude = [

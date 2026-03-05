@@ -25,15 +25,21 @@ use crate::upload;
 
 
 /// Hash a file's contents using blake3 without reading the whole file into memory.
+/// Returns `None` for empty files so they are not deduped against each other
+/// (the hash of 0 bytes is a fixed value, which would falsely mark all empty
+/// files as duplicates).
 fn hash_file(path: &Path) -> Option<String> {
     let mut file = std::fs::File::open(path).ok()?;
     let mut hasher = blake3::Hasher::new();
     let mut buf = [0u8; 65536];
+    let mut total = 0usize;
     loop {
         let n = file.read(&mut buf).ok()?;
         if n == 0 { break; }
         hasher.update(&buf[..n]);
+        total += n;
     }
+    if total == 0 { return None; }
     Some(hasher.finalize().to_hex().to_string())
 }
 const MAX_FAILURES_PER_BATCH: usize = 100;
@@ -51,6 +57,8 @@ pub struct ScanSource<'a> {
     pub name: &'a str,
     pub paths: &'a [String],
     pub base_url: Option<&'a str>,
+    /// Glob patterns from `[sources.xxx] include = [...]`. Empty = include all.
+    pub include: &'a [String],
 }
 
 pub async fn run_scan(
@@ -62,6 +70,13 @@ pub async fn run_scan(
     let (source_name, paths, base_url) = (source.name, source.paths, source.base_url);
     // Build global exclusion GlobSet for the walk phase.
     let excludes = build_globset(&scan.exclude)?;
+    // Build include GlobSet (empty = include everything).
+    let includes = build_globset(source.include)?;
+    let include_dirs = if source.include.is_empty() {
+        None
+    } else {
+        include_dir_prefixes(source.include)
+    };
 
     // Warn if the server inbox is not empty — the file list will reflect only
     // files the worker has already committed, so pending batches from a recent
@@ -99,7 +114,7 @@ pub async fn run_scan(
 
     // Walk all configured paths and build the local file map.
     info!("walking filesystem...");
-    let local_files = walk_paths(paths, scan, &excludes);
+    let local_files = walk_paths(paths, scan, &excludes, &includes, include_dirs.as_ref());
     info!("walk complete: {} files found", local_files.len());
 
     // Compute deletions (pure set diff — no I/O).
@@ -251,6 +266,13 @@ impl<'a> ScanContext<'a> {
     }
 
     async fn submit(&mut self, delete_paths: Vec<String>) -> Result<()> {
+        if !self.batch.is_empty() || !delete_paths.is_empty() {
+            info!(
+                "submitting batch — {} files, {} deletes",
+                self.batch.len(),
+                delete_paths.len(),
+            );
+        }
         submit_batch(
             self.api, self.source_name, self.base_url,
             &mut self.batch, &mut self.failures,
@@ -449,7 +471,13 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
         };
         let extract_ms = t0.elapsed().as_millis() as u64;
         // Hash raw file bytes for dedup (streaming to avoid OOM on large files).
-        let content_hash = hash_file(abs_path);
+        // Skip hashing known binary extensions that no specialist extractor handles:
+        // opening these files can block indefinitely on Windows (e.g. live VHDX held by Hyper-V).
+        let content_hash = if find_extract_dispatch::is_binary_ext_path(abs_path) {
+            None
+        } else {
+            hash_file(abs_path)
+        };
         let mut index_files = build_index_files(rel_path.to_string(), mtime, size, kind, lines);
         if let Some(f) = index_files.first_mut() {
             f.extract_ms = Some(extract_ms);
@@ -501,7 +529,9 @@ pub async fn scan_single_file(
 fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for pat in patterns {
-        builder.add(Glob::new(pat)?);
+        // Always use forward slashes — normalise any backslashes from Windows configs.
+        let pat = pat.replace('\\', "/");
+        builder.add(Glob::new(&pat)?);
         // For patterns like **/node_modules/**, also add **/node_modules so that
         // the directory entry itself is excluded and walkdir won't descend into it.
         if let Some(dir_pat) = pat.strip_suffix("/**") {
@@ -509,6 +539,35 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
         }
     }
     Ok(builder.build()?)
+}
+
+/// Given a list of include glob patterns, extract the set of directory paths
+/// that MUST be traversed to reach any matching file (i.e. the literal path
+/// prefixes up to the first wildcard character in each pattern).
+///
+/// Returns `None` if any pattern could match from the root (starts with `**`
+/// or `*`), meaning no directory pruning is possible.
+///
+/// For example, `["Users/alice/**", "data/**"]` → `Some({"Users", "Users/alice", "data"})`.
+fn include_dir_prefixes(patterns: &[String]) -> Option<std::collections::HashSet<String>> {
+    let mut dirs = std::collections::HashSet::new();
+    for pat in patterns {
+        let pat = pat.replace('\\', "/");
+        // Find the index of the first wildcard.
+        let wildcard = pat.find(['*', '?', '[']);
+        let literal = match wildcard {
+            Some(0) => return None, // starts with wildcard — can't prune
+            Some(i) => &pat[..i],
+            None    => &pat,        // no wildcard — exact path
+        };
+        // Add all ancestor directory components as allowed prefixes.
+        let literal = literal.trim_end_matches('/');
+        let parts: Vec<&str> = literal.split('/').collect();
+        for i in 1..=parts.len() {
+            dirs.insert(parts[..i].join("/"));
+        }
+    }
+    Some(dirs)
 }
 
 /// Walk ancestor directories from `file_path` up to the nearest source root,
@@ -534,9 +593,10 @@ fn resolve_effective_scan(
     let root = roots
         .iter()
         .filter_map(|r| {
-            let rp = Path::new(r);
-            if dir.starts_with(rp) {
-                Some(rp.to_path_buf())
+            let r = normalise_root(r);
+            let rp = PathBuf::from(&r);
+            if dir.starts_with(&rp) {
+                Some(rp)
             } else {
                 None
             }
@@ -589,16 +649,25 @@ fn resolve_effective_scan(
 }
 
 /// Returns a map of relative_path → absolute_path for all files under `paths`.
+///
+/// `includes` is empty when no include filter is configured (all files pass).
+/// `include_dirs` is the set of directory paths that must be traversed to reach
+/// any included file; if `None`, no directory pruning is applied (a pattern like
+/// `**/*.rs` could match in any directory).
 fn walk_paths(
     paths: &[String],
     scan: &ScanConfig,
     excludes: &GlobSet,
+    includes: &GlobSet,
+    include_dirs: Option<&std::collections::HashSet<String>>,
 ) -> HashMap<String, PathBuf> {
     let mut map = HashMap::new();
     let log_interval = std::time::Duration::from_secs(5);
     let mut last_log = std::time::Instant::now();
 
     for root_str in paths {
+        let root_str = normalise_root(root_str);
+        let root_str = root_str.as_str();
         let root = Path::new(root_str);
         for entry in WalkDir::new(root)
             .follow_links(scan.follow_symlinks)
@@ -620,10 +689,28 @@ fn walk_paths(
                         tracing::debug!("skipping {} (.noindex present)", e.path().display());
                         return false;
                     }
+                    // If include patterns have extractable directory prefixes, prune
+                    // directories that can't contain any matching files.
+                    if e.depth() > 0 {
+                        if let Some(dir_set) = include_dirs {
+                            if let Ok(rel) = e.path().strip_prefix(root) {
+                                let rel_str = normalise_path_sep(&rel.to_string_lossy());
+                                // Allow the directory if it is one of the literal prefix
+                                // ancestors (still descending toward the wildcard) OR if it
+                                // is inside one of those prefixes (inside the ** portion).
+                                let allowed = dir_set.contains(&rel_str)
+                                    || dir_set.iter().any(|d| rel_str.starts_with(&format!("{d}/")));
+                                if !allowed {
+                                    return false;
+                                }
+                            }
+                        }
+                    }
                 }
-                // Exclusion globs (match relative to root)
+                // Exclusion globs (match relative to root, forward-slash normalised).
                 if let Ok(rel) = e.path().strip_prefix(root) {
-                    if excludes.is_match(rel) {
+                    let rel_str = normalise_path_sep(&rel.to_string_lossy());
+                    if excludes.is_match(&*rel_str) {
                         return false;
                     }
                 }
@@ -652,6 +739,10 @@ fn walk_paths(
 
             let abs = entry.path().to_path_buf();
             let rel = relative_path(&abs, paths);
+            // Apply include filter (empty GlobSet = no filter = include all).
+            if !includes.is_empty() && !includes.is_match(&*rel) {
+                continue;
+            }
             map.insert(rel, abs);
 
             if last_log.elapsed() >= log_interval {
@@ -666,7 +757,8 @@ fn walk_paths(
 
 fn relative_path(abs: &Path, roots: &[String]) -> String {
     for root in roots {
-        if let Ok(rel) = abs.strip_prefix(root) {
+        let root = normalise_root(root);
+        if let Ok(rel) = abs.strip_prefix(&root) {
             return normalise_path_sep(&rel.to_string_lossy());
         }
     }
@@ -677,12 +769,30 @@ fn relative_path(abs: &Path, roots: &[String]) -> String {
 /// paths are stored consistently regardless of platform. On Unix, backslash
 /// is a valid filename character and must not be replaced.
 #[cfg(windows)]
-fn normalise_path_sep(s: &str) -> String {
+pub fn normalise_path_sep(s: &str) -> String {
     s.replace('\\', "/")
 }
 
 #[cfg(not(windows))]
-fn normalise_path_sep(s: &str) -> String {
+pub fn normalise_path_sep(s: &str) -> String {
+    s.to_string()
+}
+
+/// On Windows, normalise a bare drive letter like `"C:"` to `"C:/"` so that
+/// WalkDir walks the drive root (not the drive's current directory) and
+/// `strip_prefix` returns clean relative paths without a leading separator.
+/// On non-Windows this is a no-op.
+#[cfg(windows)]
+fn normalise_root(s: &str) -> String {
+    if s.len() == 2 && s.as_bytes()[1] == b':' {
+        format!("{s}/")
+    } else {
+        s.to_string()
+    }
+}
+
+#[cfg(not(windows))]
+fn normalise_root(s: &str) -> String {
     s.to_string()
 }
 

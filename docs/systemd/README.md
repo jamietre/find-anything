@@ -55,7 +55,8 @@ token = "change-me"
 
 [[sources]]
 name  = "home"
-paths = ["/home/$USER/documents", "/home/$USER/projects"]
+path = "/home/$USER"
+include = ["documents/**", "projects/**"]
 
 [watch]
 debounce_ms = 500

@@ -15,9 +15,9 @@ search queries and the web UI.
 find-server [OPTIONS]
 ```
 
-| Option             | Description                                  |
-| ------------------ | -------------------------------------------- |
-| `--config <PATH>`  | Path to server config file (see defaults below) |
+| Option            | Description                                     |
+| ----------------- | ----------------------------------------------- |
+| `--config <PATH>` | Path to server config file (see defaults below) |
 
 **Config path defaults** (in priority order):
 
@@ -69,12 +69,12 @@ index up to date.
 find-scan [OPTIONS] [FILE]
 ```
 
-| Argument / Option | Description                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------------ |
-| `[FILE]`          | Scan a single file instead of all sources. The file must be under a configured source path. Mtime checking is skipped — the file is always re-indexed. |
-| `--config <PATH>` | Client config file (default: `~/.config/find-anything/client.toml`)                             |
-| `--full`          | Force a full re-index of every file regardless of mtime                                          |
-| `--quiet`         | Suppress per-file processing logs; only warnings, errors, and the final summary are printed      |
+| Argument / Option | Description                                                                                                                                                                                            |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `[FILE]`          | Scan a single file instead of all sources. The file must be under a configured source path. Mtime checking is skipped — the file is always re-indexed.                                                 |
+| `--config <PATH>` | Client config file (default: `~/.config/find-anything/client.toml`)                                                                                                                                    |
+| `--full`          | Force a full re-index of every file regardless of mtime                                                                                                                                                |
+| `--quiet`         | Suppress per-file processing logs; only warnings, errors, and the final summary are printed                                                                                                            |
 | `--dry-run`       | Walk the filesystem and compare with server state without extracting or submitting anything; prints how many files would be added, modified, unchanged, and deleted. Cannot be combined with `[FILE]`. |
 
 Without `--full`, only files whose modification time has changed since the last
@@ -289,7 +289,7 @@ base_url = "file:///home/user/code"  # Optional: used to build clickable file li
 
 [[sources]]
 name  = "documents"
-paths = ["/home/user/Documents"]
+path = "/home/user/Documents"
 
 [scan]
 # Glob patterns (relative to each source root) to exclude from indexing.

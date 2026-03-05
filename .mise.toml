@@ -85,6 +85,15 @@ env = { GIT_HASH = "{{exec(command='git rev-parse --short HEAD')}}" }
 description = "Build all Linux release artifacts: x86_64 server and ARM7 NAS binaries"
 depends = ["build-server", "build-arm"]
 
+[tasks.build-win]
+description = "WSL only: cross-compile Windows binaries only (no installer)"
+run = [
+  "rm -rf web/build",
+  "pnpm --dir web run build",
+  "cross build --release --target x86_64-pc-windows-gnu",
+]
+env = { GIT_HASH = "{{exec(command='git rev-parse --short HEAD')}}" }
+
 [tasks.build-wsl-cross]
 description = "WSL only: cross-compile Windows binaries via Docker/mingw and package with Inno Setup"
 run = "bash install/build-wsl-cross.sh"

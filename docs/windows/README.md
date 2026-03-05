@@ -27,11 +27,12 @@ token = "your-secret-token"
 
 [[sources]]
 name  = "home"
-paths = ["C:\\Users\\YourName"]
+path = "C:\\Users\\YourName"
 
 [[sources]]
 name  = "projects"
-paths = ["C:\\code", "C:\\projects"]
+path = "C:"
+include = "code/**", "project/**"
 
 [scan]
 max_file_size_mb = 10
@@ -50,6 +51,7 @@ Run **as Administrator**:
 ```
 
 This will:
+
 - Register the `FindAnythingWatcher` Windows service
 - Configure it to start automatically on boot
 - Register `find-tray.exe` to start at login (system tray app)
@@ -125,6 +127,7 @@ Run **as Administrator**:
 ```
 
 This will:
+
 - Stop the service
 - Remove it from the Windows Service Control Manager
 - Remove the tray app from auto-start
@@ -152,20 +155,20 @@ Remove-ItemProperty -Path "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run" 
 
 ## Binaries Included
 
-| Binary | Purpose |
-|--------|---------|
-| `find-scan.exe` | One-time full scan |
-| `find-watch.exe` | File watcher service |
-| `find.exe` | Command-line search client |
-| `find-server.exe` | Server (typically run on Linux/macOS) |
-| `find-tray.exe` | System tray app (Windows-only) |
-| `find-extract-text.exe` | Text content extractor |
-| `find-extract-pdf.exe` | PDF text extractor |
-| `find-extract-media.exe` | Image EXIF, audio tags, video metadata |
-| `find-extract-archive.exe` | ZIP/TAR/7Z archive extractor |
-| `find-extract-html.exe` | HTML content extractor |
-| `find-extract-office.exe` | Office document extractor |
-| `find-extract-epub.exe` | EPUB ebook extractor |
+| Binary                     | Purpose                                |
+| -------------------------- | -------------------------------------- |
+| `find-scan.exe`            | One-time full scan                     |
+| `find-watch.exe`           | File watcher service                   |
+| `find.exe`                 | Command-line search client             |
+| `find-server.exe`          | Server (typically run on Linux/macOS)  |
+| `find-tray.exe`            | System tray app (Windows-only)         |
+| `find-extract-text.exe`    | Text content extractor                 |
+| `find-extract-pdf.exe`     | PDF text extractor                     |
+| `find-extract-media.exe`   | Image EXIF, audio tags, video metadata |
+| `find-extract-archive.exe` | ZIP/TAR/7Z archive extractor           |
+| `find-extract-html.exe`    | HTML content extractor                 |
+| `find-extract-office.exe`  | Office document extractor              |
+| `find-extract-epub.exe`    | EPUB ebook extractor                   |
 
 ---
 
@@ -179,6 +182,7 @@ powershell -ExecutionPolicy Bypass -File install-windows.ps1
 ```
 
 This will:
+
 1. Download the latest release from GitHub
 2. Extract to `%LOCALAPPDATA%\find-anything`
 3. Create a config template
@@ -198,6 +202,7 @@ Get-EventLog -LogName Application -Source FindAnythingWatcher -Newest 10 | Forma
 ```
 
 **Common issues:**
+
 - **Config file not found:** Ensure the path passed to `install --config` is absolute, or the config is in the same directory as `find-watch.exe`
 - **Server unreachable:** Verify `server.url` in `client.toml` points to a running server
 - **Invalid token:** Check `server.token` matches the server's configured token
@@ -220,6 +225,7 @@ Get-Service FindAnythingWatcher
 ### Extractor binaries not found
 
 The watcher spawns extractor binaries (`find-extract-*.exe`) as subprocesses. Ensure they're:
+
 1. In the same directory as `find-watch.exe`, OR
 2. On the system `PATH`
 
@@ -233,6 +239,7 @@ extractor_dir = "C:\\path\\to\\extractors"
 ### High CPU usage
 
 The watcher is event-driven and should be idle when files aren't changing. If CPU is high:
+
 - Check for a runaway file change loop (e.g., indexing a directory that the server writes to)
 - Verify exclusion patterns cover large build directories (`**/target/**`, `**/node_modules/**`)
 
@@ -242,7 +249,7 @@ The watcher is event-driven and should be idle when files aren't changing. If CP
 
 - **Service model:** Uses Windows SCM instead of systemd
 - **Tray app:** Windows-only; Linux/macOS don't have an equivalent (use `find-watch` directly or systemd user units)
-- **Path separators:** Use backslashes `\` in config paths (e.g., `paths = ["C:\\Users\\Name"]`)
+- **Path separators:** Use backslashes `\` in config paths (e.g., `path = "C:\\Users\\Name"`)
 - **Event log:** Windows uses Event Viewer instead of journalctl
 - **Permissions:** Run installers and service commands as Administrator; the service itself runs as `LocalSystem` (can be changed via `sc config`)
 

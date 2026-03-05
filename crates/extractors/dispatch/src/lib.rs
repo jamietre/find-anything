@@ -106,13 +106,77 @@ pub fn dispatch_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> V
 
 /// Dispatch extraction from a file path.
 ///
-/// Reads the file into memory and calls `dispatch_from_bytes`.
 /// Does NOT handle archives — the caller is responsible for routing
 /// archive files to `find-extract-archive` before calling this.
+///
+/// Reading strategy:
+/// - Specialised extractors (PDF, media, office, etc.) need the full content,
+///   so those files are read up to `cfg.max_content_kb`.
+/// - Everything else: read 512 bytes first and sniff.  Only read the rest
+///   if the content looks like text; binary files stop at the sniff buffer.
 pub fn dispatch_from_path(path: &Path, cfg: &ExtractorConfig) -> Result<Vec<IndexLine>> {
-    let bytes = std::fs::read(path)?;
+    use std::io::Read;
+
     let name = path.to_string_lossy();
+    let limit = (cfg.max_content_kb as u64 * 1024).max(8192);
+
+    let claimed_by_specialist = find_extract_pdf::accepts(path)
+        || find_extract_media::accepts(path)
+        || find_extract_html::accepts(path)
+        || find_extract_office::accepts(path)
+        || find_extract_epub::accepts(path)
+        || find_extract_pe::accepts(path);
+
+    macro_rules! open {
+        ($p:expr) => {
+            match std::fs::File::open($p) {
+                Ok(f) => f,
+                Err(e) => { warn!("skipping {}: {e}", $p.display()); return Ok(vec![]); }
+            }
+        };
+    }
+
+    let bytes = if claimed_by_specialist {
+        // Specialist extractor needs the full content.
+        let mut buf = Vec::new();
+        if let Err(e) = open!(path).take(limit).read_to_end(&mut buf) {
+            warn!("skipping {} (read error): {e}", path.display());
+            return Ok(vec![]);
+        }
+        buf
+    } else if find_extract_text::is_binary_ext_path(path) {
+        // Known binary extension with no specialist extractor (e.g. .vhdx, .iso,
+        // .vmdk).  Opening these files on Windows can block if they are in use
+        // (e.g. the live WSL2 ext4.vhdx held open by Hyper-V).  There is no
+        // content to extract anyway, so skip file I/O entirely.
+        return Ok(vec![]);
+    } else {
+        // Unknown extension: sniff the first 512 bytes to decide whether to read more.
+        let mut f = open!(path);
+        let mut sniff = vec![0u8; 512];
+        let n = match f.read(&mut sniff) {
+            Ok(n) => n,
+            Err(e) => { warn!("skipping {} (read error): {e}", path.display()); return Ok(vec![]); }
+        };
+        sniff.truncate(n);
+        if find_extract_text::accepts_bytes(path, &sniff) {
+            // Looks like text — read the rest up to the limit.
+            let remaining = limit.saturating_sub(sniff.len() as u64);
+            let _ = f.take(remaining).read_to_end(&mut sniff); // partial read is fine
+        }
+        sniff
+    };
+
     Ok(dispatch_from_bytes(&bytes, &name, cfg))
+}
+
+/// Returns `true` if `path` has a known binary extension that no specialist
+/// extractor handles (e.g. `.vhdx`, `.iso`, `.vmdk`).
+///
+/// Use this before any `File::open` call to avoid blocking on locked files
+/// (e.g. the live WSL2 `ext4.vhdx` held open by Hyper-V).
+pub fn is_binary_ext_path(path: &Path) -> bool {
+    find_extract_text::is_binary_ext_path(path)
 }
 
 /// Map a MIME type string to a file kind string.

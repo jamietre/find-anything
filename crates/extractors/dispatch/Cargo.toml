@@ -7,6 +7,10 @@ edition = "2021"
 name = "find_extract_dispatch"
 path = "src/lib.rs"
 
+[[bin]]
+name = "find-extract-dispatch"
+path = "src/main.rs"
+
 [dependencies]
 find-common        = { path = "../../common" }
 find-extract-text  = { path = "../text" }
@@ -17,6 +21,8 @@ find-extract-office = { path = "../office" }
 find-extract-epub  = { path = "../epub" }
 find-extract-pe    = { path = "../pe" }
 
-anyhow  = { workspace = true }
-tracing = { workspace = true }
-infer   = "0.19"
+anyhow               = { workspace = true }
+tracing              = { workspace = true }
+tracing-subscriber   = { workspace = true }
+serde_json           = { workspace = true }
+infer                = "0.19"

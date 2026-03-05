@@ -47,11 +47,11 @@ Two sources for multi-source screenshots:
 ```toml
 [[sources]]
 name  = "projects"
-paths = ["/tmp/find-demo/projects"]
+path = "/tmp/find-demo/projects"
 
 [[sources]]
 name  = "notes"
-paths = ["/tmp/find-demo/notes"]
+path = "/tmp/find-demo/notes"
 ```
 
 Or a single source:
@@ -59,16 +59,16 @@ Or a single source:
 ```toml
 [[sources]]
 name  = "demo"
-paths = ["/tmp/find-demo"]
+path = "/tmp/find-demo"
 ```
 
 ## Good search terms for screenshots
 
-| Search | What it shows |
-|--------|---------------|
+| Search           | What it shows                                                     |
+| ---------------- | ----------------------------------------------------------------- |
 | `authentication` | Cross-file hits: `auth.rs`, `architecture.md`, `meeting-notes.md` |
-| `rate limit` | Multi-type results: Rust, Markdown, meeting notes |
-| `webhook` | Code + docs together |
-| `password` | `auth.rs` + architecture docs |
-| `deploy` | Deployment guide, systemd snippets, meeting notes |
-| `cache` | Rust + Python + TOML — shows multi-language indexing |
+| `rate limit`     | Multi-type results: Rust, Markdown, meeting notes                 |
+| `webhook`        | Code + docs together                                              |
+| `password`       | `auth.rs` + architecture docs                                     |
+| `deploy`         | Deployment guide, systemd snippets, meeting notes                 |
+| `cache`          | Rust + Python + TOML — shows multi-language indexing              |

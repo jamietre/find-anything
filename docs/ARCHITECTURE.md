@@ -403,6 +403,21 @@ content is returned verbatim in the JSON response.
   `data_dir/sources/{source}.db`. ZIP archives are shared across sources.
 - **PDF extraction** wraps `pdf-extract` in `std::panic::catch_unwind` because the
   library panics on malformed PDFs rather than returning errors.
+- **Locked / inaccessible files are skipped gracefully.** On Windows, some files
+  (e.g. the live WSL2 `ext4.vhdx` held open by Hyper-V) cause `File::open` to block
+  indefinitely rather than returning an error. Three defences are layered in
+  `dispatch_from_path` and `process_file` to prevent hangs:
+  1. **Known binary extension — no I/O at all.** `find_extract_text::is_binary_ext_path`
+     recognises extensions like `.vhdx`, `.vmdk`, `.vdi`, `.ova`, `.iso` and returns
+     early in `dispatch_from_path` **before** calling `File::open`. The same check in
+     `process_file` skips the `hash_file` call (which also opens the file).
+  2. **Sniff-before-read for unknown extensions.** For files not claimed by a specialist
+     extractor and not on the known-binary list, `dispatch_from_path` reads only 512
+     bytes first. It reads the full file only if those bytes look like text. Binary
+     content is rejected after 512 bytes — not after reading gigabytes.
+  3. **I/O errors → skip with warning.** Any `File::open` or `read` error in
+     `dispatch_from_path` returns `Ok(vec![])` and logs a warning so the scan
+     continues. The file is indexed by name only and will be retried on the next scan.
 
 ---
 
