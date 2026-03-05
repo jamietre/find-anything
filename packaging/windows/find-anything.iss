@@ -281,7 +281,7 @@ begin
 
   if CurPageID = DirsPage.ID then
   begin
-    if Trim(DirsMemo.Text) = '' then
+    if Trim(DirEdit.Text) = '' then
     begin
       MsgBox('Please enter at least one directory to watch.', mbError, MB_OK);
       Result := False;
