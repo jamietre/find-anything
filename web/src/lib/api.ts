@@ -355,3 +355,33 @@ export async function retryFailedInbox(): Promise<{ retried: number }> {
 	if (!resp.ok) throw new Error(`retryFailedInbox: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
+
+// ── Self-update ───────────────────────────────────────────────────────────────
+
+export interface UpdateCheckResponse {
+	current: string;
+	latest: string;
+	update_available: boolean;
+	restart_supported: boolean;
+	restart_unsupported_reason?: string;
+}
+
+export interface UpdateApplyResponse {
+	ok: boolean;
+	message: string;
+}
+
+export async function getUpdateCheck(): Promise<UpdateCheckResponse> {
+	const resp = await apiFetch('/api/v1/admin/update/check');
+	if (!resp.ok) throw new Error(`getUpdateCheck: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}
+
+export async function applyUpdate(): Promise<UpdateApplyResponse> {
+	const resp = await apiFetch('/api/v1/admin/update/apply', { method: 'POST' });
+	if (!resp.ok) {
+		const body = await resp.json().catch(() => ({ message: resp.statusText }));
+		throw new Error(body.message ?? resp.statusText);
+	}
+	return resp.json();
+}

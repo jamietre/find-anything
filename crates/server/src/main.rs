@@ -78,12 +78,23 @@ fn serve_index_html(state: &AppState, html: &[u8]) -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/html")], injected).into_response()
 }
 
+pub struct CachedUpdateCheck {
+    pub checked_at: std::time::Instant,
+    pub latest_version: String,
+    /// Download URL for the matching platform asset; None if no asset found.
+    pub asset_url: Option<String>,
+}
+
 pub struct AppState {
     pub config: ServerAppConfig,
     pub data_dir: PathBuf,
     /// Shared worker status: idle or processing a specific file.
     /// Updated by the inbox worker; read by the stats route.
     pub worker_status: Arc<std::sync::Mutex<WorkerStatus>>,
+    /// True when running under systemd (INVOCATION_ID is set).
+    pub under_systemd: bool,
+    /// Cached result of the last GitHub update check (refreshed at most once per hour).
+    pub update_cache: tokio::sync::RwLock<Option<CachedUpdateCheck>>,
 }
 
 #[tokio::main]
@@ -116,11 +127,14 @@ async fn main() -> Result<()> {
         .context("schema version check failed — delete the listed database(s) and re-run `find-scan`")?;
 
     let bind = config.server.bind.clone();
+    let under_systemd = std::env::var("INVOCATION_ID").is_ok();
     let worker_status = Arc::new(std::sync::Mutex::new(WorkerStatus::Idle));
     let state = Arc::new(AppState {
         config,
         data_dir: data_dir.clone(),
         worker_status: Arc::clone(&worker_status),
+        under_systemd,
+        update_cache: tokio::sync::RwLock::new(None),
     });
 
     // Spawn the async inbox worker, sharing the status handle.
@@ -161,10 +175,12 @@ async fn main() -> Result<()> {
         .route("/api/v1/tree",           get(routes::list_dir))
         .route("/api/v1/raw",            get(routes::get_raw))
         .route("/api/v1/auth/session",   post(routes::create_session).delete(routes::delete_session))
-        .route("/api/v1/admin/source",      delete(routes::delete_source))
-        .route("/api/v1/admin/inbox",       get(routes::inbox_status).delete(routes::inbox_clear))
-        .route("/api/v1/admin/inbox/retry", post(routes::inbox_retry))
-        .route("/api/v1/admin/inbox/show",  get(routes::inbox_show))
+        .route("/api/v1/admin/source",         delete(routes::delete_source))
+        .route("/api/v1/admin/inbox",          get(routes::inbox_status).delete(routes::inbox_clear))
+        .route("/api/v1/admin/inbox/retry",    post(routes::inbox_retry))
+        .route("/api/v1/admin/inbox/show",     get(routes::inbox_show))
+        .route("/api/v1/admin/update/check",   get(routes::update_check))
+        .route("/api/v1/admin/update/apply",   post(routes::update_apply))
         .fallback(serve_static)
         .layer(DefaultBodyLimit::max(32 * 1024 * 1024))
         .with_state(Arc::clone(&state));

@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use axum::{
     extract::{Query, State},
@@ -13,14 +13,17 @@ use serde::Deserialize;
 
 use find_common::api::{
     InboxDeleteResponse, InboxItem, InboxRetryResponse, InboxShowFile, InboxShowResponse,
-    InboxStatusResponse, SourceDeleteResponse,
+    InboxStatusResponse, SourceDeleteResponse, UpdateApplyResponse, UpdateCheckResponse,
 };
 
 use crate::archive::ArchiveManager;
-use crate::AppState;
+use crate::{AppState, CachedUpdateCheck};
 use crate::db;
 
 use super::{check_auth, run_blocking, source_db_path};
+
+const GITHUB_REPO: &str = "jamietre/find-anything";
+const UPDATE_CACHE_TTL: Duration = Duration::from_secs(3600);
 
 // ── GET /api/v1/admin/inbox ───────────────────────────────────────────────────
 
@@ -213,6 +216,258 @@ pub async fn inbox_show(
             scan_timestamp: req.scan_timestamp,
         }).into_response())
     }).await
+}
+
+// ── GET /api/v1/admin/update/check ────────────────────────────────────────────
+
+/// Map the current binary's arch+OS to the asset name suffix used in releases.
+fn platform_suffix() -> Option<&'static str> {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("x86_64", "linux") => Some("x86_64-linux"),
+        ("arm",    "linux") => Some("armv7-linux"),
+        ("aarch64","linux") => Some("aarch64-linux"),
+        _ => None,
+    }
+}
+
+/// Fetch (or return cached) the latest GitHub release info.
+/// Returns `(latest_version, asset_url)` where `asset_url` is None if no
+/// matching asset was found for this platform.
+async fn fetch_latest(state: &AppState) -> anyhow::Result<(String, Option<String>)> {
+    // Fast path: return cached value if still fresh.
+    {
+        let cache = state.update_cache.read().await;
+        if let Some(c) = cache.as_ref() {
+            if c.checked_at.elapsed() < UPDATE_CACHE_TTL {
+                return Ok((c.latest_version.clone(), c.asset_url.clone()));
+            }
+        }
+    }
+
+    // Slow path: call GitHub API.
+    let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
+    let body: serde_json::Value = reqwest::Client::builder()
+        .user_agent(concat!("find-anything/", env!("CARGO_PKG_VERSION")))
+        .build()?
+        .get(&url)
+        .send()
+        .await
+        .context("GitHub API request")?
+        .error_for_status()
+        .context("GitHub API error")?
+        .json()
+        .await
+        .context("parsing GitHub API response")?;
+
+    let latest_version = body["tag_name"]
+        .as_str()
+        .unwrap_or("")
+        .trim_start_matches('v')
+        .to_string();
+
+    let suffix = platform_suffix();
+    let asset_url = suffix.and_then(|sfx| {
+        body["assets"]
+            .as_array()?
+            .iter()
+            .find(|a| a["name"].as_str().map(|n| n.contains(sfx)).unwrap_or(false))
+            .and_then(|a| a["browser_download_url"].as_str())
+            .map(str::to_string)
+    });
+
+    // Update cache.
+    *state.update_cache.write().await = Some(CachedUpdateCheck {
+        checked_at: std::time::Instant::now(),
+        latest_version: latest_version.clone(),
+        asset_url: asset_url.clone(),
+    });
+
+    Ok((latest_version, asset_url))
+}
+
+fn version_gt(a: &str, b: &str) -> bool {
+    fn parse(v: &str) -> Option<(u64, u64, u64)> {
+        let mut p = v.split('.');
+        Some((p.next()?.parse().ok()?, p.next()?.parse().ok()?, p.next()?.parse().ok()?))
+    }
+    match (parse(a), parse(b)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
+
+pub async fn update_check(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let current = env!("CARGO_PKG_VERSION").to_string();
+
+    let (restart_supported, restart_unsupported_reason) = if state.under_systemd {
+        (true, None)
+    } else {
+        (false, Some("Server is not running under systemd".to_string()))
+    };
+
+    match fetch_latest(&state).await {
+        Ok((latest, asset_url)) => {
+            let update_available = version_gt(&latest, &current) && asset_url.is_some();
+            let (restart_supported, restart_unsupported_reason) =
+                if !restart_supported {
+                    (false, restart_unsupported_reason)
+                } else if asset_url.is_none() {
+                    (false, Some(format!(
+                        "No release asset found for this platform ({})",
+                        platform_suffix().unwrap_or("unknown")
+                    )))
+                } else {
+                    (true, None)
+                };
+            Json(UpdateCheckResponse {
+                current,
+                latest,
+                update_available,
+                restart_supported,
+                restart_unsupported_reason,
+            }).into_response()
+        }
+        Err(e) => {
+            tracing::warn!("update check failed: {e:#}");
+            (StatusCode::BAD_GATEWAY, Json(serde_json::json!({
+                "error": format!("Could not reach GitHub: {e:#}")
+            }))).into_response()
+        }
+    }
+}
+
+// ── POST /api/v1/admin/update/apply ───────────────────────────────────────────
+
+pub async fn update_apply(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    if !state.under_systemd {
+        return (StatusCode::BAD_REQUEST, Json(UpdateApplyResponse {
+            ok: false,
+            message: "Self-update requires systemd".to_string(),
+        })).into_response();
+    }
+
+    let current = env!("CARGO_PKG_VERSION");
+
+    let (latest, asset_url) = match fetch_latest(&state).await {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::BAD_GATEWAY, Json(UpdateApplyResponse {
+            ok: false,
+            message: format!("Could not reach GitHub: {e:#}"),
+        })).into_response(),
+    };
+
+    if !version_gt(&latest, current) {
+        return (StatusCode::BAD_REQUEST, Json(UpdateApplyResponse {
+            ok: false,
+            message: format!("Already on the latest version ({current})"),
+        })).into_response();
+    }
+
+    let asset_url = match asset_url {
+        Some(u) => u,
+        None => return (StatusCode::BAD_REQUEST, Json(UpdateApplyResponse {
+            ok: false,
+            message: format!(
+                "No release asset for this platform ({})",
+                platform_suffix().unwrap_or("unknown")
+            ),
+        })).into_response(),
+    };
+
+    // Resolve current exe path (follow symlinks).
+    let exe = match std::env::current_exe()
+        .context("resolving current exe")
+        .and_then(|p| std::fs::canonicalize(&p).context("canonicalizing exe path"))
+    {
+        Ok(p) => p,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(UpdateApplyResponse {
+            ok: false,
+            message: format!("Could not resolve executable path: {e:#}"),
+        })).into_response(),
+    };
+
+    let exe_dir = match exe.parent() {
+        Some(d) => d.to_path_buf(),
+        None => return (StatusCode::INTERNAL_SERVER_ERROR, Json(UpdateApplyResponse {
+            ok: false,
+            message: "Could not determine executable directory".to_string(),
+        })).into_response(),
+    };
+
+    let tmp_path = exe_dir.join("find-server.new");
+
+    // Download the new binary.
+    let download_result: anyhow::Result<()> = async {
+        let bytes = reqwest::Client::builder()
+            .user_agent(concat!("find-anything/", env!("CARGO_PKG_VERSION")))
+            .build()?
+            .get(&asset_url)
+            .send()
+            .await
+            .context("downloading update")?
+            .error_for_status()
+            .context("download HTTP error")?
+            .bytes()
+            .await
+            .context("reading download body")?;
+
+        std::fs::write(&tmp_path, &bytes)
+            .context("writing temporary binary")?;
+
+        // chmod +x
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&tmp_path)
+                .context("reading temp file metadata")?
+                .permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&tmp_path, perms)
+                .context("setting executable bit")?;
+        }
+
+        // Atomic rename over the current binary.
+        std::fs::rename(&tmp_path, &exe)
+            .context("replacing binary")?;
+
+        Ok(())
+    }.await;
+
+    if let Err(e) = download_result {
+        // Clean up temp file on failure.
+        let _ = std::fs::remove_file(&tmp_path);
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(UpdateApplyResponse {
+            ok: false,
+            message: format!("Update failed: {e:#}"),
+        })).into_response();
+    }
+
+    // Schedule clean exit so systemd restarts onto the new binary.
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        std::process::exit(0);
+    });
+
+    tracing::info!("Update to v{latest} applied — restarting");
+
+    (StatusCode::ACCEPTED, Json(UpdateApplyResponse {
+        ok: true,
+        message: format!("Update to v{latest} applied. Restarting…"),
+    })).into_response()
 }
 
 // ── DELETE /api/v1/admin/source ───────────────────────────────────────────────

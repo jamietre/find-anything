@@ -520,6 +520,31 @@ pub struct InboxShowResponse {
     pub scan_timestamp: Option<i64>,
 }
 
+// ── Self-update types ─────────────────────────────────────────────────────────
+
+/// `GET /api/v1/admin/update/check` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateCheckResponse {
+    /// Currently running server version.
+    pub current: String,
+    /// Latest version available on GitHub.
+    pub latest: String,
+    /// True if `latest` > `current` and a matching asset exists for this platform.
+    pub update_available: bool,
+    /// True if the server is running under systemd and can restart itself.
+    pub restart_supported: bool,
+    /// Human-readable reason when `restart_supported` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart_unsupported_reason: Option<String>,
+}
+
+/// `POST /api/v1/admin/update/apply` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UpdateApplyResponse {
+    pub ok: bool,
+    pub message: String,
+}
+
 // ── Upload API types ───────────────────────────────────────────────────────────
 
 /// `POST /api/v1/upload` request body — initiates a resumable file upload.

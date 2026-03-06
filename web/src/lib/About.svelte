@@ -1,11 +1,18 @@
 <script lang="ts">
-	import { getSettings } from '$lib/api';
+	import { getSettings, getUpdateCheck, applyUpdate } from '$lib/api';
 	import { onMount } from 'svelte';
 
 	let serverVersion = '';
 	let buildHash = '';
+
+	type CheckState = 'idle' | 'checking' | 'up-to-date' | 'update-available' | 'no-systemd' | 'no-asset' | 'error';
+	let checkState: CheckState = 'idle';
 	let latestVersion = '';
-	let checkState: 'idle' | 'checking' | 'up-to-date' | 'update-available' | 'error' = 'idle';
+	let errorMsg = '';
+
+	type ApplyState = 'idle' | 'applying' | 'restarting' | 'done' | 'error';
+	let applyState: ApplyState = 'idle';
+	let applyMsg = '';
 
 	onMount(async () => {
 		try {
@@ -19,14 +26,50 @@
 
 	async function checkForUpdates() {
 		checkState = 'checking';
+		errorMsg = '';
 		try {
-			const resp = await fetch('https://api.github.com/repos/jamietre/find-anything/releases/latest');
-			if (!resp.ok) throw new Error(`GitHub API returned ${resp.status}`);
-			const data = await resp.json();
-			latestVersion = data.tag_name?.replace(/^v/, '') ?? '';
-			checkState = latestVersion === serverVersion ? 'up-to-date' : 'update-available';
-		} catch {
+			const info = await getUpdateCheck();
+			latestVersion = info.latest;
+
+			if (!info.restart_supported) {
+				checkState = info.restart_unsupported_reason?.includes('asset') ? 'no-asset' : 'no-systemd';
+				errorMsg = info.restart_unsupported_reason ?? '';
+			} else if (info.update_available) {
+				checkState = 'update-available';
+			} else {
+				checkState = 'up-to-date';
+			}
+		} catch (e) {
 			checkState = 'error';
+			errorMsg = e instanceof Error ? e.message : String(e);
+		}
+	}
+
+	async function doUpdate() {
+		applyState = 'applying';
+		applyMsg = '';
+		try {
+			const result = await applyUpdate();
+			applyMsg = result.message;
+			applyState = 'restarting';
+
+			// Poll /api/v1/settings until the server responds again, then reload.
+			await pollUntilBack();
+			applyState = 'done';
+			location.reload();
+		} catch (e) {
+			applyState = 'error';
+			applyMsg = e instanceof Error ? e.message : String(e);
+		}
+	}
+
+	async function pollUntilBack() {
+		for (let i = 0; i < 60; i++) {
+			await new Promise(r => setTimeout(r, 2000));
+			try {
+				const resp = await fetch('/api/v1/settings');
+				if (resp.ok) return;
+			} catch { /* server still down */ }
 		}
 	}
 </script>
@@ -38,21 +81,29 @@
 	</div>
 
 	<div class="update-row">
-		<button class="check-btn" on:click={checkForUpdates} disabled={checkState === 'checking'}>
-			{checkState === 'checking' ? 'Checking…' : 'Check for updates'}
-		</button>
+		{#if applyState === 'idle' || applyState === 'error'}
+			<button class="check-btn" on:click={checkForUpdates} disabled={checkState === 'checking'}>
+				{checkState === 'checking' ? 'Checking…' : 'Check for updates'}
+			</button>
+		{/if}
 
 		{#if checkState === 'up-to-date'}
-			<span class="status ok">Up to date</span>
-		{:else if checkState === 'update-available'}
-			<span class="status update">
-				v{latestVersion} available —
-				<a href="https://github.com/jamietre/find-anything/releases/latest" target="_blank" rel="noreferrer">
-					release notes
-				</a>
-			</span>
+			<span class="status ok">Up to date (v{latestVersion})</span>
+		{:else if checkState === 'update-available' && applyState === 'idle'}
+			<span class="status update">v{latestVersion} available</span>
+			<button class="apply-btn" on:click={doUpdate}>Update &amp; restart</button>
+		{:else if checkState === 'update-available' && applyState === 'applying'}
+			<span class="status update">Downloading v{latestVersion}…</span>
+		{:else if applyState === 'restarting'}
+			<span class="status update">Restarting… ({applyMsg})</span>
+		{:else if applyState === 'error'}
+			<span class="status err">{applyMsg}</span>
+		{:else if checkState === 'no-systemd'}
+			<span class="status muted">Self-update requires systemd</span>
+		{:else if checkState === 'no-asset'}
+			<span class="status muted">{errorMsg}</span>
 		{:else if checkState === 'error'}
-			<span class="status err">Could not reach GitHub</span>
+			<span class="status err">{errorMsg || 'Could not reach GitHub'}</span>
 		{/if}
 	</div>
 </div>
@@ -111,11 +162,22 @@
 		font-size: 13px;
 	}
 
-	.status.ok   { color: #3fb950; }
+	.status.ok     { color: #3fb950; }
 	.status.update { color: #f0883e; }
-	.status.err  { color: var(--text-muted); }
+	.status.err    { color: #f85149; }
+	.status.muted  { color: var(--text-muted); }
 
-	.status a {
-		color: inherit;
+	.apply-btn {
+		font-size: 13px;
+		padding: 5px 12px;
+		border-radius: 5px;
+		border: 1px solid #f0883e;
+		background: transparent;
+		color: #f0883e;
+		cursor: pointer;
+	}
+
+	.apply-btn:hover {
+		background: rgba(240, 136, 62, 0.12);
 	}
 </style>

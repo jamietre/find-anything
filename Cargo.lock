@@ -1544,6 +1544,7 @@ dependencies = [
  "mime_guess",
  "nucleo-matcher",
  "regex",
+ "reqwest 0.13.2",
  "rusqlite",
  "rust-embed",
  "serde",
