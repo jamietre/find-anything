@@ -68,6 +68,18 @@
 		dispatch('open', result);
 	}
 
+	function formatSize(bytes: number | null): string {
+		if (bytes === null) return '';
+		if (bytes < 1024) return `${bytes} B`;
+		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+		if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+		return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+	}
+
+	function formatDate(timestamp: number): string {
+		return new Date(timestamp * 1000).toLocaleString();
+	}
+
 	function openAlias(alias: string) {
 		const i = alias.indexOf('::');
 		dispatch('open', {
@@ -111,6 +123,15 @@
 				on:click|stopPropagation={() => (aliasesExpanded = !aliasesExpanded)}
 			>+{result.aliases.length} duplicate{result.aliases.length === 1 ? '' : 's'}</span>
 		{/if}
+		<div class="file-meta">
+			{#if result.kind && result.kind !== 'raw'}
+				<span class="meta-kind" title="File type">{result.kind}</span>
+			{/if}
+			{#if result.size !== null && result.size !== undefined}
+				<span class="meta-item" title="File size">{formatSize(result.size)}</span>
+			{/if}
+			<span class="meta-item" title="Last modified">{formatDate(result.mtime)}</span>
+		</div>
 	</div>
 	{#if aliasesExpanded && result.aliases && result.aliases.length > 0}
 		<div class="aliases">
@@ -283,8 +304,32 @@
 		opacity: 0.5;
 	}
 
-	.alias-badge {
+	.file-meta {
 		margin-left: auto;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-shrink: 0;
+	}
+
+	.meta-kind {
+		padding: 1px 6px;
+		border-radius: 10px;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		color: var(--text-dim);
+		font-size: 10px;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
+	}
+
+	.meta-item {
+		color: var(--text-dim);
+		font-size: 11px;
+		white-space: nowrap;
+	}
+
+	.alias-badge {
 		padding: 1px 7px;
 		border-radius: 20px;
 		background: var(--bg);

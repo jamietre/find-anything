@@ -9,6 +9,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **`find-scan` directory argument** — `find-scan <dir>` rescans all files under a source subdirectory (full rescan, scoped deletions to that subtree only, no `scan_timestamp` update); previously only individual files were accepted
+- **Search result metadata** — mtime, file size, and kind are now shown right-aligned in the search result title bar; the duplicates bubble moves to immediately after the file path
+- **PDF original view from tree** — PDFs opened from the tree, directory listing, or command palette now default to the rendered (original) view; search-result opens continue to default to extracted text so match context is visible immediately
+
+### Fixed
+
+- **Archive member sizes** — `size` is now `null` for archive members rather than `0`; search results and file viewer no longer show "0 bytes" when the size of a member cannot be determined (schema v6→v7 migration makes the `size` column nullable)
+- **`find-admin show` timestamp** — `scan_ts` is now printed as a human-readable RFC2822 local time instead of a raw Unix epoch number
+
 ---
 
 ## [0.5.6] - 2026-03-05

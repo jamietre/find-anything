@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS files (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
     path              TEXT    NOT NULL UNIQUE,
     mtime             INTEGER NOT NULL,
-    size              INTEGER NOT NULL,
+    size              INTEGER,
     kind              TEXT    NOT NULL DEFAULT 'text',
     indexed_at        INTEGER,
     extract_ms        INTEGER,

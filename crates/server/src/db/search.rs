@@ -33,6 +33,8 @@ pub struct CandidateRow {
     pub archive_path: Option<String>,
     pub line_number: usize,
     pub content: String,
+    pub mtime: i64,
+    pub size: Option<i64>,
     /// The file's row ID in the `files` table (used for alias lookup).
     pub file_id: i64,
 }
@@ -118,6 +120,8 @@ pub fn fts_candidates(
         chunk_name: String,
         line_offset: usize,
         file_id: i64,
+        mtime: i64,
+        size: Option<i64>,
     }
 
     let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<RawRow> {
@@ -129,6 +133,8 @@ pub fn fts_candidates(
             chunk_name:    row.get(4)?,
             line_offset:   row.get::<_, i64>(5)? as usize,
             file_id:       row.get(6)?,
+            mtime:         row.get(7)?,
+            size:          row.get(8)?,
         })
     };
 
@@ -137,7 +143,8 @@ pub fn fts_candidates(
         let to = date.to.unwrap_or(i64::MAX);
         let mut stmt = conn.prepare(
             "SELECT f.path, f.kind, l.line_number,
-                    l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id
+                    l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id,
+                    f.mtime, f.size
              FROM lines_fts
              JOIN lines l ON l.id = lines_fts.rowid
              JOIN files f ON f.id = l.file_id
@@ -151,7 +158,8 @@ pub fn fts_candidates(
     } else {
         let mut stmt = conn.prepare(
             "SELECT f.path, f.kind, l.line_number,
-                    l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id
+                    l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id,
+                    f.mtime, f.size
              FROM lines_fts
              JOIN lines l ON l.id = lines_fts.rowid
              JOIN files f ON f.id = l.file_id
@@ -182,6 +190,8 @@ pub fn fts_candidates(
             archive_path,
             line_number:  row.line_number,
             content,
+            mtime:        row.mtime,
+            size:         row.size,
             file_id:      row.file_id,
         });
     }
@@ -291,11 +301,14 @@ pub fn document_candidates(
         chunk_name: String,
         line_offset: usize,
         file_id: i64,
+        mtime: i64,
+        size: Option<i64>,
     }
 
     let mut stmt = conn.prepare(
         "SELECT f.path, f.kind, l.line_number,
-                l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id
+                l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id,
+                f.mtime, f.size
          FROM lines_fts
          JOIN lines l ON l.id = lines_fts.rowid
          JOIN files f ON f.id = l.file_id
@@ -327,6 +340,8 @@ pub fn document_candidates(
                 chunk_name:   row.get(4)?,
                 line_offset:  row.get::<_, i64>(5)? as usize,
                 file_id,
+                mtime:        row.get(7)?,
+                size:         row.get(8)?,
             });
         }
         if file_order.len() >= limit && file_rows.get(&file_order[file_order.len()-1]).map_or(0, |v| v.len()) >= per_file_cap {
@@ -360,6 +375,8 @@ pub fn document_candidates(
             archive_path: archive_path.clone(),
             line_number: rep_row.line_number,
             content: rep_content,
+            mtime: rep_row.mtime,
+            size: rep_row.size,
             file_id,
         };
 
@@ -398,6 +415,8 @@ pub fn document_candidates(
                         archive_path: ea,
                         line_number: extra_row.line_number,
                         content,
+                        mtime: extra_row.mtime,
+                        size: extra_row.size,
                         file_id,
                     });
                 }

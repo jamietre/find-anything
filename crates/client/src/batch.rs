@@ -32,7 +32,7 @@ pub fn build_index_files(
             line_number: 0,
             content: rel_path.clone(),
         });
-        return vec![IndexFile { path: rel_path, mtime, size, kind, lines: all_lines, extract_ms: None, content_hash: None }];
+        return vec![IndexFile { path: rel_path, mtime, size: Some(size), kind, lines: all_lines, extract_ms: None, content_hash: None }];
     }
 
     // Group by archive_path.
@@ -58,7 +58,7 @@ pub fn build_index_files(
     result.push(IndexFile {
         path: rel_path.clone(),
         mtime,
-        size,
+        size: Some(size),
         kind: kind.clone(),
         lines: outer_lines,
         extract_ms: None,
@@ -89,7 +89,7 @@ pub fn build_index_files(
         result.push(IndexFile {
             path: composite_path,
             mtime,
-            size,
+            size: None, // individual archive member sizes are not available
             kind: member_kind,
             lines: content_lines,
             extract_ms: None,
@@ -157,7 +157,7 @@ pub fn build_member_index_files(
         result.push(IndexFile {
             path: composite_path,
             mtime,
-            size: 0, // Individual member sizes are unknown; outer archive size is counted separately
+            size: None, // Individual member sizes are unknown; outer archive size is counted separately
             kind: member_kind,
             lines,
             extract_ms: None,

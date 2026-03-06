@@ -26,6 +26,14 @@
 		dispatch('change', { query, mode });
 	}
 
+	function handleKeydown(e: KeyboardEvent) {
+		if (e.key === 'Enter') {
+			clearTimeout(debounceTimer);
+			isTyping = false;
+			dispatch('change', { query, mode });
+		}
+	}
+
 	export function focus() {
 		inputEl?.focus();
 	}
@@ -46,6 +54,7 @@
 		bind:this={inputEl}
 		bind:value={query}
 		on:input={handleInput}
+		on:keydown={handleKeydown}
 		type="text"
 		placeholder="Search…"
 		autocomplete="off"

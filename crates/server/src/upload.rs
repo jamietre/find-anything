@@ -116,7 +116,7 @@ pub async fn index_upload(
         .unwrap_or_default()
         .as_secs() as i64;
 
-    let file_size = file_path.metadata().map(|m| m.len() as i64).unwrap_or(0);
+    let file_size = file_path.metadata().ok().map(|m| m.len() as i64);
     let kind = find_common::api::detect_kind_from_ext(
         std::path::Path::new(&meta.rel_path)
             .extension()

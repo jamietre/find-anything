@@ -19,6 +19,9 @@ export interface SearchResult {
 	line_number: number;
 	snippet: string;
 	score: number;
+	kind: string;
+	mtime: number;
+	size: number | null;
 	context_lines: ContextLine[];
 	/** Other paths with identical content (deduplication aliases). */
 	aliases?: string[];

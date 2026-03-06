@@ -1345,6 +1345,7 @@ version = "0.5.6"
 dependencies = [
  "anyhow",
  "blake3",
+ "chrono",
  "clap",
  "colored",
  "find-common",

@@ -28,7 +28,7 @@ pub use tree::{list_dir, split_composite_path};
 
 /// The current schema version. Stored in SQLite's built-in `user_version` pragma.
 /// Increment this whenever the schema changes incompatibly.
-pub const SCHEMA_VERSION: i64 = 6;
+pub const SCHEMA_VERSION: i64 = 7;
 
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
@@ -40,6 +40,34 @@ pub fn open(db_path: &Path) -> Result<Connection> {
         // Brand-new database — initialise the full current schema and stamp the version.
         conn.execute_batch(include_str!("../schema_v2.sql"))
             .context("initialising schema")?;
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
+            .context("stamping schema version")?;
+    } else if version == 6 {
+        // v6 → v7: make files.size nullable (archive members store NULL instead of 0
+        // when individual member sizes are not available).
+        conn.execute_batch(
+            "PRAGMA foreign_keys=OFF;
+             CREATE TABLE files_v7 (
+                 id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                 path              TEXT    NOT NULL UNIQUE,
+                 mtime             INTEGER NOT NULL,
+                 size              INTEGER,
+                 kind              TEXT    NOT NULL DEFAULT 'text',
+                 indexed_at        INTEGER,
+                 extract_ms        INTEGER,
+                 content_hash      TEXT,
+                 canonical_file_id INTEGER REFERENCES files_v7(id) ON DELETE SET NULL
+             );
+             INSERT INTO files_v7 SELECT * FROM files;
+             DROP TABLE files;
+             ALTER TABLE files_v7 RENAME TO files;
+             CREATE INDEX IF NOT EXISTS files_content_hash ON files(content_hash)
+                 WHERE content_hash IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS files_canonical ON files(canonical_file_id)
+                 WHERE canonical_file_id IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime);
+             PRAGMA foreign_keys=ON;",
+        ).context("migrating schema v6 → v7")?;
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("stamping schema version")?;
     } else if version != SCHEMA_VERSION {
@@ -183,7 +211,7 @@ pub fn upsert_files(conn: &Connection, files: &[IndexFile]) -> Result<()> {
                mtime = excluded.mtime,
                size  = excluded.size,
                kind  = excluded.kind",
-            params![file.path, file.mtime, file.size, file.kind],
+            params![file.path, file.mtime, file.size.as_ref().map(|&s| s), file.kind],
         )?;
 
         let file_id: i64 = tx.query_row(

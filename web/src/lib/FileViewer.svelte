@@ -17,6 +17,9 @@
 	export let path: string;
 	export let archivePath: string | null = null;
 	export let selection: LineSelection = [];
+	/** Whether to default to the original (rendered) view when the file is opened.
+	 * True for tree/dir/palette opens; false for search-result opens with context. */
+	export let preferOriginal: boolean = false;
 
 	const dispatch = createEventDispatcher<{
 		lineselect: { selection: LineSelection };
@@ -42,6 +45,15 @@
 
 	// Original file view
 	let showOriginal = false;
+	// Track previous preferOriginal to detect changes after the component is mounted
+	// (e.g. same file re-opened from a different entry point without remounting).
+	let _prevPreferOriginal = preferOriginal;
+	$: if (preferOriginal !== _prevPreferOriginal) {
+		_prevPreferOriginal = preferOriginal;
+		if (fileKind !== null) {
+			showOriginal = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
+		}
+	}
 	// For images: false = split view (image + metadata side-by-side), true = full-width image
 	let imageFullWidth = false;
 	// Image load state — reset whenever the source URL changes
@@ -169,9 +181,10 @@
 			fileKind = data.file_kind ?? null;
 			indexingError = data.indexing_error ?? null;
 			isEncrypted = fileKind === 'pdf' && contentLines.length === 1 && contentLines[0].content === 'Content encrypted';
-			// Default: images always show original; PDFs show original unless encrypted or opened
-			// from search results with a specific line selected (user wants extracted text context).
-			showOriginal = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted && firstLine(selection) === null);
+			// Default: images always show original; PDFs show original when opened from tree/dir
+			// (preferOriginal=true). Search-result opens pass preferOriginal=false to show
+			// extracted text context.
+			showOriginal = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
 			imageFullWidth = false;
 		} catch (e) {
 			error = String(e);

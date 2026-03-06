@@ -99,6 +99,7 @@
 				path={currentFile.outer}
 				archivePath={currentFile.inner}
 				selection={fileSelection}
+				preferOriginal={fileSelection.length === 0}
 				on:lineselect={(e) => dispatch('lineselect', e.detail)}
 				on:open={(e) => dispatch('openDirFile', e.detail)}
 				on:navigateDir={(e) => dispatch('openDir', e.detail)}

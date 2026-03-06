@@ -140,7 +140,10 @@ pub struct IndexFile {
     /// Nesting is supported: "outer.zip::inner.tar.gz::file.txt".
     pub path: String,
     pub mtime: i64,
-    pub size: i64,
+    /// Actual byte size of the file. `None` for archive members whose individual
+    /// sizes are not available (only the outer archive's size is known).
+    #[serde(default)]
+    pub size: Option<i64>,
     /// "text" | "pdf" | "archive" | "image" | "audio"
     pub kind: String,
     pub lines: Vec<IndexLine>,
@@ -193,6 +196,13 @@ pub struct SearchResult {
     pub line_number: usize,
     pub snippet: String,
     pub score: u32,
+    /// File kind (e.g. "text", "pdf", "image").
+    pub kind: String,
+    /// Unix timestamp (seconds) of last modification.
+    pub mtime: i64,
+    /// File size in bytes. None for archive members whose individual sizes are unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<i64>,
     /// Populated when ?context=N is passed to the search endpoint.
     #[serde(default)]
     pub context_lines: Vec<ContextLine>,

@@ -318,7 +318,10 @@ async fn main() -> Result<()> {
             };
             println!("source:  {}{queue_label}", resp.source);
             if let Some(ts) = resp.scan_timestamp {
-                println!("scan_ts: {ts}");
+                let dt = chrono::DateTime::from_timestamp(ts, 0)
+                    .map(|utc| chrono::DateTime::<chrono::Local>::from(utc).to_rfc2822())
+                    .unwrap_or_else(|| ts.to_string());
+                println!("scan_ts: {dt}");
             }
             println!();
 

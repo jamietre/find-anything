@@ -532,7 +532,7 @@ mod tests {
         IndexFile {
             path: path.to_string(),
             mtime: 1000,
-            size: 100,
+            size: Some(100),
             kind: kind.to_string(),
             lines: vec![IndexLine {
                 archive_path: None,

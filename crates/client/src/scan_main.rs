@@ -38,11 +38,12 @@ struct Args {
     #[arg(long)]
     dry_run: bool,
 
-    /// Scan a single file instead of all configured sources. The file must be
-    /// under one of the configured source paths. Mtime checking is skipped —
-    /// the file is always (re-)indexed.
-    #[arg(value_name = "FILE")]
-    file: Option<PathBuf>,
+    /// Scan a single file or directory instead of all configured sources.
+    /// The path must be under one of the configured source paths.
+    /// For a file: mtime checking is skipped — the file is always (re-)indexed.
+    /// For a directory: all files under it are re-indexed (mtime is ignored).
+    #[arg(value_name = "PATH")]
+    path: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -79,14 +80,17 @@ async fn main() -> Result<()> {
     };
 
     // Single-file mode: scan one specific file and exit.
-    if opts.dry_run && args.file.is_some() {
+    if opts.dry_run && args.path.as_ref().is_some_and(|p| p.is_file()) {
         anyhow::bail!("--dry-run cannot be combined with a single-file argument");
     }
 
-    if let Some(path) = args.file {
+    if let Some(path) = args.path {
         let abs = std::fs::canonicalize(&path)
             .with_context(|| format!("cannot access {}", path.display()))?;
-        anyhow::ensure!(abs.is_file(), "{} is not a file", abs.display());
+        anyhow::ensure!(
+            abs.is_file() || abs.is_dir(),
+            "{} is not a file or directory", abs.display()
+        );
 
         // Find the source whose configured path is the longest prefix of `abs`.
         let mut best: Option<(&find_common::config::SourceConfig, PathBuf, PathBuf)> = None;
@@ -110,16 +114,36 @@ async fn main() -> Result<()> {
                 abs.display()
             )
         })?;
-        let rel_path = scan::normalise_path_sep(&rel.to_string_lossy());
 
-        tracing::info!("Scanning single file: {} (source: {}, rel: {})", abs.display(), source.name, rel_path);
-        let scan_source = ScanSource {
-            name: &source.name,
-            paths: std::slice::from_ref(&source.path),
-            base_url: source.base_url.as_deref(),
-            include: &source.include,
-        };
-        scan::scan_single_file(&client, &scan_source, &rel_path, &abs, &config.scan, &opts).await?;
+        if abs.is_file() {
+            let rel_path = scan::normalise_path_sep(&rel.to_string_lossy());
+            tracing::info!("Scanning single file: {} (source: {}, rel: {})", abs.display(), source.name, rel_path);
+            let scan_source = ScanSource {
+                name: &source.name,
+                paths: std::slice::from_ref(&source.path),
+                base_url: source.base_url.as_deref(),
+                include: &source.include,
+                subdir: None,
+            };
+            scan::scan_single_file(&client, &scan_source, &rel_path, &abs, &config.scan, &opts).await?;
+        } else {
+            // Directory: rescan all files under it, ignoring mtime.
+            let rel_path = scan::normalise_path_sep(&rel.to_string_lossy());
+            let subdir = if rel_path.is_empty() { None } else { Some(rel_path.clone()) };
+            let subdir_label = if rel_path.is_empty() { "(source root)" } else { &rel_path };
+            tracing::info!(
+                "Scanning directory: {} (source: {}, subdir: {})",
+                abs.display(), source.name, subdir_label
+            );
+            let scan_source = ScanSource {
+                name: &source.name,
+                paths: std::slice::from_ref(&source.path),
+                base_url: source.base_url.as_deref(),
+                include: &source.include,
+                subdir,
+            };
+            scan::run_scan(&client, &scan_source, &config.scan, &opts).await?;
+        }
         return Ok(());
     }
 
@@ -131,6 +155,7 @@ async fn main() -> Result<()> {
             paths: std::slice::from_ref(&source.path),
             base_url: source.base_url.as_deref(),
             include: &source.include,
+            subdir: None,
         };
         scan::run_scan(&client, &scan_source, &config.scan, &opts).await?;
     }

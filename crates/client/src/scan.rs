@@ -59,6 +59,11 @@ pub struct ScanSource<'a> {
     pub base_url: Option<&'a str>,
     /// Glob patterns from `[sources.xxx] include = [...]`. Empty = include all.
     pub include: &'a [String],
+    /// If set, restrict the scan to this subdirectory (relative path within the
+    /// source root, forward-slash normalised). The walk is scoped to this
+    /// directory; only server files under this prefix are considered for
+    /// deletion; mtime checking is skipped (all files are re-indexed).
+    pub subdir: Option<String>,
 }
 
 pub async fn run_scan(
@@ -77,6 +82,8 @@ pub async fn run_scan(
     } else {
         include_dir_prefixes(source.include)
     };
+    // When a subdir is set, always re-index all files (no mtime skip).
+    let full_rescan = opts.full || source.subdir.is_some();
 
     // Warn if the server inbox is not empty — the file list will reflect only
     // files the worker has already committed, so pending batches from a recent
@@ -92,7 +99,7 @@ pub async fn run_scan(
         }
         Ok(status) if !status.failed.is_empty() => {
             warn!(
-                "server inbox has {} failed batch(es); run `find-admin inbox retry` \
+                "server inbox has {} failed batch(es); run `find-admin inbox-retry` \
                  or check /api/v1/admin/inbox for details.",
                 status.failed.len()
             );
@@ -103,18 +110,23 @@ pub async fn run_scan(
     // Fetch what the server already knows about this source.
     // Only consider outer files (no "::" in path) for deletion/mtime comparison;
     // inner archive members are managed server-side.
+    // When scanning a subdir, restrict to files under that prefix only.
     info!("fetching existing file list from server...");
     let server_files: HashMap<String, i64> = api
         .list_files(source_name)
         .await?
         .into_iter()
         .filter(|f| !f.path.contains("::"))
+        .filter(|f| match &source.subdir {
+            None => true,
+            Some(sub) => f.path == *sub || f.path.starts_with(&format!("{sub}/")),
+        })
         .map(|f| (f.path, f.mtime))
         .collect();
 
-    // Walk all configured paths and build the local file map.
+    // Walk all configured paths (or just the subdir) and build the local file map.
     info!("walking filesystem...");
-    let local_files = walk_paths(paths, scan, &excludes, &includes, include_dirs.as_ref());
+    let local_files = walk_paths(paths, scan, &excludes, &includes, include_dirs.as_ref(), source.subdir.as_deref());
     info!("walk complete: {} files found", local_files.len());
 
     // Compute deletions (pure set diff — no I/O).
@@ -133,7 +145,7 @@ pub async fn run_scan(
         local_files.len(),
     );
 
-    let mut ctx = ScanContext::new(api, source_name, paths, base_url, scan, opts.quiet);
+    let mut ctx = ScanContext::new(api, source_name, paths, base_url, scan, opts.quiet, source.subdir.is_none());
 
     // Submit deletions immediately so removed files are gone before new/modified
     // files are indexed.  This also ensures renames (delete + add) don't leave a
@@ -159,7 +171,7 @@ pub async fn run_scan(
     for (rel_path, abs_path) in local_entries {
         // Check mtime before any further work so unchanged files are skipped cheaply.
         let mtime = mtime_of(abs_path).unwrap_or(0);
-        if !opts.full {
+        if !full_rescan {
             let server_mtime = server_files.get(rel_path.as_str()).copied();
             match server_mtime {
                 None => { new_files += 1; }                  // new file — index it
@@ -191,7 +203,7 @@ pub async fn run_scan(
     }
 
     if opts.dry_run {
-        if opts.full {
+        if full_rescan {
             info!(
                 "dry-run complete — {} files found (all would be reindexed), {} to delete",
                 local_files.len(),
@@ -227,6 +239,9 @@ struct ScanContext<'a> {
     base_url: Option<&'a str>,
     quiet: bool,
     scan_start: i64,
+    /// Whether to include `scan_timestamp` in submitted batches. False for
+    /// partial (subdir) rescans so the source's last-scanned time is not updated.
+    emit_scan_timestamp: bool,
     batch: Vec<IndexFile>,
     batch_bytes: usize,
     failures: Vec<IndexingFailure>,
@@ -248,6 +263,7 @@ impl<'a> ScanContext<'a> {
         base_url: Option<&'a str>,
         scan: &ScanConfig,
         quiet: bool,
+        emit_scan_timestamp: bool,
     ) -> Self {
         let scan_start = std::time::SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -260,6 +276,7 @@ impl<'a> ScanContext<'a> {
             base_url,
             quiet,
             scan_start,
+            emit_scan_timestamp,
             batch: Vec::with_capacity(scan.batch_size),
             batch_bytes: 0,
             failures: Vec::new(),
@@ -281,10 +298,11 @@ impl<'a> ScanContext<'a> {
                 delete_paths.len(),
             );
         }
+        let scan_ts = self.emit_scan_timestamp.then_some(self.scan_start);
         submit_batch(
             self.api, self.source_name, self.base_url,
             &mut self.batch, &mut self.failures,
-            delete_paths, Some(self.scan_start),
+            delete_paths, scan_ts,
         ).await?;
         self.batch_bytes = 0;
         self.last_submit = std::time::Instant::now();
@@ -334,7 +352,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
         let outer_start = IndexFile {
             path: rel_path.to_string(),
             mtime: 0,
-            size,
+            size: Some(size),
             kind: kind.clone(),
             lines: vec![IndexLine { archive_path: None, line_number: 0, content: rel_path.to_string() }],
             extract_ms: None,
@@ -427,7 +445,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
         ctx.batch.push(IndexFile {
             path: rel_path.to_string(),
             mtime,
-            size,
+            size: Some(size),
             kind,
             lines: vec![IndexLine { archive_path: None, line_number: 0, content: rel_path.to_string() }],
             extract_ms: None,
@@ -525,7 +543,7 @@ pub async fn scan_single_file(
     opts: &ScanOptions,
 ) -> Result<()> {
     let mtime = mtime_of(abs_path).unwrap_or(0);
-    let mut ctx = ScanContext::new(api, source.name, source.paths, source.base_url, scan, opts.quiet);
+    let mut ctx = ScanContext::new(api, source.name, source.paths, source.base_url, scan, opts.quiet, true);
     process_file(&mut ctx, rel_path, abs_path, mtime).await?;
     ctx.submit(vec![]).await?;
     info!("done");
@@ -668,6 +686,7 @@ fn walk_paths(
     excludes: &GlobSet,
     includes: &GlobSet,
     include_dirs: Option<&std::collections::HashSet<String>>,
+    subdir: Option<&str>,
 ) -> HashMap<String, PathBuf> {
     let mut map = HashMap::new();
     let log_interval = std::time::Duration::from_secs(5);
@@ -677,7 +696,17 @@ fn walk_paths(
         let root_str = normalise_root(root_str);
         let root_str = root_str.as_str();
         let root = Path::new(root_str);
-        for entry in WalkDir::new(root)
+        // When scanning a subdir, walk from root/subdir but compute rel-paths
+        // relative to root so they match what the server already stores.
+        let walk_start = match subdir {
+            Some(sub) => {
+                let mut p = PathBuf::from(root_str);
+                p.push(sub);
+                p
+            }
+            None => PathBuf::from(root_str),
+        };
+        for entry in WalkDir::new(&walk_start)
             .follow_links(scan.follow_symlinks)
             .into_iter()
             .filter_entry(|e| {
