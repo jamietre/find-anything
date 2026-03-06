@@ -330,3 +330,28 @@ export async function getErrors(
 	if (!resp.ok) throw new Error(`getErrors: ${resp.status} ${resp.statusText}`);
 	return resp.json();
 }
+
+// ── Admin inbox ───────────────────────────────────────────────────────────────
+
+export interface InboxItem {
+	filename: string;
+	size_bytes: number;
+	age_secs: number;
+}
+
+export interface InboxStatusResponse {
+	pending: InboxItem[];
+	failed: InboxItem[];
+}
+
+export async function getInboxStatus(): Promise<InboxStatusResponse> {
+	const resp = await apiFetch('/api/v1/admin/inbox');
+	if (!resp.ok) throw new Error(`getInboxStatus: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}
+
+export async function retryFailedInbox(): Promise<{ retried: number }> {
+	const resp = await apiFetch('/api/v1/admin/inbox/retry', { method: 'POST' });
+	if (!resp.ok) throw new Error(`retryFailedInbox: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}

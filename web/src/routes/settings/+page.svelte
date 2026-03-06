@@ -4,6 +4,7 @@
 	import Preferences from '$lib/Preferences.svelte';
 	import StatsPanel from '$lib/StatsPanel.svelte';
 	import ErrorsPanel from '$lib/ErrorsPanel.svelte';
+	import AdminPanel from '$lib/AdminPanel.svelte';
 	import About from '$lib/About.svelte';
 	// Declare params prop to silence runtime "unknown prop" warning.
 	export let params: Record<string, string>;
@@ -66,6 +67,13 @@
 			</button>
 			<button
 				class="nav-item"
+				class:active={activeSection === 'admin'}
+				on:click={() => setSection('admin')}
+			>
+				Admin
+			</button>
+			<button
+				class="nav-item"
 				class:active={activeSection === 'about'}
 				on:click={() => setSection('about')}
 			>
@@ -83,6 +91,9 @@
 			{:else if activeSection === 'errors'}
 				<h2 class="content-title">Indexing Errors</h2>
 				<ErrorsPanel on:navigate={handleErrorNavigate} />
+			{:else if activeSection === 'admin'}
+				<h2 class="content-title">Admin</h2>
+				<AdminPanel />
 			{:else if activeSection === 'about'}
 				<h2 class="content-title">About</h2>
 				<About />

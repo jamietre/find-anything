@@ -26,6 +26,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **NLP date search** — natural language date phrases embedded in search queries are parsed and converted to date range filters automatically; supports `last month`, `last year`, `last week`, `last weekend`, `yesterday`, `last Monday`, `in the last N days`, `since`, `before`, `after`, named months, and explicit ranges; the detected phrase is highlighted green in the search box and shown as a dismissible chip below the bar; calendar vs rolling semantics are distinguished by the presence of an "in the"/"within the" prefix
 - **Result count date context** — the result count line now includes the active date range: `390 results between 2/1/2026 and 2/28/2026`, `200 results after 9/1/2025`, etc.
 - **Manual** — nine-page reference manual under `docs/manual/` covering installation, configuration, indexing, search, web UI, supported file types, administration, services, and troubleshooting; README now links to it
+- **Admin panel** — new "Admin" section in Settings shows pending/failed inbox item counts and a "Retry Failed" button that moves failed batches back to the inbox for reprocessing
 
 ### Changed
 
