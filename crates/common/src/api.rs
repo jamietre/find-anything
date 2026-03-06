@@ -116,6 +116,12 @@ mod tests {
     }
 }
 
+/// Version of the scanner/extraction logic. Stored with each indexed file so
+/// that `find-scan --upgrade` can selectively re-index files that were indexed
+/// by an older version of the client. Increment this when extraction logic
+/// changes in a way that produces meaningfully different output.
+pub const SCANNER_VERSION: u32 = 1;
+
 /// GET /api/v1/sources response entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SourceInfo {
@@ -155,6 +161,10 @@ pub struct IndexFile {
     /// None for files that could not be hashed (too large, permission error, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,
+    /// Version of the scanner that indexed this file. Compared against
+    /// `SCANNER_VERSION` by `find-scan --upgrade` to detect stale entries.
+    #[serde(default)]
+    pub scanner_version: u32,
 }
 
 /// One extraction failure reported by the client.
@@ -266,6 +276,10 @@ pub struct FileRecord {
     pub path: String,
     pub mtime: i64,
     pub kind: String,
+    /// Scanner version stored when the file was last indexed. Used by
+    /// `find-scan --upgrade` to detect entries that need re-extraction.
+    #[serde(default)]
+    pub scanner_version: u32,
 }
 
 /// One entry in a directory listing.

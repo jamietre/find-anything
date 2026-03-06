@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS files (
     indexed_at        INTEGER,
     extract_ms        INTEGER,
     content_hash      TEXT,
-    canonical_file_id INTEGER REFERENCES files(id) ON DELETE SET NULL
+    canonical_file_id INTEGER REFERENCES files(id) ON DELETE SET NULL,
+    scanner_version   INTEGER NOT NULL DEFAULT 0
 );
 
 -- Inner archive members use composite paths: "archive.zip::member.txt"

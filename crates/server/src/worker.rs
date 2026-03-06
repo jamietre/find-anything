@@ -256,6 +256,7 @@ fn filename_only_file(file: &IndexFile) -> IndexFile {
         }],
         extract_ms: None,
         content_hash: None,
+        scanner_version: file.scanner_version,
     }
 }
 
@@ -281,6 +282,7 @@ fn outer_archive_stub(file: &IndexFile) -> IndexFile {
         }],
         extract_ms: None,
         content_hash: None,
+        scanner_version: file.scanner_version,
     }
 }
 
@@ -541,6 +543,7 @@ mod tests {
             }],
             extract_ms: None,
             content_hash: None,
+            scanner_version: 0,
         }
     }
 

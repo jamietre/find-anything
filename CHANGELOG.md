@@ -18,6 +18,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - **Archive member sizes** — `size` is now `null` for archive members rather than `0`; search results and file viewer no longer show "0 bytes" when the size of a member cannot be determined (schema v6→v7 migration makes the `size` column nullable)
+- **`find-scan --upgrade`** — replaces `--full`; re-indexes only files whose stored `scanner_version` is older than the current client version, making post-release re-indexing fast and naturally resumable (interrupted runs skip files already upgraded); schema v7→v8 adds `scanner_version INTEGER DEFAULT 0` to the `files` table
 - **`find-admin show` timestamp** — `scan_ts` is now printed as a human-readable RFC2822 local time instead of a raw Unix epoch number
 
 ---

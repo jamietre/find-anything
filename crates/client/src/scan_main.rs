@@ -23,9 +23,11 @@ struct Args {
     #[arg(long)]
     config: Option<String>,
 
-    /// Force a full reindex regardless of mtime
+    /// Re-index files that were indexed by an older version of the scanner,
+    /// even if their mtime has not changed. Naturally resumable: files already
+    /// at the current scanner version are skipped on subsequent runs.
     #[arg(long)]
-    full: bool,
+    upgrade: bool,
 
     /// Suppress per-file processing logs (only log warnings, errors, and summary)
     #[arg(long)]
@@ -74,7 +76,7 @@ async fn main() -> Result<()> {
     }
 
     let opts = ScanOptions {
-        full: args.full,
+        upgrade: args.upgrade,
         quiet: args.quiet,
         dry_run: args.dry_run,
     };

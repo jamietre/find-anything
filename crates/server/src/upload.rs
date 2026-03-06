@@ -135,6 +135,7 @@ pub async fn index_upload(
             lines,
             extract_ms: None,
             content_hash: None,
+            scanner_version: find_common::api::SCANNER_VERSION,
         }],
         delete_paths: vec![],
         base_url: None,

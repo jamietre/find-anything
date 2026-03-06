@@ -28,7 +28,7 @@ pub use tree::{list_dir, split_composite_path};
 
 /// The current schema version. Stored in SQLite's built-in `user_version` pragma.
 /// Increment this whenever the schema changes incompatibly.
-pub const SCHEMA_VERSION: i64 = 7;
+pub const SCHEMA_VERSION: i64 = 8;
 
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
@@ -68,12 +68,24 @@ pub fn open(db_path: &Path) -> Result<Connection> {
              CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime);
              PRAGMA foreign_keys=ON;",
         ).context("migrating schema v6 → v7")?;
+        // fall through to v7 → v8
+        conn.execute_batch(
+            "ALTER TABLE files ADD COLUMN scanner_version INTEGER NOT NULL DEFAULT 0;",
+        ).context("migrating schema v7 → v8")?;
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
+            .context("stamping schema version")?;
+    } else if version == 7 {
+        // v7 → v8: add scanner_version column so --upgrade can selectively
+        // re-index files extracted by an older version of the client.
+        conn.execute_batch(
+            "ALTER TABLE files ADD COLUMN scanner_version INTEGER NOT NULL DEFAULT 0;",
+        ).context("migrating schema v7 → v8")?;
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("stamping schema version")?;
     } else if version != SCHEMA_VERSION {
         anyhow::bail!(
             "database schema is v{version} but this server requires v{SCHEMA_VERSION}. \
-             Delete {} and re-run `find-scan --full` to rebuild.",
+             Delete {} and re-run find-scan to rebuild.",
             db_path.display()
         );
     }
@@ -130,7 +142,7 @@ pub fn check_all_sources(sources_dir: &Path) -> Result<()> {
         if version != 0 && version != SCHEMA_VERSION {
             anyhow::bail!(
                 "database schema is v{version} but this server requires v{SCHEMA_VERSION}. \
-                 Delete {} and re-run `find-scan --full` to rebuild.",
+                 Delete {} and re-run find-scan to rebuild.",
                 path.display()
             );
         }
@@ -185,13 +197,16 @@ pub fn count_files(conn: &Connection) -> Result<usize> {
 // ── File listing (for deletion detection) ────────────────────────────────────
 
 pub fn list_files(conn: &Connection) -> Result<Vec<FileRecord>> {
-    let mut stmt = conn.prepare("SELECT path, mtime, kind FROM files ORDER BY path")?;
+    let mut stmt = conn.prepare(
+        "SELECT path, mtime, kind, scanner_version FROM files ORDER BY path"
+    )?;
     let rows = stmt
         .query_map([], |row| {
             Ok(FileRecord {
                 path: row.get(0)?,
                 mtime: row.get(1)?,
                 kind: row.get(2)?,
+                scanner_version: row.get::<_, u32>(3).unwrap_or(0),
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -205,13 +220,14 @@ pub fn upsert_files(conn: &Connection, files: &[IndexFile]) -> Result<()> {
 
     for file in files {
         tx.execute(
-            "INSERT INTO files (path, mtime, size, kind)
-             VALUES (?1, ?2, ?3, ?4)
+            "INSERT INTO files (path, mtime, size, kind, scanner_version)
+             VALUES (?1, ?2, ?3, ?4, ?5)
              ON CONFLICT(path) DO UPDATE SET
-               mtime = excluded.mtime,
-               size  = excluded.size,
-               kind  = excluded.kind",
-            params![file.path, file.mtime, file.size.as_ref().map(|&s| s), file.kind],
+               mtime           = excluded.mtime,
+               size            = excluded.size,
+               kind            = excluded.kind,
+               scanner_version = excluded.scanner_version",
+            params![file.path, file.mtime, file.size.as_ref().map(|&s| s), file.kind, file.scanner_version],
         )?;
 
         let file_id: i64 = tx.query_row(

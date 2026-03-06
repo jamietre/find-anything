@@ -10,7 +10,7 @@ use tracing::{info, warn};
 use walkdir::WalkDir;
 
 use find_common::{
-    api::{IndexFile, IndexLine, IndexingFailure},
+    api::{IndexFile, IndexLine, IndexingFailure, SCANNER_VERSION},
     config::{load_dir_override, ScanConfig},
 };
 
@@ -47,7 +47,10 @@ const MAX_ERROR_LEN: usize = 500;
 
 /// Per-invocation options for `run_scan` and `scan_single_file`.
 pub struct ScanOptions {
-    pub full: bool,
+    /// Re-index files whose stored `scanner_version` is older than the current
+    /// `SCANNER_VERSION`, even if their mtime has not changed. Naturally
+    /// resumable: interrupted runs skip files already upgraded to the current version.
+    pub upgrade: bool,
     pub quiet: bool,
     pub dry_run: bool,
 }
@@ -83,7 +86,7 @@ pub async fn run_scan(
         include_dir_prefixes(source.include)
     };
     // When a subdir is set, always re-index all files (no mtime skip).
-    let full_rescan = opts.full || source.subdir.is_some();
+    let subdir_rescan = source.subdir.is_some();
 
     // Warn if the server inbox is not empty — the file list will reflect only
     // files the worker has already committed, so pending batches from a recent
@@ -112,7 +115,7 @@ pub async fn run_scan(
     // inner archive members are managed server-side.
     // When scanning a subdir, restrict to files under that prefix only.
     info!("fetching existing file list from server...");
-    let server_files: HashMap<String, i64> = api
+    let server_files: HashMap<String, (i64, u32)> = api
         .list_files(source_name)
         .await?
         .into_iter()
@@ -121,7 +124,7 @@ pub async fn run_scan(
             None => true,
             Some(sub) => f.path == *sub || f.path.starts_with(&format!("{sub}/")),
         })
-        .map(|f| (f.path, f.mtime))
+        .map(|f| (f.path, (f.mtime, f.scanner_version)))
         .collect();
 
     // Walk all configured paths (or just the subdir) and build the local file map.
@@ -159,6 +162,7 @@ pub async fn run_scan(
     let mut skipped: usize = 0;
     let mut new_files: usize = 0;   // in local but absent from server DB
     let mut modified: usize = 0;    // mtime changed since last scan
+    let mut upgraded: usize = 0;    // mtime unchanged but scanner_version outdated
     let log_interval = std::time::Duration::from_secs(5);
     let mut last_log = std::time::Instant::now();
 
@@ -171,20 +175,24 @@ pub async fn run_scan(
     for (rel_path, abs_path) in local_entries {
         // Check mtime before any further work so unchanged files are skipped cheaply.
         let mtime = mtime_of(abs_path).unwrap_or(0);
-        if !full_rescan {
-            let server_mtime = server_files.get(rel_path.as_str()).copied();
-            match server_mtime {
-                None => { new_files += 1; }                  // new file — index it
-                Some(sm) if mtime > sm => { modified += 1; } // modified — index it
+        if !subdir_rescan {
+            let server_entry = server_files.get(rel_path.as_str()).copied();
+            let needs_index = match server_entry {
+                None => { new_files += 1; true }
+                Some((sm, _)) if mtime > sm => { modified += 1; true }
+                Some((_, sv)) if opts.upgrade && sv < SCANNER_VERSION => { upgraded += 1; true }
                 Some(_) => {
                     skipped += 1;
-                    if last_log.elapsed() >= log_interval {
-                        let total = indexed + skipped;
-                        info!("processed {total} files ({skipped} unchanged, {new_files} new, {modified} modified) so far...");
-                        last_log = std::time::Instant::now();
-                    }
-                    continue;
+                    false
                 }
+            };
+            if !needs_index {
+                if last_log.elapsed() >= log_interval {
+                    let total = indexed + skipped;
+                    info!("processed {total} files ({skipped} unchanged, {new_files} new, {modified} modified, {upgraded} upgraded) so far...");
+                    last_log = std::time::Instant::now();
+                }
+                continue;
             }
         }
 
@@ -195,7 +203,7 @@ pub async fn run_scan(
         if last_log.elapsed() >= log_interval {
             let total = indexed + skipped;
             info!(
-                "processed {total} files ({skipped} unchanged, {new_files} new, {modified} modified) so far, {} in current batch...",
+                "processed {total} files ({skipped} unchanged, {new_files} new, {modified} modified, {upgraded} upgraded) so far, {} in current batch...",
                 ctx.batch.len(),
             );
             last_log = std::time::Instant::now();
@@ -203,7 +211,7 @@ pub async fn run_scan(
     }
 
     if opts.dry_run {
-        if full_rescan {
+        if subdir_rescan {
             info!(
                 "dry-run complete — {} files found (all would be reindexed), {} to delete",
                 local_files.len(),
@@ -211,10 +219,11 @@ pub async fn run_scan(
             );
         } else {
             info!(
-                "dry-run complete — {} files found, {} new, {} modified, {} unchanged, {} to delete",
+                "dry-run complete — {} files found, {} new, {} modified, {} upgraded, {} unchanged, {} to delete",
                 local_files.len(),
                 new_files,
                 modified,
+                upgraded,
                 skipped,
                 deleted
             );
@@ -225,7 +234,7 @@ pub async fn run_scan(
     // Final batch: flush any remaining indexed files.
     ctx.submit(vec![]).await?;
 
-    info!("scan complete — {indexed} indexed ({new_files} new, {modified} modified), {skipped} unchanged, {deleted} deleted");
+    info!("scan complete — {indexed} indexed ({new_files} new, {modified} modified, {upgraded} upgraded), {skipped} unchanged, {deleted} deleted");
     Ok(())
 }
 
@@ -357,6 +366,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
             lines: vec![IndexLine { archive_path: None, line_number: 0, content: rel_path.to_string() }],
             extract_ms: None,
             content_hash: None, // no hash on start sentinel — avoids premature dedup alias
+            scanner_version: SCANNER_VERSION,
         };
         ctx.batch.push(outer_start);
         ctx.submit(vec![]).await?;
@@ -450,6 +460,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
             lines: vec![IndexLine { archive_path: None, line_number: 0, content: rel_path.to_string() }],
             extract_ms: None,
             content_hash: outer_hash,
+            scanner_version: SCANNER_VERSION,
         });
     } else {
         // ── Non-archive extraction ────────────────────────────────────────────
