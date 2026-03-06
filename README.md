@@ -413,6 +413,22 @@ Then: `sudo systemctl daemon-reload && sudo systemctl restart find-watch`
 
 ---
 
+## Documentation
+
+Full documentation is available in the [Manual](docs/manual/README.md):
+
+- [Installation](docs/manual/01-installation.md)
+- [Configuration](docs/manual/02-configuration.md)
+- [Indexing](docs/manual/03-indexing.md)
+- [Search](docs/manual/04-search.md)
+- [Web UI](docs/manual/05-web-ui.md)
+- [Supported file types](docs/manual/06-file-types.md)
+- [Administration](docs/manual/07-administration.md)
+- [Running as a service](docs/manual/08-services.md)
+- [Troubleshooting](docs/manual/09-troubleshooting.md)
+
+---
+
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for the full development roadmap, including
