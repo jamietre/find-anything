@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(f.path, "readme.md");
         assert_eq!(f.kind, "text");
         assert_eq!(f.mtime, 100);
-        assert_eq!(f.size, 200);
+        assert_eq!(f.size, Some(200));
         // Should have exactly the path line.
         assert_eq!(f.lines.len(), 1);
         assert_eq!(f.lines[0].line_number, 0);
@@ -260,7 +260,7 @@ mod tests {
         let report = files.iter().find(|f| f.path == "data.zip::report.txt").unwrap();
         assert_eq!(report.kind, "text");
         assert_eq!(report.mtime, 10);
-        assert_eq!(report.size, 20);
+        assert_eq!(report.size, None); // archive member sizes are not available
         // archive_path stripped from member lines.
         assert!(report.lines.iter().all(|l| l.archive_path.is_none()));
         // Path line present.

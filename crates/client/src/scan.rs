@@ -574,18 +574,18 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
     Ok(builder.build()?)
 }
 
-/// Given a list of include glob patterns, extract two sets of directory paths:
+/// Given a list of include glob patterns, return the set of **terminal**
+/// directory prefixes — the deepest safe literal directory path before any
+/// wildcard character in each pattern.
 ///
-/// - **`ancestors`** — every intermediate directory that must be traversed to
-///   reach a matching file, including the deepest safe literal prefix itself.
-///   Used for exact membership checks (`ancestors.contains(dir)`).
+/// The set is used in `filter_entry` with a three-way check for a directory
+/// at relative path `d`:
+/// - `t == d`                    — `d` is itself a terminal (enter it)
+/// - `t.starts_with(d + "/")`   — `d` is an ancestor of a terminal (pass through)
+/// - `d.starts_with(t + "/")`   — `d` is inside a terminal (already matching)
 ///
-/// - **`terminals`** — the deepest safe literal *directory* prefix of each
-///   pattern (the last complete path component before any wildcard). Used to
-///   allow *descendants* of included directories via `starts_with(terminal + "/")`.
-///
-/// Returns `None` if no useful pruning can be determined (any pattern could
-/// match files starting from the root, e.g. `**/*.rs`).
+/// Returns `None` if no useful pruning can be determined — any pattern that
+/// could match from the root (e.g. `**/*.rs`) requires traversing everything.
 ///
 /// The key correctness rule: the terminal for a pattern is taken from the last
 /// `/` **before** the first wildcard character (`*`, `?`, `[`, `{`). This
@@ -595,13 +595,8 @@ fn build_globset(patterns: &[String]) -> Result<GlobSet> {
 /// component cause the whole function to return `None` (fail-open: traverse
 /// everything).
 ///
-/// Example: `["Users/alice/**", "data/**"]`
-///   → ancestors = `{"Users", "Users/alice", "data"}`
-///   → terminals = `{"Users/alice", "data"}`
-fn include_dir_prefixes(
-    patterns: &[String],
-) -> Option<(std::collections::HashSet<String>, std::collections::HashSet<String>)> {
-    let mut ancestors = std::collections::HashSet::new();
+/// Example: `["Users/alice/**", "data/**"]` → `{"Users/alice", "data"}`
+fn include_dir_prefixes(patterns: &[String]) -> Option<std::collections::HashSet<String>> {
     let mut terminals = std::collections::HashSet::new();
     for pat in patterns {
         let pat = pat.replace('\\', "/");
@@ -634,13 +629,9 @@ fn include_dir_prefixes(
             return None;
         }
 
-        let parts: Vec<&str> = literal.split('/').collect();
-        for i in 1..=parts.len() {
-            ancestors.insert(parts[..i].join("/"));
-        }
         terminals.insert(literal.to_string());
     }
-    Some((ancestors, terminals))
+    Some(terminals)
 }
 
 /// Walk ancestor directories from `file_path` up to the nearest source root,
@@ -724,15 +715,14 @@ fn resolve_effective_scan(
 /// Returns a map of relative_path → absolute_path for all files under `paths`.
 ///
 /// `includes` is empty when no include filter is configured (all files pass).
-/// `include_dirs` is the set of directory paths that must be traversed to reach
-/// any included file; if `None`, no directory pruning is applied (a pattern like
-/// `**/*.rs` could match in any directory).
+/// `include_dirs` is the terminal set from `include_dir_prefixes`; if `None`,
+/// no directory pruning is applied (patterns like `**/*.rs` can match anywhere).
 fn walk_paths(
     paths: &[String],
     scan: &ScanConfig,
     excludes: &GlobSet,
     includes: &GlobSet,
-    include_dirs: Option<&(std::collections::HashSet<String>, std::collections::HashSet<String>)>,
+    include_dirs: Option<&std::collections::HashSet<String>>,
     subdir: Option<&str>,
 ) -> HashMap<String, PathBuf> {
     let mut map = HashMap::new();
@@ -776,23 +766,17 @@ fn walk_paths(
                     // If include patterns have extractable directory prefixes, prune
                     // directories that can't contain any matching files.
                     if e.depth() > 0 {
-                        if let Some((ancestors, terminals)) = include_dirs {
+                        if let Some(terminals) = include_dirs {
                             if let Ok(rel) = e.path().strip_prefix(root) {
                                 let rel_str = normalise_path_sep(&rel.to_string_lossy());
-                                // Allow the directory if:
-                                // 1. It is an ancestor of (or exactly) an include literal
-                                //    (still navigating toward the ** portion), OR
-                                // 2. It is a descendant of a terminal include literal
-                                //    (already inside the ** portion).
-                                //
-                                // Note: the descendant check uses `terminals` (the deepest
-                                // literal prefixes only), NOT `ancestors`. Using `ancestors`
-                                // here would incorrectly allow sibling directories — e.g.
-                                // `Users/Administrator` would pass because it starts with
-                                // the ancestor `Users/`, even though only
-                                // `Users/Administrators` is included.
-                                let allowed = ancestors.contains(&rel_str)
-                                    || terminals.iter().any(|t| rel_str.starts_with(&format!("{t}/")));
+                                // Allow the directory if it is a terminal, an ancestor of a
+                                // terminal (navigating toward the ** portion), or already
+                                // inside a terminal (under the ** portion).
+                                let allowed = terminals.iter().any(|t| {
+                                    t == &rel_str
+                                        || t.starts_with(&format!("{rel_str}/"))
+                                        || rel_str.starts_with(&format!("{t}/"))
+                                });
                                 if !allowed {
                                     return false;
                                 }
@@ -933,5 +917,141 @@ fn truncate_error(s: &str, max: usize) -> String {
         end -= 1;
     }
     format!("{}…", &s[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Helper: returns true if the three-way filter_entry check would allow `dir`
+    // given a terminal set built from `patterns`.
+    fn dir_allowed(patterns: &[&str], dir: &str) -> bool {
+        let owned: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
+        let terminals = match include_dir_prefixes(&owned) {
+            Some(t) => t,
+            // None means no pruning — everything is allowed.
+            None => return true,
+        };
+        terminals.iter().any(|t| {
+            t == dir
+                || t.starts_with(&format!("{dir}/"))
+                || dir.starts_with(&format!("{t}/"))
+        })
+    }
+
+    // Helper: returns None when include_dir_prefixes returns None (no pruning).
+    fn terminals(patterns: &[&str]) -> Option<Vec<String>> {
+        let owned: Vec<String> = patterns.iter().map(|s| s.to_string()).collect();
+        include_dir_prefixes(&owned).map(|t| {
+            let mut v: Vec<String> = t.into_iter().collect();
+            v.sort();
+            v
+        })
+    }
+
+    // ── include_dir_prefixes extraction ────────────────────────────────────────
+
+    #[test]
+    fn simple_patterns_extract_terminals() {
+        assert_eq!(
+            terminals(&["Users/alice/**", "data/**"]),
+            Some(vec!["Users/alice".into(), "data".into()])
+        );
+    }
+
+    #[test]
+    fn wildcard_in_first_component_returns_none() {
+        // e.g. "*/foo/**" — wildcard before the first slash, can't prune
+        assert_eq!(terminals(&["*/foo/**"]), None);
+    }
+
+    #[test]
+    fn double_star_prefix_returns_none() {
+        assert_eq!(terminals(&["**/*.rs"]), None);
+    }
+
+    #[test]
+    fn negation_pattern_returns_none() {
+        assert_eq!(terminals(&["Users/alice/**", "!secret/**"]), None);
+    }
+
+    #[test]
+    fn alternation_in_first_component_returns_none() {
+        // "{a,b}/**" has `{` at position 0 — should return None
+        assert_eq!(terminals(&["{a,b}/**"]), None);
+    }
+
+    #[test]
+    fn wildcard_in_dir_name_uses_safe_prefix() {
+        // "Users/Administrat?r/**" — wildcard inside dir name, safe prefix is "Users"
+        assert_eq!(
+            terminals(&["Users/Administrat?r/**"]),
+            Some(vec!["Users".into()])
+        );
+    }
+
+    #[test]
+    fn no_wildcard_pattern_is_literal_terminal() {
+        assert_eq!(
+            terminals(&["docs/api"]),
+            Some(vec!["docs/api".into()])
+        );
+    }
+
+    // ── filter_entry allow/deny ────────────────────────────────────────────────
+
+    #[test]
+    fn exact_terminal_is_allowed() {
+        assert!(dir_allowed(&["Users/alice/**", "data/**"], "Users/alice"));
+        assert!(dir_allowed(&["Users/alice/**", "data/**"], "data"));
+    }
+
+    #[test]
+    fn ancestor_of_terminal_is_allowed() {
+        // "Users" is an ancestor of the terminal "Users/alice"
+        assert!(dir_allowed(&["Users/alice/**"], "Users"));
+    }
+
+    #[test]
+    fn descendant_of_terminal_is_allowed() {
+        assert!(dir_allowed(&["Users/alice/**"], "Users/alice/documents"));
+        assert!(dir_allowed(&["Users/alice/**"], "Users/alice/documents/2024"));
+    }
+
+    #[test]
+    fn sibling_of_terminal_is_denied() {
+        // "Users/bob" is a sibling of "Users/alice", should be pruned
+        assert!(!dir_allowed(&["Users/alice/**"], "Users/bob"));
+    }
+
+    #[test]
+    fn sibling_with_shared_prefix_is_denied() {
+        // "datafiles" shares the prefix "data" but is not under "data/"
+        assert!(!dir_allowed(&["data/**"], "datafiles"));
+    }
+
+    #[test]
+    fn unrelated_dir_is_denied() {
+        assert!(!dir_allowed(&["Users/alice/**"], "tmp"));
+        assert!(!dir_allowed(&["Users/alice/**", "data/**"], "var"));
+    }
+
+    #[test]
+    fn no_pruning_when_none_allows_everything() {
+        // **/*.rs returns None → no pruning → all dirs allowed
+        assert!(dir_allowed(&["**/*.rs"], "anything"));
+        assert!(dir_allowed(&["**/*.rs"], "Users/Administrator"));
+    }
+
+    #[test]
+    fn windows_path_separators_normalised() {
+        // Backslash-separated patterns (Windows config) should work the same way
+        assert_eq!(
+            terminals(&["Users\\alice\\**"]),
+            Some(vec!["Users/alice".into()])
+        );
+        assert!(dir_allowed(&["Users\\alice\\**"], "Users/alice/docs"));
+        assert!(!dir_allowed(&["Users\\alice\\**"], "Users/bob"));
+    }
 }
 
