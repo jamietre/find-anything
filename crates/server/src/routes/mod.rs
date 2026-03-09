@@ -12,7 +12,7 @@ mod stats;
 mod tree;
 pub mod upload;
 
-pub use admin::{delete_source, inbox_clear, inbox_retry, inbox_show, inbox_status, update_check, update_apply};
+pub use admin::{compact, delete_source, inbox_clear, inbox_pause, inbox_resume, inbox_retry, inbox_show, inbox_status, update_check, update_apply};
 pub use bulk::bulk;
 pub use context::{context_batch, get_context};
 pub use errors::get_errors;

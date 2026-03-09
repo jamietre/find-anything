@@ -461,6 +461,14 @@ pub struct StatsResponse {
     pub archive_size_bytes: u64,
     /// Current state of the inbox worker.
     pub worker_status: WorkerStatus,
+    /// Total compressed size of orphaned chunks across all archives (bytes).
+    /// `None` if the background scanner has not yet run.
+    #[serde(default)]
+    pub orphaned_bytes: Option<u64>,
+    /// Seconds since the orphaned-chunk stats were last computed.
+    /// `None` if the background scanner has not yet run.
+    #[serde(default)]
+    pub orphaned_stats_age_secs: Option<u64>,
 }
 
 // ── Inbox admin types ─────────────────────────────────────────────────────────
@@ -478,6 +486,9 @@ pub struct InboxItem {
 pub struct InboxStatusResponse {
     pub pending: Vec<InboxItem>,
     pub failed: Vec<InboxItem>,
+    /// True when inbox processing has been paused via `POST /api/v1/admin/inbox/pause`.
+    #[serde(default)]
+    pub paused: bool,
 }
 
 /// `DELETE /api/v1/admin/inbox` response.
@@ -490,6 +501,27 @@ pub struct InboxDeleteResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxRetryResponse {
     pub retried: usize,
+}
+
+/// `POST /api/v1/admin/inbox/pause` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxPauseResponse {
+    /// Number of in-flight jobs returned to the inbox from `inbox/processing/`.
+    pub returned: usize,
+}
+
+/// `POST /api/v1/admin/inbox/resume` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InboxResumeResponse {}
+
+/// `POST /api/v1/admin/compact` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompactResponse {
+    pub archives_scanned: usize,
+    pub archives_rewritten: usize,
+    pub chunks_removed: usize,
+    pub bytes_freed: u64,
+    pub dry_run: bool,
 }
 
 /// `DELETE /api/v1/admin/source` response.

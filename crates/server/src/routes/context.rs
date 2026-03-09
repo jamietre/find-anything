@@ -47,7 +47,7 @@ pub async fn get_context(
 
     run_blocking("context", move || {
         let conn = db::open(&db_path)?;
-        let archive_mgr = ArchiveManager::new(data_dir);
+        let archive_mgr = ArchiveManager::new_for_reading(data_dir);
         let kind: String = conn.query_row(
             "SELECT kind FROM files WHERE path = ?1",
             rusqlite::params![full_path],
@@ -73,7 +73,7 @@ pub async fn context_batch(
     let data_dir = state.data_dir.clone();
 
     run_blocking("context_batch", move || {
-        let archive_mgr = ArchiveManager::new(data_dir.clone());
+        let archive_mgr = ArchiveManager::new_for_reading(data_dir.clone());
 
         // Group items by source so we open each DB at most once.
         let mut by_source: std::collections::HashMap<String, (std::path::PathBuf, Vec<find_common::api::ContextBatchItem>)> = std::collections::HashMap::new();

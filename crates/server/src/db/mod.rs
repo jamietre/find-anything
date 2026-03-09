@@ -33,6 +33,10 @@ pub const SCHEMA_VERSION: i64 = 8;
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
         .with_context(|| format!("opening {}", db_path.display()))?;
+    // Wait up to 30 s for a write lock rather than failing immediately with
+    // SQLITE_BUSY.  Multiple workers share one DB per source, so brief
+    // contention is normal and should not be treated as an error.
+    conn.busy_timeout(std::time::Duration::from_secs(30))?;
     register_scalar_functions(&conn)?;
 
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -274,26 +278,38 @@ pub fn upsert_files(conn: &Connection, files: &[IndexFile]) -> Result<()> {
 
 // ── Delete ────────────────────────────────────────────────────────────────────
 
+/// Delete `paths` from the database, returning the chunk refs that should be
+/// removed from ZIP archives by the caller.  ZIP rewriting is intentionally
+/// deferred so the caller can release any serialisation lock (e.g.
+/// `source_lock`) before doing the potentially-slow network I/O.
+///
+/// If the server dies after this returns but before the caller removes chunks,
+/// the orphaned chunks waste space but are never referenced and never served —
+/// a future compaction pass can reclaim them.
 pub fn delete_files(
     conn: &Connection,
-    archive_mgr: &mut crate::archive::ArchiveManager,
+    archive_mgr: &crate::archive::ArchiveManager,
     paths: &[String],
-) -> Result<()> {
+) -> Result<Vec<ChunkRef>> {
     let tx = conn.unchecked_transaction()?;
 
+    let mut refs_to_remove: Vec<ChunkRef> = Vec::new();
     for path in paths {
-        delete_one_path(&tx, archive_mgr, path)?;
+        delete_one_path(&tx, archive_mgr, path, &mut refs_to_remove)?;
     }
 
     tx.commit()?;
-    Ok(())
+    Ok(refs_to_remove)
 }
 
 /// Delete one path (outer file + all inner archive members), with canonical promotion.
+/// Chunk refs that need ZIP cleanup are appended to `refs_to_remove`; the
+/// caller is responsible for calling `archive_mgr.remove_chunks` afterwards.
 fn delete_one_path(
     tx: &rusqlite::Transaction,
-    archive_mgr: &mut crate::archive::ArchiveManager,
+    archive_mgr: &crate::archive::ArchiveManager,
     path: &str,
+    refs_to_remove: &mut Vec<ChunkRef>,
 ) -> Result<()> {
     // Look up the outer file's id and canonical_file_id.
     let outer: Option<(i64, Option<i64>)> = tx.query_row(
@@ -313,9 +329,7 @@ fn delete_one_path(
         "DELETE FROM files WHERE path LIKE ?1",
         params![format!("{}::%", path)],
     )?;
-    if !inner_refs.is_empty() {
-        archive_mgr.remove_chunks(inner_refs)?;
-    }
+    refs_to_remove.extend(inner_refs);
 
     // Now delete the outer file itself.
     if outer_canonical_id.is_some() {
@@ -333,13 +347,11 @@ fn delete_one_path(
         };
 
         if aliases.is_empty() {
-            // No aliases — normal deletion: remove chunks then delete the row.
+            // No aliases — normal deletion: collect chunk refs, delete FTS, delete row.
             let refs = collect_chunk_refs_for_file(tx, outer_id)?;
             delete_fts_for_file(tx, archive_mgr, outer_id)?;
             tx.execute("DELETE FROM files WHERE id = ?1", params![outer_id])?;
-            if !refs.is_empty() {
-                archive_mgr.remove_chunks(refs)?;
-            }
+            refs_to_remove.extend(refs);
         } else {
             // Canonical promotion: promote the first alias to canonical.
             let (new_canonical_id, _new_canonical_path) = &aliases[0];

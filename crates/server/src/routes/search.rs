@@ -180,7 +180,7 @@ pub async fn search(
             spawn_blocking(move || -> anyhow::Result<(usize, Vec<SearchResult>)> {
                 if !db_path.exists() { return Ok((0, vec![])); }
                 let conn = db::open(&db_path)?;
-                let archive_mgr = ArchiveManager::new(data_dir);
+                let archive_mgr = ArchiveManager::new_for_reading(data_dir);
 
                 // Document mode has its own query path (one result per file).
                 if mode == "document" {

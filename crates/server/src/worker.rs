@@ -1,22 +1,19 @@
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::{Connection, ErrorCode, OptionalExtension};
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use find_common::api::{BulkRequest, IndexFile, IndexLine, IndexingFailure, WorkerStatus};
 
-use crate::archive::{self, ArchiveManager, ChunkRef};
+use crate::archive::{self, ArchiveManager, ChunkRef, SharedArchiveState};
 use crate::db;
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
-/// Maximum time allowed to process a single inbox request before the worker
-/// abandons the blocking thread and moves the file to `failed/`.  The thread
-/// itself cannot be cancelled and will continue running in the background, but
-/// the worker is unblocked so it can process the rest of the queue.
-const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Log a warning if `start` is older than `threshold_secs`.
 fn warn_slow(start: std::time::Instant, threshold_secs: u64, step: &str, context: &str) {
@@ -34,17 +31,107 @@ fn warn_slow(start: std::time::Instant, threshold_secs: u64, step: &str, context
 
 type StatusHandle = std::sync::Arc<std::sync::Mutex<WorkerStatus>>;
 
-/// Start the inbox worker that processes index requests asynchronously.
-/// Polls the inbox directory every second for new `.gz` files.
-pub async fn start_inbox_worker(data_dir: PathBuf, status: StatusHandle, log_batch_detail_limit: usize) -> Result<()> {
+/// Move any files stranded in `inbox/processing/` back to `inbox/`.
+///
+/// Called on every startup (including `--pause-inbox`) so that jobs
+/// interrupted mid-flight by the previous run are always returned to the
+/// queue before the server begins serving requests.
+pub async fn recover_stranded_requests(data_dir: &Path) -> Result<()> {
     let inbox_dir = data_dir.join("inbox");
     tokio::fs::create_dir_all(&inbox_dir).await?;
-
     let failed_dir = inbox_dir.join("failed");
     tokio::fs::create_dir_all(&failed_dir).await?;
+    let processing_dir = inbox_dir.join("processing");
+    tokio::fs::create_dir_all(&processing_dir).await?;
 
-    tracing::info!("Starting inbox worker, monitoring: {}", inbox_dir.display());
+    let mut stranded = tokio::fs::read_dir(&processing_dir).await?;
+    while let Ok(Some(entry)) = stranded.next_entry().await {
+        let src = entry.path();
+        if src.extension() == Some(OsStr::new("gz")) {
+            let dst = inbox_dir.join(entry.file_name());
+            if let Err(e) = tokio::fs::rename(&src, &dst).await {
+                tracing::warn!("Failed to recover stranded request {}: {e}", src.display());
+            } else {
+                tracing::info!("Recovered stranded request: {}", dst.display());
+            }
+        }
+    }
+    Ok(())
+}
 
+/// Start the inbox worker pool.
+///
+/// Spawns `num_workers` worker tasks that share a bounded channel. A router
+/// loop polls the inbox directory every second, sorts pending files by
+/// modification time (preserving submission order), and sends each path to
+/// the channel. Workers pull paths and call `process_request` concurrently,
+/// each using its own exclusively-owned ZIP archive for appending.
+#[allow(clippy::too_many_arguments)]
+pub async fn start_inbox_worker(
+    data_dir: PathBuf,
+    status: StatusHandle,
+    log_batch_detail_limit: usize,
+    num_workers: usize,
+    request_timeout: std::time::Duration,
+    delete_batch_size: usize,
+    shared_archive_state: Arc<SharedArchiveState>,
+    inbox_paused: Arc<AtomicBool>,
+) -> Result<()> {
+    let inbox_dir = data_dir.join("inbox");
+    let failed_dir = inbox_dir.join("failed");
+    let processing_dir = inbox_dir.join("processing");
+
+    tracing::info!(
+        "Starting inbox worker pool ({num_workers} workers): {}",
+        inbox_dir.display()
+    );
+
+    // Bounded channel: backpressure prevents unbounded memory growth if
+    // workers are slower than the router.
+    let (tx, rx) = tokio::sync::mpsc::channel::<PathBuf>(256);
+    let rx = Arc::new(tokio::sync::Mutex::new(rx));
+
+    // Spawn worker tasks.
+    for worker_idx in 0..num_workers {
+        let rx = Arc::clone(&rx);
+        let data_dir = data_dir.clone();
+        let failed_dir = failed_dir.clone();
+        let inbox_dir_clone = inbox_dir.clone();
+        let status = status.clone();
+        let shared = Arc::clone(&shared_archive_state);
+
+        tokio::spawn(async move {
+            tracing::debug!("Inbox worker {worker_idx} started");
+            loop {
+                let path = {
+                    let mut guard = rx.lock().await;
+                    match guard.recv().await {
+                        Some(p) => p,
+                        None => break, // channel closed
+                    }
+                    // Lock released here before processing — other workers can
+                    // receive the next item immediately.
+                };
+                process_request_async(
+                    &data_dir,
+                    &path,
+                    &failed_dir,
+                    &inbox_dir_clone,
+                    status.clone(),
+                    log_batch_detail_limit,
+                    request_timeout,
+                    delete_batch_size,
+                    &shared,
+                    worker_idx,
+                )
+                .await;
+            }
+            tracing::debug!("Inbox worker {worker_idx} exited");
+        });
+    }
+
+    // Router loop: poll inbox, sort by mtime, claim files by moving them to
+    // processing/, then send the new path to the worker channel.
     let mut interval = tokio::time::interval(POLL_INTERVAL);
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
@@ -59,12 +146,7 @@ pub async fn start_inbox_worker(data_dir: PathBuf, status: StatusHandle, log_bat
             }
         };
 
-        // Collect all pending .gz files and sort by modification time so that
-        // batches are processed in the order they were submitted.  Without this,
-        // read_dir returns files in filesystem hash order (arbitrary), which can
-        // cause a completion-upsert batch to be processed before its own
-        // outer-start batch, leaving the outer archive with mtime=0.
-        let mut gz_files: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+        let mut gz_files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
         while let Ok(Some(entry)) = entries.next_entry().await {
             let path = entry.path();
             if path.extension() == Some(OsStr::new("gz")) {
@@ -75,66 +157,114 @@ pub async fn start_inbox_worker(data_dir: PathBuf, status: StatusHandle, log_bat
                 gz_files.push((mtime, path));
             }
         }
+        // Sort ascending by mtime so older submissions are processed first.
         gz_files.sort_unstable_by_key(|(mtime, _)| *mtime);
-        for (_, path) in gz_files {
-            process_request_async(&data_dir, &path, &failed_dir, status.clone(), log_batch_detail_limit).await;
+
+        // When paused, do not dispatch any new work — leave files in inbox/.
+        if inbox_paused.load(Ordering::Relaxed) {
+            continue;
+        }
+
+        for (_, inbox_path) in gz_files {
+            let file_name = match inbox_path.file_name() {
+                Some(n) => n.to_owned(),
+                None => continue,
+            };
+            let processing_path = processing_dir.join(&file_name);
+
+            // Atomically claim this file. If the rename fails (e.g. another
+            // process already moved it) just skip — it will be retried or was
+            // already handled.
+            if let Err(e) = tokio::fs::rename(&inbox_path, &processing_path).await {
+                tracing::warn!(
+                    "Failed to claim {} for processing: {e}",
+                    inbox_path.display()
+                );
+                continue;
+            }
+
+            if tx.send(processing_path).await.is_err() {
+                tracing::error!("Worker channel closed unexpectedly; stopping router");
+                return Ok(());
+            }
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_request_async(
     data_dir: &Path,
     request_path: &Path,
     failed_dir: &Path,
+    inbox_dir: &Path,
     status: StatusHandle,
     log_batch_detail_limit: usize,
+    request_timeout: std::time::Duration,
+    delete_batch_size: usize,
+    shared_archive_state: &Arc<SharedArchiveState>,
+    worker_idx: usize,
 ) {
-    let status_reset = status.clone(); // held outside the closure to ensure Idle on any exit path
+    let status_reset = status.clone();
 
     let blocking_task = tokio::task::spawn_blocking({
         let data_dir = data_dir.to_path_buf();
         let request_path = request_path.to_path_buf();
-        move || process_request(&data_dir, &request_path, &status, log_batch_detail_limit)
+        let shared = Arc::clone(shared_archive_state);
+        move || process_request(&data_dir, &request_path, &status, log_batch_detail_limit, delete_batch_size, &shared, worker_idx)
     });
 
-    let timed_result = tokio::time::timeout(REQUEST_TIMEOUT, blocking_task).await;
+    let timed_result = tokio::time::timeout(request_timeout, blocking_task).await;
 
-    // Ensure idle is set even if process_request errored, panicked, or timed out.
     if let Ok(mut guard) = status_reset.lock() {
         *guard = WorkerStatus::Idle;
     }
 
     match timed_result {
         Err(_timeout) => {
-            // The blocking thread is stuck — abandon it (it will keep running in
-            // the background) and move the file to failed/ so the worker can
-            // continue with the rest of the queue.
             tracing::error!(
                 "Request processing timed out after {}s, abandoning: {}",
-                REQUEST_TIMEOUT.as_secs(),
+                request_timeout.as_secs(),
                 request_path.display(),
             );
             handle_failure(
                 request_path,
                 failed_dir,
-                anyhow::anyhow!("Processing timed out after {}s", REQUEST_TIMEOUT.as_secs()),
+                anyhow::anyhow!("Processing timed out after {}s", request_timeout.as_secs()),
             )
             .await;
         }
         Ok(Ok(Ok(()))) => {
-            // Success - delete request file
             if let Err(e) = tokio::fs::remove_file(&request_path).await {
-                tracing::error!("Failed to delete processed request {}: {}", request_path.display(), e);
+                tracing::error!(
+                    "Failed to delete processed request {}: {}",
+                    request_path.display(),
+                    e
+                );
             } else {
                 tracing::info!("Successfully processed: {}", request_path.display());
             }
         }
         Ok(Ok(Err(e))) => {
-            // Processing error - move to failed
-            handle_failure(request_path, failed_dir, e).await;
+            if is_db_locked(&e) {
+                tracing::warn!(
+                    "Worker {worker_idx}: database locked while processing {}, returning to inbox for retry: {e:#}",
+                    request_path.display(),
+                );
+                // Move back to inbox so the router picks it up again.
+                if let Some(file_name) = request_path.file_name() {
+                    let retry_path = inbox_dir.join(file_name);
+                    if let Err(e) = tokio::fs::rename(request_path, &retry_path).await {
+                        tracing::error!(
+                            "Worker {worker_idx}: failed to return {} to inbox: {e}",
+                            request_path.display()
+                        );
+                    }
+                }
+            } else {
+                handle_failure(request_path, failed_dir, e).await;
+            }
         }
         Ok(Err(e)) => {
-            // Task panicked or was cancelled
             handle_failure(
                 request_path,
                 failed_dir,
@@ -145,10 +275,17 @@ async fn process_request_async(
     }
 }
 
-fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle, log_batch_detail_limit: usize) -> Result<()> {
+fn process_request(
+    data_dir: &Path,
+    request_path: &Path,
+    status: &StatusHandle,
+    log_batch_detail_limit: usize,
+    delete_batch_size: usize,
+    shared_archive_state: &Arc<SharedArchiveState>,
+    worker_idx: usize,
+) -> Result<()> {
     let request_start = std::time::Instant::now();
 
-    // Decompress and parse request
     let compressed = std::fs::read(request_path)?;
     let compressed_bytes = compressed.len();
     let mut decoder = GzDecoder::new(&compressed[..]);
@@ -158,7 +295,6 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle, 
     let request: BulkRequest = serde_json::from_str(&json)
         .context("parsing bulk request JSON")?;
 
-    // Pre-compute batch stats for summary logging.
     let n_files = request.files.len();
     let n_deletes = request.delete_paths.len();
     let total_content_lines: usize = request.files.iter().map(|f| f.lines.len()).sum();
@@ -167,32 +303,61 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle, 
         .map(|l| l.content.len())
         .sum();
 
-    // Log what is being processed. For small batches, emit each path so it's
-    // easy to see which files are being indexed. For large batches, log the
-    // count to avoid flooding the log.
+    if n_deletes > 0 {
+        tracing::info!("[worker {worker_idx}] Processing {} deletes [{}]", n_deletes, request.source);
+    }
     if n_files <= log_batch_detail_limit {
         for f in &request.files {
-            tracing::info!("Indexing [{}] {}", request.source, f.path);
+            tracing::info!("[worker {worker_idx}] Indexing [{}] {}", request.source, f.path);
         }
     } else {
-        tracing::info!("Indexing {} files [{}]", n_files, request.source);
+        tracing::info!("[worker {worker_idx}] Indexing {} files [{}]", n_files, request.source);
     }
 
-    // Open source database
     let db_path = data_dir.join("sources").join(format!("{}.db", request.source));
     let mut conn = db::open(&db_path)?;
 
-    // Initialize archive manager
-    let mut archive_mgr = ArchiveManager::new(data_dir.to_path_buf());
+    // Each worker owns its own ArchiveManager with an exclusively-allocated
+    // write archive. The shared state coordinates archive number allocation
+    // and serialises concurrent rewrites of the same old archive.
+    let mut archive_mgr = ArchiveManager::new(Arc::clone(shared_archive_state));
 
-    // 1. Deletions first (handles renames where path appears in both lists)
+    // Application-level per-source write lock.  SQLite's busy_timeout relies
+    // on POSIX advisory file locks, which are unreliable on some mount types.
+    // We acquire this for each chunk / file and release it immediately after,
+    // so a large request (e.g. 80 k deletes in 100-item chunks) only holds the
+    // lock for one chunk at a time — other workers on the same source slip in
+    // between chunks without needing filesystem locking at all.
+    let source_lock = shared_archive_state.source_lock(&request.source);
+
+    // Process deletes in bounded chunks, releasing the source lock between
+    // each chunk so other workers can slip in.
     if !request.delete_paths.is_empty() {
-        db::delete_files(&conn, &mut archive_mgr, &request.delete_paths)?;
+        if let Ok(mut guard) = status.lock() {
+            *guard = WorkerStatus::Processing {
+                source: request.source.clone(),
+                file: format!("(deleting {} files)", n_deletes),
+            };
+        }
+    }
+    // Accumulate all chunk refs across every delete chunk before rewriting any
+    // archives.  `remove_chunks` already groups by archive internally, so
+    // calling it once for the whole request means each affected archive is
+    // rewritten at most once — even if many paths in different chunks share the
+    // same archive.  The source_lock is still released between DB chunks so
+    // other workers on the same source can slip in between transactions.
+    let mut all_delete_refs: Vec<archive::ChunkRef> = Vec::new();
+    for chunk in request.delete_paths.chunks(delete_batch_size) {
+        let refs = {
+            let _guard = source_lock.lock().unwrap();
+            db::delete_files(&conn, &archive_mgr, chunk)?
+        };
+        all_delete_refs.extend(refs);
+    }
+    if !all_delete_refs.is_empty() {
+        archive_mgr.remove_chunks(all_delete_refs)?;
     }
 
-    // 2. Upserts — update status per file so the UI shows what is being indexed.
-    //    Errors are recorded per-file and processing continues; a single bad file
-    //    must not prevent the rest of the batch from being indexed.
     let mut server_side_failures: Vec<IndexingFailure> = Vec::new();
     let mut successfully_indexed: Vec<String> = Vec::new();
     for file in &request.files {
@@ -203,34 +368,29 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle, 
             };
         }
         let file_start = std::time::Instant::now();
+        let _guard = source_lock.lock().unwrap();
         match process_file(&mut conn, &mut archive_mgr, file, false) {
             Ok(()) => {
                 successfully_indexed.push(file.path.clone());
             }
             Err(e) => {
-                tracing::error!("Failed to index {}: {e:#}", file.path);
-                // Insert a fallback record so the file appears in search and tree:
-                //   1. appears in search by path name (line_number=0 entry)
-                //   2. appears in the directory tree
-                //
-                // For outer archive files (kind="archive", no "::" in path) we use a
-                // stub with mtime=0 so that re-indexing is triggered on the next scan
-                // (any real mtime > 0).  We skip the inner-member DELETE in process_file
-                // for the stub call to avoid disrupting inner members that may still be
-                // alive (if the original failure occurred before that DELETE ran).
-                //
-                // For all other files we use the real mtime so they are not re-submitted
-                // on every scan unless they actually change.
+                if is_db_locked(&e) {
+                    tracing::warn!("Failed to index {} (db locked, will retry): {e:#}", file.path);
+                } else {
+                    tracing::error!("Failed to index {}: {e:#}", file.path);
+                }
                 let (fallback, skip_inner) = if is_outer_archive(&file.path, &file.kind) {
                     (outer_archive_stub(file), true)
                 } else {
                     (filename_only_file(file), false)
                 };
                 if let Err(e2) = process_file(&mut conn, &mut archive_mgr, &fallback, skip_inner) {
-                    tracing::error!("Filename-only fallback also failed for {}: {e2:#}", file.path);
+                    if is_db_locked(&e2) {
+                        tracing::warn!("Filename-only fallback also failed for {} (db locked, will retry): {e2:#}", file.path);
+                    } else {
+                        tracing::error!("Filename-only fallback also failed for {}: {e2:#}", file.path);
+                    }
                 }
-                // Do NOT add to successfully_indexed: the error should remain visible
-                // in the UI even though the fallback put a filename-only record in the DB.
                 server_side_failures.push(IndexingFailure {
                     path: file.path.clone(),
                     error: format!("{e:#}"),
@@ -240,32 +400,27 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle, 
         warn_slow(file_start, 30, "process_file", &file.path);
     }
 
-    // 3. Indexing error tracking
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs() as i64;
 
-    // Clear errors for successfully (re-)indexed paths.
-    db::clear_errors_for_paths(&conn, &successfully_indexed)?;
+    {
+        let _guard = source_lock.lock().unwrap();
+        db::clear_errors_for_paths(&conn, &successfully_indexed)?;
+        db::clear_errors_for_paths(&conn, &request.delete_paths)?;
 
-    // Clear errors for explicitly deleted paths.
-    db::clear_errors_for_paths(&conn, &request.delete_paths)?;
+        if !request.indexing_failures.is_empty() {
+            db::upsert_indexing_errors(&conn, &request.indexing_failures, now)?;
+        }
+        if !server_side_failures.is_empty() {
+            db::upsert_indexing_errors(&conn, &server_side_failures, now)?;
+        }
 
-    // Store extraction failures reported by the client.
-    if !request.indexing_failures.is_empty() {
-        db::upsert_indexing_errors(&conn, &request.indexing_failures, now)?;
-    }
-
-    // Store server-side indexing failures encountered in this batch.
-    if !server_side_failures.is_empty() {
-        db::upsert_indexing_errors(&conn, &server_side_failures, now)?;
-    }
-
-    // 4. Metadata
-    if let Some(ts) = request.scan_timestamp {
-        db::update_last_scan(&conn, ts)?;
-        db::append_scan_history(&conn, ts)?;
+        if let Some(ts) = request.scan_timestamp {
+            db::update_last_scan(&conn, ts)?;
+            db::append_scan_history(&conn, ts)?;
+        }
     }
 
     let elapsed = request_start.elapsed();
@@ -273,7 +428,7 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle, 
     let content_kb = total_content_bytes / 1024;
     let compressed_kb = compressed_bytes / 1024;
     tracing::info!(
-        "batch complete [{}]: {} files, {} deletes, {} lines, \
+        "[worker {worker_idx}] batch complete [{}]: {} files, {} deletes, {} lines, \
          {} KB content, {} KB compressed, {:.1}s",
         request.source, n_files, n_deletes, total_content_lines,
         content_kb, compressed_kb, elapsed_secs,
@@ -296,9 +451,7 @@ fn process_request(data_dir: &Path, request_path: &Path, status: &StatusHandle, 
 }
 
 /// Returns `true` if `file` is a top-level archive (kind="archive" with no
-/// "::" in the path).  These files require special handling in the fallback
-/// path: see `outer_archive_stub` and the `skip_inner_delete` parameter of
-/// `process_file`.
+/// "::" in the path).
 pub(crate) fn is_outer_archive(path: &str, kind: &str) -> bool {
     kind == "archive" && !path.contains("::")
 }
@@ -308,8 +461,6 @@ fn filename_only_file(file: &IndexFile) -> IndexFile {
         path: file.path.clone(),
         mtime: file.mtime,
         size: file.size,
-        // Force a non-archive kind so process_file never triggers the
-        // is_outer_archive path (which deletes inner members outside the transaction).
         kind: if file.kind == "archive" { "unknown".to_string() } else { file.kind.clone() },
         lines: vec![IndexLine {
             archive_path: None,
@@ -322,19 +473,10 @@ fn filename_only_file(file: &IndexFile) -> IndexFile {
     }
 }
 
-/// Build a minimal stub for an outer archive that failed extraction.
-///
-/// Unlike `filename_only_file`, this preserves `kind="archive"` so the file
-/// appears as an expandable entry in the directory tree.  It uses `mtime=0`
-/// so the scan client always sees a mtime mismatch and re-submits the file on
-/// the next scan, giving extraction another chance to succeed.
-///
-/// The caller must pass `skip_inner_delete=true` to `process_file` when using
-/// this stub so that any inner members still alive in the DB are not deleted.
 fn outer_archive_stub(file: &IndexFile) -> IndexFile {
     IndexFile {
         path: file.path.clone(),
-        mtime: 0, // force re-indexing on every subsequent scan
+        mtime: 0,
         size: file.size,
         kind: "archive".to_string(),
         lines: vec![IndexLine {
@@ -359,23 +501,8 @@ fn process_file(
         .unwrap_or_default()
         .as_secs() as i64;
 
-    // ── Pre-transaction reads and ZIP operations ────────────────────────────
-    // These must happen outside the transaction: ZIP writes are not part of
-    // SQLite, and reads here inform whether ZIP operations are needed at all.
-
-    // If this is an outer archive file being re-indexed, delete stale inner members
-    // first. They'll be re-submitted as separate IndexFile entries in the same batch.
-    // We detect "outer archive" by kind == "archive" and no "::" in the path.
-    // skip_inner_delete is set for the stub fallback path (see process_request error
-    // handling) to avoid re-triggering this delete while the original failure is still
-    // unresolved and the inner members may still be alive.
-    //
-    // mtime == 0 is the "start of archive indexing" sentinel emitted by the client
-    // before submitting members.  The completion upsert (sent after all members) uses
-    // the real mtime, so we only delete members on the start sentinel — not on the
-    // completion upsert — to avoid erasing members that were just written.
+    // If re-indexing an outer archive, delete stale inner members first.
     if !skip_inner_delete && is_outer_archive(&file.path, &file.kind) && file.mtime == 0 {
-        // Collect and remove chunks for all old inner members.
         let like_pat = format!("{}::%", file.path);
         let inner_ids: Vec<i64> = {
             let mut stmt = conn.prepare(
@@ -407,9 +534,8 @@ fn process_file(
         )?;
     }
 
-    // ── Dedup check ────────────────────────────────────────────────────────
-    // If the file has a content hash and another canonical with the same hash
-    // exists, record this file as an alias and skip chunk/lines/FTS writes.
+    // Dedup check: if another canonical with the same content hash exists,
+    // register this file as an alias and skip chunk/lines/FTS writes.
     if let Some(hash) = &file.content_hash {
         let canonical_id: Option<i64> = conn.query_row(
             "SELECT id FROM files
@@ -422,7 +548,6 @@ fn process_file(
         ).optional()?;
 
         if let Some(canonical_id) = canonical_id {
-            // Register as alias — no chunks/lines/FTS written.
             conn.execute(
                 "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, canonical_file_id)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -444,9 +569,26 @@ fn process_file(
             return Ok(());
         }
     }
-    // ── End dedup check ────────────────────────────────────────────────────
 
-    // Remove old chunks for this specific file before writing new ones.
+    // Stale-mtime guard: skip if the stored mtime is already newer.
+    // Defends against two workers processing requests for the same file out
+    // of order (the worker with the older batch finishes after the newer one).
+    let stored_mtime: Option<i64> = conn.query_row(
+        "SELECT mtime FROM files WHERE path = ?1",
+        rusqlite::params![file.path],
+        |row| row.get(0),
+    ).optional()?;
+    if let Some(stored) = stored_mtime {
+        if file.mtime > 0 && file.mtime < stored {
+            tracing::debug!(
+                "skipping stale upsert for {} (incoming mtime={} < stored={})",
+                file.path, file.mtime, stored
+            );
+            return Ok(());
+        }
+    }
+
+    // Remove old chunks for this file before writing new ones.
     let existing_id: Option<i64> = conn.query_row(
         "SELECT id FROM files WHERE path = ?1",
         rusqlite::params![file.path],
@@ -469,42 +611,29 @@ fn process_file(
         }
     }
 
-    // Prepare lines for chunking (line_number, content)
     let line_data: Vec<(usize, String)> = file.lines.iter()
         .map(|l| (l.line_number, l.content.clone()))
         .collect();
 
-    // Chunk lines into ~1KB pieces
     let chunk_result = archive::chunk_lines(&file.path, &line_data);
 
-    // Append chunks to ZIP archives (must happen before the transaction)
     let t_append = std::time::Instant::now();
     let chunk_refs = archive_mgr.append_chunks(chunk_result.chunks.clone())?;
     warn_slow(t_append, 10, "append_chunks", &file.path);
 
-    // Build mapping: chunk_number → chunk_ref
     let mut chunk_ref_map: HashMap<usize, ChunkRef> = HashMap::new();
     for (chunk, chunk_ref) in chunk_result.chunks.iter().zip(chunk_refs.iter()) {
         chunk_ref_map.insert(chunk.chunk_number, chunk_ref.clone());
     }
 
-    // Build lookup: line_number → original line for FTS5 content
     let mut line_content_map: HashMap<usize, String> = HashMap::new();
     for line in &file.lines {
         line_content_map.insert(line.line_number, line.content.clone());
     }
 
-    // ── Single transaction for all SQLite writes ───────────────────────────
-    // Batching every INSERT into one transaction eliminates per-row fsyncs,
-    // which dominate wall-clock time for large files (e.g. verbose XML logs).
-    // ZIP chunks are already written above; a rollback here leaves orphaned
-    // chunks that are harmlessly overwritten on the next re-index.
     let t_fts = std::time::Instant::now();
     let tx = conn.transaction()?;
 
-    // Upsert file record as canonical (canonical_file_id = NULL).
-    // indexed_at is updated on every re-index so recent-files queries reflect
-    // when the file was actually processed, not just when it was first seen.
     tx.execute(
         "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, canonical_file_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
@@ -530,17 +659,8 @@ fn process_file(
         |row| row.get(0),
     )?;
 
-    // Delete old lines for this file.
-    // TODO(fts5-stale): When lines are deleted here (and via CASCADE from `DELETE FROM files`),
-    // their corresponding `lines_fts` entries are NOT cleaned up because `lines_fts` is a
-    // contentless FTS5 table (content='') with no triggers. Stale FTS5 rowids accumulate
-    // over time, causing `fts_count` (and thus the `total` field in search responses) to be
-    // inflated. Actual search results are correct because the JOIN with `lines` filters them
-    // out, but pagination may misbehave if the client uses `total` to decide whether to
-    // fetch more pages.
     tx.execute("DELETE FROM lines WHERE file_id = ?1", rusqlite::params![file_id])?;
 
-    // Insert lines with chunk references and populate FTS5
     for mapping in &chunk_result.line_mappings {
         let chunk_ref = chunk_ref_map.get(&mapping.chunk_number)
             .context("chunk ref not found")?;
@@ -572,6 +692,20 @@ fn process_file(
     warn_slow(t_fts, 10, "fts_insert", &file.path);
 
     Ok(())
+}
+
+/// Returns true if `error` (or any cause in its chain) is a SQLite
+/// "database is locked" / "database is busy" error.  These are transient:
+/// the file should stay in the inbox and be retried on the next poll cycle.
+fn is_db_locked(error: &anyhow::Error) -> bool {
+    for cause in error.chain() {
+        if let Some(rusqlite::Error::SqliteFailure(e, _)) = cause.downcast_ref::<rusqlite::Error>() {
+            if matches!(e.code, ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 async fn handle_failure(path: &Path, failed_dir: &Path, error: anyhow::Error) {
@@ -611,8 +745,6 @@ mod tests {
         }
     }
 
-    // ── is_outer_archive ─────────────────────────────────────────────────────
-
     #[test]
     fn outer_archive_detected() {
         assert!(is_outer_archive("data.zip", "archive"));
@@ -628,12 +760,8 @@ mod tests {
         assert!(!is_outer_archive("data.zip", "text"));
     }
 
-    // ── filename_only_file ───────────────────────────────────────────────────
-
     #[test]
     fn filename_only_converts_archive_kind_to_unknown() {
-        // Must not remain "archive" — would re-trigger the outer-archive DELETE
-        // path on next process_file call, permanently losing inner members.
         let f = make_file("data.zip", "archive");
         let fallback = filename_only_file(&f);
         assert_eq!(fallback.kind, "unknown");
@@ -663,8 +791,6 @@ mod tests {
         assert_eq!(fallback.size, f.size);
     }
 
-    // ── outer_archive_stub ────────────────────────────────────────────────────
-
     #[test]
     fn outer_archive_stub_preserves_archive_kind() {
         let f = make_file("backup.7z", "archive");
@@ -674,7 +800,6 @@ mod tests {
 
     #[test]
     fn outer_archive_stub_uses_zero_mtime() {
-        // mtime=0 ensures the scan client always re-submits the file.
         let f = make_file("backup.7z", "archive");
         let stub = outer_archive_stub(&f);
         assert_eq!(stub.mtime, 0);

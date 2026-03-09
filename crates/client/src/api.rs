@@ -6,10 +6,11 @@ use reqwest::Client;
 use std::io::Write;
 
 use find_common::api::{
-    AppSettingsResponse, BulkRequest, ContextResponse, FileRecord, InboxDeleteResponse,
-    InboxRetryResponse, InboxShowResponse, InboxStatusResponse, RecentFile, RecentResponse,
-    SearchResponse, SourceDeleteResponse, SourceInfo, StatsResponse, UploadInitRequest,
-    UploadInitResponse, UploadPatchResponse, UploadStatusResponse,
+    AppSettingsResponse, BulkRequest, CompactResponse, ContextResponse, FileRecord,
+    InboxDeleteResponse, InboxPauseResponse, InboxResumeResponse, InboxRetryResponse,
+    InboxShowResponse, InboxStatusResponse, RecentFile, RecentResponse, SearchResponse,
+    SourceDeleteResponse, SourceInfo, StatsResponse, UploadInitRequest, UploadInitResponse,
+    UploadPatchResponse, UploadStatusResponse,
 };
 
 pub struct ApiClient {
@@ -256,6 +257,56 @@ impl ApiClient {
             .json::<InboxRetryResponse>()
             .await
             .context("parsing inbox retry response")
+    }
+
+    /// POST /api/v1/admin/compact
+    pub async fn compact(&self, dry_run: bool) -> Result<CompactResponse> {
+        let url = if dry_run {
+            self.url("/api/v1/admin/compact?dry_run=true")
+        } else {
+            self.url("/api/v1/admin/compact")
+        };
+        self.client
+            .post(url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("POST /api/v1/admin/compact")?
+            .error_for_status()
+            .context("compact status")?
+            .json::<CompactResponse>()
+            .await
+            .context("parsing compact response")
+    }
+
+    /// POST /api/v1/admin/inbox/pause
+    pub async fn inbox_pause(&self) -> Result<InboxPauseResponse> {
+        self.client
+            .post(self.url("/api/v1/admin/inbox/pause"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("POST /api/v1/admin/inbox/pause")?
+            .error_for_status()
+            .context("inbox pause status")?
+            .json::<InboxPauseResponse>()
+            .await
+            .context("parsing inbox pause response")
+    }
+
+    /// POST /api/v1/admin/inbox/resume
+    pub async fn inbox_resume(&self) -> Result<InboxResumeResponse> {
+        self.client
+            .post(self.url("/api/v1/admin/inbox/resume"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("POST /api/v1/admin/inbox/resume")?
+            .error_for_status()
+            .context("inbox resume status")?
+            .json::<InboxResumeResponse>()
+            .await
+            .context("parsing inbox resume response")
     }
 
     /// POST /api/v1/upload — initiate a resumable upload.

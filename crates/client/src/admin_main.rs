@@ -50,6 +50,16 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Pause inbox processing (current in-flight jobs are returned to the inbox)
+    InboxPause,
+    /// Resume inbox processing after a pause
+    InboxResume,
+    /// Remove orphaned chunks from ZIP archives to reclaim disk space
+    Compact {
+        /// Report what would be freed without modifying any files
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show the contents of a named inbox item (searches pending and failed queues)
     InboxShow {
         /// Inbox filename, with or without .gz extension
@@ -134,6 +144,18 @@ async fn main() -> Result<()> {
                 println!("Inbox:    {} pending, {} failed", stats.inbox_pending, stats.failed_requests);
                 println!("Archives: {} ZIP files ({})", stats.total_archives, format_bytes(stats.archive_size_bytes));
                 println!("DB size:  {}", format_bytes(stats.db_size_bytes));
+                match (stats.orphaned_bytes, stats.orphaned_stats_age_secs) {
+                    (Some(orphaned), Some(age)) => {
+                        let pct = if stats.archive_size_bytes > 0 {
+                            orphaned as f64 / stats.archive_size_bytes as f64 * 100.0
+                        } else { 0.0 };
+                        println!(
+                            "Wasted:   {} ({:.1}%)  [stats {}]",
+                            format_bytes(orphaned), pct, format_age(age),
+                        );
+                    }
+                    _ => println!("Wasted:   (pending first scan)"),
+                }
                 match &stats.worker_status {
                     WorkerStatus::Idle => println!("Worker:   idle"),
                     WorkerStatus::Processing { source, file } =>
@@ -204,6 +226,10 @@ async fn main() -> Result<()> {
             if args.json {
                 println!("{}", serde_json::to_string_pretty(&status)?);
             } else {
+                if status.paused {
+                    println!("{}", "Inbox processing is PAUSED  (use `find-admin inbox-resume` to resume)".yellow());
+                    println!();
+                }
                 println!("Pending ({}):", status.pending.len());
                 for item in &status.pending {
                     println!(
@@ -273,6 +299,51 @@ async fn main() -> Result<()> {
 
             let resp = client.inbox_retry().await.context("retrying inbox")?;
             println!("Retried {} file(s).", resp.retried);
+        }
+
+        Command::InboxPause => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+            let resp = client.inbox_pause().await.context("pausing inbox")?;
+            if resp.returned > 0 {
+                println!("Inbox paused. {} in-flight job(s) returned to the inbox.", resp.returned);
+            } else {
+                println!("Inbox paused.");
+            }
+        }
+
+        Command::InboxResume => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+            client.inbox_resume().await.context("resuming inbox")?;
+            println!("Inbox resumed.");
+        }
+
+        Command::Compact { dry_run } => {
+            let client = api::ApiClient::new(&config.server.url, &config.server.token);
+            if dry_run {
+                println!("Scanning archives (dry run — no files will be modified)...");
+            } else {
+                println!("Compacting archives...");
+            }
+            let resp = client.compact(dry_run).await.context("running compact")?;
+            if resp.chunks_removed == 0 {
+                println!("No orphaned chunks found across {} archive(s).", resp.archives_scanned);
+            } else if dry_run {
+                println!(
+                    "Would free {} across {} orphaned chunk(s) in {} archive(s)  (of {} scanned).",
+                    format_bytes(resp.bytes_freed),
+                    resp.chunks_removed,
+                    resp.archives_rewritten, // archives_rewritten == archives that would be rewritten
+                    resp.archives_scanned,
+                );
+                println!("Run without --dry-run to apply.");
+            } else {
+                println!(
+                    "Freed {} — rewrote {} archive(s), removed {} orphaned chunk(s).",
+                    format_bytes(resp.bytes_freed),
+                    resp.archives_rewritten,
+                    resp.chunks_removed,
+                );
+            }
         }
 
         Command::DeleteSource { source, force } => {

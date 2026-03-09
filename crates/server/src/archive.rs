@@ -3,16 +3,129 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 use zip::write::SimpleFileOptions;
 
 const TARGET_ARCHIVE_SIZE: usize = 10 * 1024 * 1024; // 10MB
 const CHUNK_SIZE: usize = 1024; // 1KB chunks
 
-/// Manages ZIP archive storage for file content
-pub struct ArchiveManager {
+/// State shared across all `ArchiveManager` instances (i.e. all workers).
+///
+/// - `next_archive_num` is an atomic counter; each worker atomically claims a
+///   unique number and owns that archive exclusively for appending. No locks
+///   are needed on the append path.
+/// - `rewrite_locks` is a per-archive mutex registry used only during rewrite
+///   operations (chunk removal for re-indexing / deletion). Two workers
+///   rewriting the same old sealed archive acquire its lock and serialise.
+pub struct SharedArchiveState {
     data_dir: PathBuf,
-    current_archive: Option<String>,
+    /// Next archive number to allocate. Monotonically increasing; each
+    /// `fetch_add` gives the caller exclusive ownership of that archive.
+    next_archive_num: AtomicU32,
+    /// Per-archive rewrite lock, keyed by absolute archive path.
+    rewrite_locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
+    /// Per-source DB write lock, keyed by source name.
+    ///
+    /// Workers acquire this for each delete chunk or file upsert and release
+    /// it immediately after — so a large request (e.g. 80 k deletes) holds the
+    /// lock for at most one chunk at a time, letting other workers on the same
+    /// source slip in between chunks.  This is necessary because SQLite's own
+    /// busy-timeout relies on POSIX advisory locks, which are unreliable on
+    /// some mount types (network shares, certain WSL mounts, etc.).
+    source_locks: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+}
+
+impl SharedArchiveState {
+    /// Initialise shared state for `data_dir`, scanning the existing content
+    /// directory to seed the counter above the highest existing archive number.
+    pub fn new(data_dir: PathBuf) -> Result<Arc<Self>> {
+        let max_num = Self::find_max_archive_num(&data_dir);
+        Ok(Arc::new(Self {
+            data_dir,
+            next_archive_num: AtomicU32::new(max_num.saturating_add(1)),
+            rewrite_locks: Mutex::new(HashMap::new()),
+            source_locks: Mutex::new(HashMap::new()),
+        }))
+    }
+
+    /// Return (creating if necessary) the write-serialisation mutex for `source`.
+    pub fn source_lock(&self, source: &str) -> Arc<Mutex<()>> {
+        let mut map = self.source_locks.lock().unwrap();
+        map.entry(source.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    /// Scan the content directory tree and return the highest archive number found.
+    fn find_max_archive_num(data_dir: &Path) -> u32 {
+        let content_dir = data_dir.join("sources").join("content");
+        let mut max_num = 0u32;
+        if let Ok(entries) = std::fs::read_dir(&content_dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_dir() {
+                    if let Ok(subdir) = std::fs::read_dir(entry.path()) {
+                        for file_entry in subdir.flatten() {
+                            if let Some(name) = file_entry.file_name().to_str() {
+                                if let Some(num) = parse_archive_number(name) {
+                                    max_num = max_num.max(num as u32);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        max_num
+    }
+
+    /// Atomically claim the next archive number. The caller has exclusive
+    /// write ownership of the archive at that number.
+    pub fn allocate_archive_num(&self) -> u32 {
+        self.next_archive_num.fetch_add(1, Ordering::Relaxed)
+    }
+
+    /// Return (or lazily create) the per-archive rewrite lock for `path`.
+    pub fn rewrite_lock_for(&self, path: &Path) -> Arc<Mutex<()>> {
+        let mut locks = self.rewrite_locks.lock().unwrap();
+        locks.entry(path.to_path_buf())
+            .or_insert_with(|| Arc::new(Mutex::new(())))
+            .clone()
+    }
+
+    /// Compute the on-disk path for a given archive number.
+    ///
+    /// Archives are organised in thousands-based subfolders:
+    /// - `content/0000/` → `content_00000.zip` … `content_00999.zip`
+    /// - `content/0001/` → `content_01000.zip` … `content_01999.zip`
+    pub fn archive_path_for_number(&self, archive_num: u32) -> PathBuf {
+        let n = archive_num as usize;
+        let filename = format!("content_{n:05}.zip");
+        let subfolder = format!("{:04}", n / 1000);
+        self.data_dir
+            .join("sources")
+            .join("content")
+            .join(subfolder)
+            .join(filename)
+    }
+
+    fn sources_dir(&self) -> PathBuf {
+        self.data_dir.join("sources")
+    }
+}
+
+/// Per-worker archive manager.
+///
+/// Each worker has its own `ArchiveManager` that holds an exclusively-owned
+/// in-progress archive number. Multiple workers never write to the same archive
+/// on the append path. Rewrite operations (chunk removal) serialise via the
+/// per-archive lock in `SharedArchiveState`.
+pub struct ArchiveManager {
+    state: Arc<SharedArchiveState>,
+    /// Archive number this worker is currently appending to. `None` until the
+    /// first chunk is written, or after a rotation.
+    current_archive_num: Option<u32>,
 }
 
 /// A chunk of file content to be stored
@@ -31,28 +144,26 @@ pub struct ChunkRef {
 }
 
 impl ArchiveManager {
-    pub fn new(data_dir: PathBuf) -> Self {
-        Self { data_dir, current_archive: None }
+    pub fn new(state: Arc<SharedArchiveState>) -> Self {
+        Self { state, current_archive_num: None }
     }
 
-    /// Calculate full path for an archive number using subfolder structure.
-    /// Archives are organized in thousands-based subfolders:
-    /// - content/0000/ → content_00000.zip to content_00999.zip
-    /// - content/0001/ → content_01000.zip to content_01999.zip
-    /// - content/0010/ → content_10000.zip to content_10999.zip
-    fn archive_path_for_number(&self, archive_num: usize) -> PathBuf {
-        let filename = format!("content_{:05}.zip", archive_num);
-        let subfolder = archive_num / 1000;
-        let subfolder_name = format!("{:04}", subfolder);
-
-        let subfolder_path = self.sources_dir()
-            .join("content")
-            .join(subfolder_name);
-
-        subfolder_path.join(filename)
+    /// Create an `ArchiveManager` for **read-only** use (e.g. route handlers
+    /// that read chunk content). The shared state is not coordinated with any
+    /// worker pool — no appending or rewriting should be done through this
+    /// instance.
+    pub fn new_for_reading(data_dir: PathBuf) -> Self {
+        // Counter starts at 0; irrelevant since no archives are allocated.
+        let state = Arc::new(SharedArchiveState {
+            data_dir,
+            next_archive_num: AtomicU32::new(0),
+            rewrite_locks: Mutex::new(HashMap::new()),
+            source_locks: Mutex::new(HashMap::new()),
+        });
+        Self { state, current_archive_num: None }
     }
 
-    /// Append chunks to archives, creating new ones as needed
+    /// Append chunks to archives, creating new ones as needed.
     pub fn append_chunks(&mut self, chunks: Vec<Chunk>) -> Result<Vec<ChunkRef>> {
         let mut refs = Vec::new();
 
@@ -71,13 +182,12 @@ impl ArchiveManager {
                 chunk_name,
             });
 
-            // Rotate based on actual on-disk size (more accurate than tracking
-            // uncompressed bytes, which ignores deflate compression ratio).
+            // Rotate when the on-disk size reaches the target.
             let on_disk = std::fs::metadata(&archive_path)
                 .map(|m| m.len() as usize)
                 .unwrap_or(0);
             if on_disk >= TARGET_ARCHIVE_SIZE {
-                self.current_archive = None;
+                self.current_archive_num = None;
             }
         }
 
@@ -85,7 +195,10 @@ impl ArchiveManager {
     }
 
     /// Remove chunks from archives by rewriting affected ZIPs.
-    pub fn remove_chunks(&mut self, refs: Vec<ChunkRef>) -> Result<()> {
+    ///
+    /// Acquires the per-archive rewrite lock from `SharedArchiveState` before
+    /// each rewrite so that two workers rewriting the same archive serialise.
+    pub fn remove_chunks(&self, refs: Vec<ChunkRef>) -> Result<()> {
         // Group by archive
         let mut by_archive: HashMap<String, HashSet<String>> = HashMap::new();
         for chunk_ref in refs {
@@ -95,22 +208,22 @@ impl ArchiveManager {
                 .insert(chunk_ref.chunk_name);
         }
 
-        // Rewrite each affected archive
         for (archive_name, chunks_to_remove) in by_archive {
             let archive_path = if let Some(num) = parse_archive_number(&archive_name) {
-                self.archive_path_for_number(num)
+                self.state.archive_path_for_number(num as u32)
             } else {
-                self.sources_dir().join(&archive_name)
+                self.state.sources_dir().join(&archive_name)
             };
 
             if archive_path.exists() {
-                // Guard against corrupt archives (e.g. truncated from a previous crash).
-                // A corrupt archive contains no valid chunks, so there is nothing to remove.
                 let valid = File::open(&archive_path)
                     .ok()
                     .and_then(|f| ZipArchive::new(f).ok())
                     .is_some();
                 if valid {
+                    // Serialise concurrent rewrites to the same archive.
+                    let lock = self.state.rewrite_lock_for(&archive_path);
+                    let _guard = lock.lock().unwrap();
                     self.rewrite_archive(&archive_path, &chunks_to_remove)?;
                 } else {
                     tracing::warn!(
@@ -127,9 +240,9 @@ impl ArchiveManager {
     /// Read chunk content from archive
     pub fn read_chunk(&self, chunk_ref: &ChunkRef) -> Result<String> {
         let archive_path = if let Some(num) = parse_archive_number(&chunk_ref.archive_name) {
-            self.archive_path_for_number(num)
+            self.state.archive_path_for_number(num as u32)
         } else {
-            self.sources_dir().join(&chunk_ref.archive_name)
+            self.state.sources_dir().join(&chunk_ref.archive_name)
         };
 
         let file = File::open(&archive_path)
@@ -147,99 +260,39 @@ impl ArchiveManager {
         Ok(content)
     }
 
-    /// Get or create the current archive for appending.
-    ///
-    /// If we already have a current archive that's under the size limit, return
-    /// it.  Otherwise, scan the sources directory for the latest archive: if it
-    /// is still under the limit we reuse it (avoids creating one archive per
-    /// request).  Only creates a new numbered archive when the latest is full.
+    /// Return the path of this worker's current in-progress archive, allocating
+    /// a new one (with exclusive ownership) if needed.
     fn current_archive_path(&mut self) -> Result<PathBuf> {
-        if let Some(name) = &self.current_archive {
-            // Parse the archive number to construct the proper subfolder path
-            let path = if let Some(num) = parse_archive_number(name) {
-                self.archive_path_for_number(num)
-            } else {
-                self.sources_dir().join(name)
-            };
+        if let Some(num) = self.current_archive_num {
+            let path = self.state.archive_path_for_number(num);
             let on_disk = std::fs::metadata(&path).map(|m| m.len() as usize).unwrap_or(0);
             if on_disk < TARGET_ARCHIVE_SIZE {
                 return Ok(path);
             }
-            // Current archive is full; fall through to find/create the next one.
-            self.current_archive = None;
+            // Full; fall through to allocate the next one.
+            self.current_archive_num = None;
         }
 
-        let content_dir = self.sources_dir().join("content");
-        std::fs::create_dir_all(&content_dir)?;
+        // Claim an exclusive archive number and create the empty ZIP.
+        let new_num = self.state.allocate_archive_num();
+        let new_path = self.state.archive_path_for_number(new_num);
 
-        // Find the highest-numbered content archive across all subfolders.
-        let mut max_num = 0;
-        if let Ok(entries) = std::fs::read_dir(&content_dir) {
-            for entry in entries.flatten() {
-                if entry.path().is_dir() {
-                    if let Ok(subdir) = std::fs::read_dir(entry.path()) {
-                        for file_entry in subdir.flatten() {
-                            if let Some(name) = file_entry.file_name().to_str() {
-                                if let Some(num) = parse_archive_number(name) {
-                                    max_num = max_num.max(num);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Reuse the latest archive if it still has room and is not corrupt.
-        if max_num > 0 {
-            let latest_name = format!("content_{:05}.zip", max_num);
-            let latest_path = self.archive_path_for_number(max_num);
-            let on_disk = std::fs::metadata(&latest_path)
-                .map(|m| m.len() as usize)
-                .unwrap_or(usize::MAX);
-            if on_disk < TARGET_ARCHIVE_SIZE {
-                let valid = File::open(&latest_path)
-                    .ok()
-                    .and_then(|f| ZipArchive::new(f).ok())
-                    .is_some();
-                if valid {
-                    self.current_archive = Some(latest_name);
-                    return Ok(latest_path);
-                }
-                tracing::warn!(
-                    "content archive is corrupt (truncated write?), skipping: {}",
-                    latest_path.display()
-                );
-                // Fall through to create the next archive number.
-            }
-        }
-
-        // All existing archives are full or corrupt (or there are none): create a new one.
-        let new_num = max_num + 1;
-        let new_name = format!("content_{:05}.zip", new_num);
-        let new_path = self.archive_path_for_number(new_num);
-
-        // Ensure the subfolder exists
         if let Some(parent) = new_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
 
         let file = File::create(&new_path)?;
-        let zip = ZipWriter::new(file);
-        zip.finish()?;
+        ZipWriter::new(file).finish()?;
 
-        self.current_archive = Some(new_name);
+        self.current_archive_num = Some(new_num);
         Ok(new_path)
     }
 
     /// Append a single entry to a ZIP file.
     ///
-    /// If `entry_name` already exists in the archive (e.g. left over from a
-    /// previous partially-failed run), the existing entry is removed first so
-    /// that the write is idempotent and never produces a "Duplicate filename"
-    /// error.
+    /// If `entry_name` already exists (left over from a previous partial run),
+    /// the existing entry is removed first so the write is idempotent.
     fn append_to_zip(&self, archive_path: &Path, entry_name: &str, content: &[u8]) -> Result<()> {
-        // Remove a pre-existing entry with the same name before appending.
         {
             let file = File::open(archive_path)?;
             let zip = ZipArchive::new(file)?;
@@ -271,11 +324,9 @@ impl ArchiveManager {
     fn rewrite_archive(&self, archive_path: &Path, chunks_to_remove: &HashSet<String>) -> Result<()> {
         let temp_path = archive_path.with_extension("zip.tmp");
 
-        // Read existing archive
         let file = File::open(archive_path)?;
         let mut old_zip = ZipArchive::new(file)?;
 
-        // Create new archive
         let temp_file = File::create(&temp_path)?;
         let mut new_zip = ZipWriter::new(temp_file);
 
@@ -283,7 +334,6 @@ impl ArchiveManager {
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(6));
 
-        // Copy entries except removed ones
         for i in 0..old_zip.len() {
             let mut entry = old_zip.by_index(i)?;
             let name = entry.name().to_string();
@@ -297,14 +347,9 @@ impl ArchiveManager {
         new_zip.finish()?;
         drop(old_zip);
 
-        // Atomic replace
         std::fs::rename(&temp_path, archive_path)?;
 
         Ok(())
-    }
-
-    fn sources_dir(&self) -> PathBuf {
-        self.data_dir.join("sources")
     }
 }
 
@@ -341,9 +386,7 @@ pub fn chunk_lines(file_path: &str, lines: &[(usize, String)]) -> ChunkResult {
     for (line_num, content) in lines {
         let line_text = format!("{}\n", content);
 
-        // Check if adding this line would exceed chunk size
         if current_chunk.len() + line_text.len() > CHUNK_SIZE && !current_chunk.is_empty() {
-            // Flush current chunk
             chunks.push(Chunk {
                 file_path: file_path.to_string(),
                 chunk_number,
@@ -354,10 +397,8 @@ pub fn chunk_lines(file_path: &str, lines: &[(usize, String)]) -> ChunkResult {
             offset_in_current_chunk = 0;
         }
 
-        // Add line to current chunk
         current_chunk.push_str(&line_text);
 
-        // Record where this line ended up
         line_mappings.push(LineMapping {
             line_number: *line_num,
             chunk_number,
@@ -367,7 +408,6 @@ pub fn chunk_lines(file_path: &str, lines: &[(usize, String)]) -> ChunkResult {
         offset_in_current_chunk += 1;
     }
 
-    // Flush final chunk
     if !current_chunk.is_empty() {
         chunks.push(Chunk {
             file_path: file_path.to_string(),
@@ -388,10 +428,10 @@ mod tests {
 
     #[test]
     fn test_subfolder_calculation() {
-        assert_eq!(0 / 1000, 0);      // archive 0-999 → folder 0
+        assert_eq!(0 / 1000, 0);
         assert_eq!(999 / 1000, 0);
-        assert_eq!(1000 / 1000, 1);   // archive 1000-1999 → folder 1
-        assert_eq!(12345 / 1000, 12); // archive 12345 → folder 12
+        assert_eq!(1000 / 1000, 1);
+        assert_eq!(12345 / 1000, 12);
     }
 
     #[test]
@@ -414,13 +454,10 @@ mod tests {
 
         let result = chunk_lines("/test/file.txt", &lines);
 
-        // First two lines should fit in one chunk (500 + 1 + 500 + 1 = 1002 < 1024)
-        // Third line needs its own chunk
         assert_eq!(result.chunks.len(), 2);
         assert_eq!(result.chunks[0].chunk_number, 0);
         assert_eq!(result.chunks[1].chunk_number, 1);
 
-        // Check line mappings
         assert_eq!(result.line_mappings.len(), 3);
         assert_eq!(result.line_mappings[0].line_number, 1);
         assert_eq!(result.line_mappings[0].chunk_number, 0);
@@ -441,9 +478,38 @@ mod tests {
 
         let result = chunk_lines("/test/file.txt", &lines);
 
-        // One large line goes into its own chunk (exceeds 1KB but we don't split lines)
         assert_eq!(result.chunks.len(), 1);
         assert_eq!(result.line_mappings.len(), 1);
         assert_eq!(result.line_mappings[0].offset_in_chunk, 0);
+    }
+
+    /// Two `ArchiveManager` instances sharing one `SharedArchiveState` must
+    /// claim different archive numbers.
+    #[test]
+    fn shared_state_allocates_unique_archive_numbers() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = SharedArchiveState::new(dir.path().to_path_buf()).unwrap();
+        let n1 = state.allocate_archive_num();
+        let n2 = state.allocate_archive_num();
+        let n3 = state.allocate_archive_num();
+        assert_ne!(n1, n2);
+        assert_ne!(n2, n3);
+        assert_ne!(n1, n3);
+    }
+
+    /// The counter is seeded from the max existing archive on disk.
+    #[test]
+    fn shared_state_seeds_from_existing_archives() {
+        let dir = tempfile::tempdir().unwrap();
+        let content_dir = dir.path().join("sources").join("content").join("0000");
+        std::fs::create_dir_all(&content_dir).unwrap();
+        // Simulate existing archives 1 and 5.
+        File::create(content_dir.join("content_00001.zip")).unwrap();
+        File::create(content_dir.join("content_00005.zip")).unwrap();
+
+        let state = SharedArchiveState::new(dir.path().to_path_buf()).unwrap();
+        // Next number should be 6 (max=5, next=6).
+        let n = state.allocate_archive_num();
+        assert_eq!(n, 6);
     }
 }

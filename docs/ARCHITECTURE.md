@@ -91,10 +91,60 @@ find-scan → POST /api/v1/bulk (gzip JSON) → inbox/{id}.gz on disk
 ```
 
 Key invariants:
-- **All DB writes go through the inbox worker** — no route handler writes SQLite directly.
+- **All DB writes go through the inbox worker pool** — no route handler writes SQLite directly.
 - The bulk route handler only writes a `.gz` file to `data_dir/inbox/` and returns `202 Accepted`.
-- The worker processes inbox files sequentially — no concurrent SQLite writes.
 - Within a `BulkRequest`, the worker processes **deletes first, then upserts** so renames work correctly.
+- A **stale-mtime guard** in the upsert path skips writing if the incoming `mtime` is older than what is already stored — defence against two workers processing the same file out of order.
+
+---
+
+## Inbox Worker Pool
+
+The inbox is processed by a pool of N workers (default: 3, configurable via
+`inbox_workers` in `server.toml`). A single bounded channel (`capacity=256`)
+feeds all workers.
+
+```
+router loop (every 1 s)
+  → scan inbox/, sort .gz files by mtime
+  → send each path to shared channel
+
+worker 0 ──┐
+worker 1 ──┼── pull from channel → spawn_blocking(process_request) with timeout
+worker 2 ──┘
+```
+
+### Per-worker ZIP archives (`SharedArchiveState`)
+
+Each worker owns its own **in-progress ZIP archive** for appending new chunks.
+Archive numbers are allocated from a shared `AtomicU32` counter
+(`SharedArchiveState`), so no two workers ever write to the same archive
+simultaneously on the append path — no locking needed there.
+
+```
+worker 0 → content_00100.zip  (its exclusive write target)
+worker 1 → content_00101.zip
+worker 2 → content_00102.zip
+```
+
+The only contention point is **rewriting** an old sealed archive to remove
+chunks during re-indexing or deletion. This is serialised via a per-archive
+`Mutex` stored in `SharedArchiveState::rewrite_locks`. Two workers rewriting
+different archives proceed in parallel; two workers rewriting the same archive
+are serialised.
+
+`SharedArchiveState` is stored in `AppState` and shared between the worker
+pool and admin routes (e.g. `DELETE /api/v1/admin/source`) so that all
+rewrite locks are globally coordinated.
+
+### Timeout
+
+Each `spawn_blocking` call is wrapped in `tokio::time::timeout`
+(`inbox_request_timeout_secs`, default 1800 s / 30 min). If a blocking thread
+is stuck, the worker abandons it (the thread continues in the background —
+blocking threads cannot be cancelled), logs an error, moves the file to
+`inbox/failed/`, and picks up the next item. With N parallel workers a single
+stuck request no longer blocks the entire queue.
 
 ---
 
@@ -376,8 +426,8 @@ content is returned verbatim in the JSON response.
 | `crates/extractors/archive/src/lib.rs` | Archive format iteration + orchestration |
 | `crates/client/src/extract.rs` | Top-level dispatcher: archive vs. dispatch_from_path |
 | `crates/client/src/scan.rs` | Filesystem walk, batch building, submission |
-| `crates/server/src/worker.rs` | Inbox polling loop + BulkRequest processing |
-| `crates/server/src/archive.rs` | ZIP archive management + chunk_lines() |
+| `crates/server/src/worker.rs` | Inbox worker pool: router loop + N workers sharing a channel; `process_request` |
+| `crates/server/src/archive.rs` | `SharedArchiveState` (atomic counter + rewrite locks); `ArchiveManager` per worker; `chunk_lines()` |
 | `crates/server/src/db.rs` | All SQLite operations |
 | `crates/server/src/routes/` | HTTP route handlers (see Server Routes above) |
 | `crates/server/src/schema_v2.sql` | DB schema |

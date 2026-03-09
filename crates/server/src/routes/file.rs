@@ -47,7 +47,7 @@ pub async fn get_file(
 
     run_blocking("get_file", move || {
         let conn = db::open(&db_path)?;
-        let archive_mgr = ArchiveManager::new(data_dir);
+        let archive_mgr = ArchiveManager::new_for_reading(data_dir);
 
         let (kind, mtime, size): (String, Option<i64>, Option<i64>) = conn
             .query_row(

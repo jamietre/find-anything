@@ -25,26 +25,27 @@ Key constraints:
 
 ## Design
 
-### Worker pool per source
+### Global worker pool
 
-Spin up N worker tasks per source (default: 3, configurable). Each source has
-its own async channel (bounded). A router task reads the inbox, peeks the source
-name from each `.gz` filename, and sends it to the right channel. Workers drain
-their channel sequentially with respect to each other but run concurrently across
-sources and (with the archive scheme below) within a source.
+Spin up N workers globally (default: 3, configurable). A single bounded async
+channel holds pending inbox paths. The router task scans the inbox directory
+every second, sorts files by modification time (preserving submission order),
+and sends each path to the shared channel. Workers pull from the channel
+concurrently and each processes one request at a time.
 
-### Inbox filename includes source name
+Per-source pools were considered but rejected: sources vary enormously in
+activity, so reserving N slots per source wastes resources on quiet sources
+and adds routing complexity. A global pool naturally distributes work to
+wherever capacity is available.
 
-To allow O(1) routing without decompressing each file, encode the source name in
-the filename at write time:
+### Ordering and stale-update guard
 
-```
-req_{timestamp}_{source}_{uuid}.gz
-```
-
-The server's `/api/v1/bulk` handler already knows the source name; it just needs
-to include it in the filename. Old filenames (without a source component) are
-handled by peeking inside — backward-compatible fallback.
+With a global pool, two workers could pick up consecutive requests for the
+same source and process them out of order (the one that picked up the older
+request finishes after the one that picked up the newer). To guard against
+this, the DB upsert checks the stored mtime before writing: if the incoming
+mtime ≤ stored mtime, the upsert is skipped. This is defence-in-depth; in
+practice the FIFO channel and submission-time ordering make true races rare.
 
 ### Per-worker ZIP archive (no shared write target)
 
@@ -106,46 +107,41 @@ request is moved to `failed/`.
 Add to `[server]` in `server.toml`:
 
 ```toml
-# Number of worker goroutines per source. Each worker can process one request
-# at a time. Workers share an archive counter but never write to the same
-# archive simultaneously. Default: 3.
-inbox_workers_per_source = 3
+# Total number of inbox workers. Each worker processes one request at a time.
+# Workers share an archive counter but never write to the same archive
+# simultaneously. Default: 3.
+inbox_workers = 3
 
 # Maximum seconds a single inbox request may run before the worker abandons
-# it and moves the file to failed/. Default: 7200 (2 hours).
-inbox_request_timeout_secs = 7200
+# it and moves the file to failed/. Default: 1800 (30 minutes).
+inbox_request_timeout_secs = 1800
 ```
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `crates/server/src/worker.rs` | Full rewrite of worker loop: router task + per-source channel + N workers per source; `SharedArchiveState` and per-archive rewrite lock |
-| `crates/server/src/archive.rs` | Refactor `ArchiveManager` to hold `Arc<SharedArchiveState>` with atomic archive counter; per-archive rewrite locking; remove `&mut self` where possible |
-| `crates/server/src/routes/bulk.rs` | Include source name in `.gz` filename |
-| `crates/common/src/config.rs` | Add `inbox_workers_per_source` and `inbox_request_timeout_secs` to `ServerAppSettings` and `defaults_server.toml` |
-| `crates/common/src/api.rs` | Update `WorkerStatus` to reflect N workers |
+| `crates/server/src/worker.rs` | Rewrite worker loop: single bounded channel + N global workers; router sorts by mtime and sends to channel; stale-mtime guard in upsert |
+| `crates/server/src/archive.rs` | Add `SharedArchiveState` (atomic archive counter + per-archive rewrite lock registry); refactor `ArchiveManager` to take `Arc<SharedArchiveState>` and own its exclusive write archive |
+| `crates/common/src/config.rs` | Add `inbox_workers` and `inbox_request_timeout_secs` to `ServerAppSettings` and `defaults_server.toml` |
 
 ## Implementation Order
 
-1. Add config fields (`inbox_workers_per_source`, `inbox_request_timeout_secs`)
-2. Update bulk route to include source in filename; add backward-compatible fallback peek
-3. Refactor `ArchiveManager`:
+1. Add config fields (`inbox_workers`, `inbox_request_timeout_secs`)
+2. Refactor `ArchiveManager`:
    - Extract `SharedArchiveState` (atomic counter + rewrite lock registry)
-   - Change `ArchiveManager::new` to accept `Arc<SharedArchiveState>`
-   - Add `SharedArchiveState::new_for_data_dir` constructor (server creates one per data_dir)
-   - Replace global "current archive" with per-instance write archive
-   - Wrap all rewrite operations in the per-archive lock
-4. Update `process_request` to accept `Arc<SharedArchiveState>` instead of creating a local `ArchiveManager`
-5. Rewrite `start_inbox_worker`:
-   - Router task: scan inbox, parse source from filename (or peek), send to source channel
-   - Per-source worker spawner: create N worker tasks per source on first request seen
-   - Each worker task: pull from channel, `spawn_blocking(process_request(...))` with timeout
-6. Update `WorkerStatus` to expose per-worker state
-7. Tests: concurrent archive writes don't corrupt; out-of-order mtime guard
+   - `ArchiveManager::new` accepts `Arc<SharedArchiveState>`
+   - Replace global "current archive" scan with per-worker allocated archive number
+   - Wrap rewrite operations in the per-archive lock
+3. Update `process_request` to accept `Arc<SharedArchiveState>` instead of creating a local `ArchiveManager`; add stale-mtime guard
+4. Rewrite `start_inbox_worker`:
+   - Create `SharedArchiveState` once
+   - Spawn N worker tasks, each looping on a shared `Arc<Mutex<Receiver>>`
+   - Router loop: scan inbox, sort by mtime, send paths to channel
+5. Update `main.rs` to pass new config fields
 
 ## Testing
 
 - Unit test: two `ArchiveManager` instances with shared `SharedArchiveState` write concurrently → no duplicate archive numbers, no corruption
-- Integration test: submit 6 requests for the same source simultaneously → all processed, no data loss
-- Manual: confirm `find-admin status` shows per-worker state
+- Integration test: submit N requests simultaneously → all processed, no data loss
+- Stale-mtime guard unit test: upsert with older mtime is skipped

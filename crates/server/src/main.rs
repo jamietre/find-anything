@@ -1,4 +1,5 @@
 mod archive;
+mod compaction;
 mod db;
 mod fuzzy;
 mod routes;
@@ -20,8 +21,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 use clap::Parser;
 
+use std::sync::atomic::AtomicBool;
 use find_common::api::WorkerStatus;
 use find_common::config::{default_server_config_path, parse_server_config, ServerAppConfig};
+use archive::SharedArchiveState;
 use find_common::logging::LogIgnoreFilter;
 
 #[derive(Parser)]
@@ -91,6 +94,16 @@ pub struct AppState {
     /// Shared worker status: idle or processing a specific file.
     /// Updated by the inbox worker; read by the stats route.
     pub worker_status: Arc<std::sync::Mutex<WorkerStatus>>,
+    /// Shared archive state used by both the inbox workers and admin routes
+    /// (e.g. delete-source) so that rewrite locks are coordinated globally.
+    pub archive_state: Arc<SharedArchiveState>,
+    /// When `true`, the inbox router stops dispatching new work items.
+    /// Set via `POST /api/v1/admin/inbox/pause`; cleared by `…/resume`.
+    pub inbox_paused: Arc<AtomicBool>,
+    /// Most recently computed orphaned-chunk statistics.  `None` until the
+    /// background scanner completes its first run.  Populated from
+    /// `data_dir/server.db` on startup and refreshed periodically.
+    pub compaction_stats: Arc<std::sync::RwLock<Option<compaction::CompactionStats>>>,
     /// True when running under systemd (INVOCATION_ID is set).
     pub under_systemd: bool,
     /// Cached result of the last GitHub update check (refreshed at most once per hour).
@@ -129,19 +142,50 @@ async fn main() -> Result<()> {
     let bind = config.server.bind.clone();
     let under_systemd = std::env::var("INVOCATION_ID").is_ok();
     let worker_status = Arc::new(std::sync::Mutex::new(WorkerStatus::Idle));
+    let inbox_paused = Arc::new(AtomicBool::new(false));
+    let archive_state = SharedArchiveState::new(data_dir.clone())
+        .context("initialising archive state")?;
+    // Load any previously computed compaction stats so find-admin status shows
+    // a value immediately after restart rather than waiting for the first scan.
+    let initial_compaction_stats = compaction::load_cached_stats(&data_dir);
+    let compaction_stats = Arc::new(std::sync::RwLock::new(initial_compaction_stats));
     let state = Arc::new(AppState {
         config,
         data_dir: data_dir.clone(),
         worker_status: Arc::clone(&worker_status),
+        archive_state: Arc::clone(&archive_state),
+        inbox_paused: Arc::clone(&inbox_paused),
+        compaction_stats: Arc::clone(&compaction_stats),
         under_systemd,
         update_cache: tokio::sync::RwLock::new(None),
     });
 
-    // Spawn the async inbox worker, sharing the status handle.
+    // Always recover stranded requests first — this moves any files left in
+    // inbox/processing/ back to inbox/ so they are visible to find-admin and
+    // will be picked up when the worker pool starts (or on the next restart).
+    if let Err(e) = worker::recover_stranded_requests(&data_dir).await {
+        tracing::error!("Failed to recover stranded requests: {e}");
+    }
+
+    // Spawn the inbox worker pool.
     let worker_data_dir = data_dir.clone();
     let log_batch_detail_limit = state.config.server.log_batch_detail_limit;
+    let num_workers = state.config.server.inbox_workers;
+    let request_timeout = std::time::Duration::from_secs(
+        state.config.server.inbox_request_timeout_secs,
+    );
+    let delete_batch_size = state.config.server.inbox_delete_batch_size;
     tokio::spawn(async move {
-        if let Err(e) = worker::start_inbox_worker(worker_data_dir, worker_status, log_batch_detail_limit).await {
+        if let Err(e) = worker::start_inbox_worker(
+            worker_data_dir,
+            worker_status,
+            log_batch_detail_limit,
+            num_workers,
+            request_timeout,
+            delete_batch_size,
+            archive_state,
+            inbox_paused,
+        ).await {
             tracing::error!("Inbox worker failed: {e}");
         }
     });
@@ -151,6 +195,13 @@ async fn main() -> Result<()> {
     tokio::spawn(async move {
         upload::start_cleanup_task(cleanup_data_dir).await;
     });
+
+    // Spawn the compaction stats background scanner.
+    compaction::start_compaction_scanner(
+        data_dir.clone(),
+        compaction_stats,
+        state.config.server.compact_scan_interval_mins,
+    );
 
     // Upload routes are mounted WITHOUT the DefaultBodyLimit so that large files
     // can be uploaded in chunks.  All other routes keep the 32 MB limit.
@@ -176,9 +227,12 @@ async fn main() -> Result<()> {
         .route("/api/v1/tree",           get(routes::list_dir))
         .route("/api/v1/raw",            get(routes::get_raw))
         .route("/api/v1/auth/session",   post(routes::create_session).delete(routes::delete_session))
+        .route("/api/v1/admin/compact",        post(routes::compact))
         .route("/api/v1/admin/source",         delete(routes::delete_source))
         .route("/api/v1/admin/inbox",          get(routes::inbox_status).delete(routes::inbox_clear))
         .route("/api/v1/admin/inbox/retry",    post(routes::inbox_retry))
+        .route("/api/v1/admin/inbox/pause",    post(routes::inbox_pause))
+        .route("/api/v1/admin/inbox/resume",   post(routes::inbox_resume))
         .route("/api/v1/admin/inbox/show",     get(routes::inbox_show))
         .route("/api/v1/admin/update/check",   get(routes::update_check))
         .route("/api/v1/admin/update/apply",   post(routes::update_apply))

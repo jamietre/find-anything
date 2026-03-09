@@ -11,9 +11,12 @@ use anyhow::Context;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 
+use std::sync::atomic::Ordering;
+
 use find_common::api::{
-    InboxDeleteResponse, InboxItem, InboxRetryResponse, InboxShowFile, InboxShowResponse,
-    InboxStatusResponse, SourceDeleteResponse, UpdateApplyResponse, UpdateCheckResponse,
+    InboxDeleteResponse, InboxItem, InboxPauseResponse, InboxResumeResponse, InboxRetryResponse,
+    InboxShowFile, InboxShowResponse, InboxStatusResponse, SourceDeleteResponse,
+    UpdateApplyResponse, UpdateCheckResponse,
 };
 
 use crate::archive::ArchiveManager;
@@ -69,9 +72,10 @@ pub async fn inbox_status(
             items
         };
 
+        let paused = state.inbox_paused.load(Ordering::Relaxed);
         let pending = read_items(&inbox_dir);
         let failed = read_items(&failed_dir);
-        Ok(Json(InboxStatusResponse { pending, failed }))
+        Ok(Json(InboxStatusResponse { pending, failed, paused }))
     }).await
 }
 
@@ -157,6 +161,58 @@ pub async fn inbox_retry(
         }
         Ok(Json(InboxRetryResponse { retried: count }))
     }).await
+}
+
+// ── POST /api/v1/admin/inbox/pause ───────────────────────────────────────────
+
+pub async fn inbox_pause(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    state.inbox_paused.store(true, Ordering::Relaxed);
+
+    let processing_dir = state.data_dir.join("inbox").join("processing");
+    let inbox_dir = state.data_dir.join("inbox");
+
+    run_blocking("inbox_pause", move || -> anyhow::Result<_> {
+        let rd = match std::fs::read_dir(&processing_dir) {
+            Ok(rd) => rd,
+            Err(_) => return Ok(Json(InboxPauseResponse { returned: 0 })),
+        };
+        let mut returned = 0;
+        for entry in rd.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().map(|x| x == "gz").unwrap_or(false) {
+                let dest = inbox_dir.join(entry.file_name());
+                if std::fs::rename(&path, &dest).is_ok() {
+                    returned += 1;
+                    tracing::info!("Returned in-flight request to inbox: {}", dest.display());
+                }
+            }
+        }
+        tracing::info!("Inbox processing paused ({returned} in-flight job(s) returned to inbox)");
+        Ok(Json(InboxPauseResponse { returned }))
+    }).await
+}
+
+// ── POST /api/v1/admin/inbox/resume ──────────────────────────────────────────
+
+pub async fn inbox_resume(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    state.inbox_paused.store(false, Ordering::Relaxed);
+    tracing::info!("Inbox processing resumed");
+
+    (StatusCode::OK, Json(InboxResumeResponse {})).into_response()
 }
 
 // ── GET /api/v1/admin/inbox/show ──────────────────────────────────────────────
@@ -470,6 +526,45 @@ pub async fn update_apply(
     })).into_response()
 }
 
+// ── POST /api/v1/admin/compact ────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct CompactQuery {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+pub async fn compact(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(query): Query<CompactQuery>,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let data_dir = state.data_dir.clone();
+    let shared   = Arc::clone(&state.archive_state);
+    let dry_run  = query.dry_run;
+
+    run_blocking("compact", move || -> anyhow::Result<_> {
+        let resp = crate::compaction::compact_archives(&data_dir, &shared, dry_run)?;
+        if dry_run {
+            tracing::info!(
+                "compact (dry-run): {} archives, {} orphaned chunks, {} bytes would be freed",
+                resp.archives_scanned, resp.chunks_removed, resp.bytes_freed,
+            );
+        } else {
+            tracing::info!(
+                "compact: rewrote {}/{} archives, removed {} chunks, freed {} bytes",
+                resp.archives_rewritten, resp.archives_scanned,
+                resp.chunks_removed, resp.bytes_freed,
+            );
+        }
+        Ok(Json(resp))
+    }).await
+}
+
 // ── DELETE /api/v1/admin/source ───────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -495,7 +590,7 @@ pub async fn delete_source(
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "source not found" }))).into_response();
     }
 
-    let data_dir = state.data_dir.clone();
+    let archive_state = Arc::clone(&state.archive_state);
 
     run_blocking("delete_source", move || -> anyhow::Result<_> {
         let conn = db::open(&db_path)?;
@@ -507,7 +602,9 @@ pub async fn delete_source(
         // Close the DB before deleting it.
         drop(conn);
 
-        let mut archive_mgr = ArchiveManager::new(data_dir);
+        // Use the shared archive state so that rewrite locks are coordinated
+        // with any concurrent inbox workers.
+        let archive_mgr = ArchiveManager::new(archive_state);
         if !chunk_refs.is_empty() {
             archive_mgr.remove_chunks(chunk_refs)?;
         }
