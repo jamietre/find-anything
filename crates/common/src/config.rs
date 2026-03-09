@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use tracing::warn;
 
@@ -187,6 +187,14 @@ pub struct ScanConfig {
     #[serde(default = "default_index_file")]
     pub index_file: String,
 
+    /// Per-directory include filter set by a `.index` file at runtime.
+    /// `Some((dir, patterns))` means: the `.index` file at `dir` declared
+    /// `include = [...]`; files must match at least one pattern relative to
+    /// `dir` to be indexed within this subtree.
+    /// Not persisted to TOML — populated at runtime by the scanner.
+    #[serde(skip)]
+    pub dir_include: Option<(PathBuf, Vec<String>)>,
+
     /// Directory containing find-extract-* binaries.
     /// None = auto-detect (same dir as the executable, then PATH).
     #[serde(default)]
@@ -234,6 +242,7 @@ impl Default for ScanConfig {
             max_line_length: default_max_line_length(),
             noindex_file: default_noindex_file(),
             index_file: default_index_file(),
+            dir_include: None,
             extractor_dir: None,
             server_fallback: false,
             subprocess_timeout_secs: default_subprocess_timeout_secs(),
@@ -250,6 +259,19 @@ impl ScanConfig {
     /// - `exclude` is **additive**: patterns are appended to the parent list.
     /// - All other fields are **replacement**: the innermost value wins.
     /// - `noindex_file` and `index_file` are never overridden (global-only).
+    ///
+    /// Like `apply_override` but also applies `ov.include` using `dir` as the
+    /// base directory for the patterns (absolute path of the `.index` file's
+    /// directory). Call this instead of `apply_override` when loading `.index`
+    /// files so that `dir_include` is populated correctly.
+    pub fn apply_dir_override(&self, ov: &ScanOverride, dir: &Path) -> ScanConfig {
+        let mut result = self.apply_override(ov);
+        if let Some(patterns) = &ov.include {
+            result.dir_include = Some((dir.to_path_buf(), patterns.clone()));
+        }
+        result
+    }
+
     pub fn apply_override(&self, ov: &ScanOverride) -> ScanConfig {
         let mut result = self.clone();
         if let Some(extra) = &ov.exclude {
@@ -283,6 +305,14 @@ impl ScanConfig {
 /// All fields are optional; `None` means "inherit from parent config".
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ScanOverride {
+    /// Per-directory include filter. When set, only files matching these glob
+    /// patterns (relative to the directory containing this `.index` file) are
+    /// indexed within this subtree. A file must match at least one pattern.
+    ///
+    /// Replacement semantics: the innermost `.index` with `include` wins.
+    /// Use instead of `.noindex` when you want to whitelist a specific
+    /// subdirectory: place `.index` in the parent with `include = ["sub/**"]`.
+    pub include: Option<Vec<String>>,
     /// Additional exclude patterns (appended to parent list, never removed).
     pub exclude: Option<Vec<String>>,
     /// Accepts old key `max_file_size_mb` for backward compatibility.
@@ -847,5 +877,107 @@ max_file_size_mb = 50
 "#;
         let cfg = parse_client_config(toml).unwrap();
         assert_eq!(cfg.scan.max_content_size_mb, 50);
+    }
+
+    // ── .index include field tests ────────────────────────────────────────────
+
+    #[test]
+    fn scan_override_include_toml_round_trip() {
+        let toml = r#"include = ["myfolder/**", "*.md"]"#;
+        let ov: ScanOverride = toml::from_str(toml).unwrap();
+        assert_eq!(
+            ov.include,
+            Some(vec!["myfolder/**".to_string(), "*.md".to_string()])
+        );
+        // All other fields absent → None
+        assert!(ov.exclude.is_none());
+        assert!(ov.include_hidden.is_none());
+    }
+
+    #[test]
+    fn scan_override_include_absent_is_none() {
+        let toml = r#"exclude = ["*.log"]"#;
+        let ov: ScanOverride = toml::from_str(toml).unwrap();
+        assert!(ov.include.is_none());
+    }
+
+    #[test]
+    fn apply_dir_override_sets_dir_include() {
+        let base = ScanConfig::default();
+        let dir = Path::new("/data/backups");
+        let ov = ScanOverride {
+            include: Some(vec!["myfolder/**".to_string()]),
+            ..ScanOverride::default()
+        };
+        let result = base.apply_dir_override(&ov, dir);
+        let (stored_dir, stored_patterns) = result.dir_include.as_ref().unwrap();
+        assert_eq!(stored_dir, dir);
+        assert_eq!(stored_patterns, &vec!["myfolder/**".to_string()]);
+    }
+
+    #[test]
+    fn apply_dir_override_no_include_leaves_dir_include_none() {
+        let base = ScanConfig::default();
+        let dir = Path::new("/data/backups");
+        let ov = ScanOverride {
+            exclude: Some(vec!["*.tmp".into()]),
+            ..ScanOverride::default()
+        };
+        let result = base.apply_dir_override(&ov, dir);
+        assert!(result.dir_include.is_none());
+    }
+
+    #[test]
+    fn apply_dir_override_inherits_parent_dir_include() {
+        // If the parent already has a dir_include and the child override has no include,
+        // the child inherits the parent's dir_include (via clone in apply_override).
+        let parent_dir = Path::new("/data");
+        let child_dir = Path::new("/data/sub");
+        let base = ScanConfig {
+            dir_include: Some((parent_dir.to_path_buf(), vec!["*.rs".to_string()])),
+            ..ScanConfig::default()
+        };
+        let ov = ScanOverride {
+            exclude: Some(vec!["*.log".into()]),
+            ..ScanOverride::default()
+        };
+        let result = base.apply_dir_override(&ov, child_dir);
+        // dir_include should be the parent's, not replaced
+        let (stored_dir, stored_patterns) = result.dir_include.as_ref().unwrap();
+        assert_eq!(stored_dir, parent_dir);
+        assert_eq!(stored_patterns, &vec!["*.rs".to_string()]);
+    }
+
+    #[test]
+    fn apply_dir_override_inner_include_replaces_outer() {
+        // Replacement semantics: the innermost .index with include wins.
+        let outer_dir = Path::new("/data");
+        let inner_dir = Path::new("/data/sub");
+        let base = ScanConfig {
+            dir_include: Some((outer_dir.to_path_buf(), vec!["allowed/**".to_string()])),
+            ..ScanConfig::default()
+        };
+        let ov = ScanOverride {
+            include: Some(vec!["narrower/**".to_string()]),
+            ..ScanOverride::default()
+        };
+        let result = base.apply_dir_override(&ov, inner_dir);
+        let (stored_dir, stored_patterns) = result.dir_include.as_ref().unwrap();
+        assert_eq!(stored_dir, inner_dir);
+        assert_eq!(stored_patterns, &vec!["narrower/**".to_string()]);
+    }
+
+    #[test]
+    fn dir_include_is_serde_skip() {
+        // dir_include must not be serialised to TOML (it's runtime-only).
+        let cfg = ScanConfig {
+            dir_include: Some((
+                PathBuf::from("/some/dir"),
+                vec!["*.rs".to_string()],
+            )),
+            ..ScanConfig::default()
+        };
+        let serialised = toml::to_string(&cfg).unwrap();
+        assert!(!serialised.contains("dir_include"));
     }
 }

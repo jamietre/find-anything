@@ -15,6 +15,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **`include` in `.index` files** — per-directory `.index` files now support an `include` field containing glob patterns; only files matching at least one pattern are indexed within that subtree, allowing precise whitelisting without `.noindex` (e.g. `include = ["myfolder/**"]` in `backups/.index` indexes only `backups/myfolder/`); replacement semantics — innermost `.index` with `include` wins; patterns are relative to the directory containing the `.index` file
 - **`find-admin recent`** — new subcommand lists the N most recently indexed or recently modified files across all sources; supports `--limit` and `--mtime` flags; `--json` for machine-readable output
 - **`find-admin check` reports min client version** — the server's `min_client_version` is now included in the version line of `find-admin check` output
 

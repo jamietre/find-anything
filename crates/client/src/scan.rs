@@ -260,6 +260,7 @@ struct ScanContext<'a> {
     /// Keyed by raw Arc pointer — valid as long as the Arc lives in dir_scan_cache.
     dir_scan_cache: HashMap<PathBuf, Arc<ScanConfig>>,
     dir_excludes_cache: HashMap<*const ScanConfig, Arc<GlobSet>>,
+    dir_includes_cache: HashMap<*const ScanConfig, Arc<GlobSet>>,
 }
 
 impl<'a> ScanContext<'a> {
@@ -292,6 +293,7 @@ impl<'a> ScanContext<'a> {
             scan_arc: Arc::new(scan.clone()),
             dir_scan_cache: HashMap::new(),
             dir_excludes_cache: HashMap::new(),
+            dir_includes_cache: HashMap::new(),
         }
     }
 
@@ -329,6 +331,27 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
         e.insert(Arc::new(build_globset(&eff_scan.exclude)?));
     }
     let eff_excludes = Arc::clone(&ctx.dir_excludes_cache[&scan_ptr]);
+
+    // Check per-directory include filter from a .index file. The filter uses
+    // patterns relative to the directory that declared it; we strip that prefix
+    // from abs_path before matching. Non-matching files are skipped entirely
+    // (not indexed, so they will be picked up on the next scan if the .index
+    // include is removed or broadened).
+    if let Some((dir_path, patterns)) = &eff_scan.dir_include {
+        if let std::collections::hash_map::Entry::Vacant(e) = ctx.dir_includes_cache.entry(scan_ptr) {
+            e.insert(Arc::new(build_globset(patterns)?));
+        }
+        let dir_includes = Arc::clone(&ctx.dir_includes_cache[&scan_ptr]);
+        if !dir_includes.is_empty() {
+            let rel_to_dir = abs_path
+                .strip_prefix(dir_path)
+                .map(|p| normalise_path_sep(&p.to_string_lossy()))
+                .unwrap_or_default();
+            if !dir_includes.is_match(&*rel_to_dir) {
+                return Ok(());
+            }
+        }
+    }
 
     let size = size_of(abs_path).unwrap_or(0);
     let kind = extract::detect_kind(abs_path).to_string();
@@ -709,7 +732,7 @@ fn resolve_effective_scan(
     // an actual .index override changes the config for that subtree.
     for ancestor in &ancestors[start_idx..] {
         if let Some(ov) = load_dir_override(ancestor, &global.index_file) {
-            eff = Arc::new(eff.apply_override(&ov));
+            eff = Arc::new(eff.apply_dir_override(&ov, ancestor));
         }
         dir_cache.insert(ancestor.clone(), Arc::clone(&eff));
     }

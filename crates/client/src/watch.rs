@@ -120,6 +120,23 @@ pub async fn run_watch(config: &ClientConfig) -> Result<()> {
                 continue;
             }
 
+            // Apply per-directory include filter from a .index file.
+            if let Some((dir_path, patterns)) = &eff_scan.dir_include {
+                match build_globset(patterns) {
+                    Ok(dir_includes) if !dir_includes.is_empty() => {
+                        let rel_to_dir = abs_path
+                            .strip_prefix(dir_path)
+                            .map(|p| p.to_string_lossy().replace('\\', "/"))
+                            .unwrap_or_default();
+                        if !dir_includes.is_match(&*rel_to_dir) {
+                            tracing::debug!("skipping {} (not in .index include)", abs_path.display());
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
             // Apply per-directory exclusion globs.
             let eff_excludes = match build_globset(&eff_scan.exclude) {
                 Ok(gs) => gs,
@@ -338,7 +355,7 @@ fn resolve_watch_config(
     let mut eff = global.clone();
     for dir in &ancestors {
         if let Some(ov) = load_dir_override(dir, &global.index_file) {
-            eff = eff.apply_override(&ov);
+            eff = eff.apply_dir_override(&ov, dir);
         }
     }
 
