@@ -9,6 +9,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **`--version` shows commit hash** — all CLI binaries (`find-server`, `find-scan`, `find-admin`, `find-watch`, `find-upload`, `find`) now display a git commit hash suffix for non-release builds (e.g. `0.6.1 (abc1234)`); clean release-tag builds show only the version; dirty working trees show `(dev)`; implemented via a `tool_version!` macro in `find_common` using `option_env!` so each binary embeds its own build-time constants without a `build.rs` (which would fail in the cross-compilation Docker environment due to glibc version mismatches)
+- **Event-driven compaction scanner** — the background orphaned-chunk scanner no longer runs on a fixed interval; instead it runs once at startup (30 s delay) and then 60 s after the last delete batch completes, deferring on each subsequent delete so rapid back-to-back deletes coalesce into a single scan; `remove_chunks` now returns bytes freed, which are accumulated in `AppState.deleted_bytes_since_scan` and added to the last scan result to give a live wasted-space estimate between scans without re-scanning; `compact_scan_interval_mins` config key removed
+
+### Changed
+
+- **Dependency deduplication** — `bzip2` unified to 0.6.1 (eliminated the 0.4/0.5/0.6 split); `zip` upgraded from 2.x to 8.x across all first-party crates (no code changes required); `reqwest` unified to 0.13 across the workspace (bumped Windows tray from 0.12, updated `rustls-tls` feature to `rustls`)
+
 ### Fixed
 
 - **Search input loses focus while typing** — switching from `pushState` to `replaceState` during debounced searches prevents SvelteKit navigation from stealing focus mid-keystroke; back-button history no longer accumulates an entry per search term

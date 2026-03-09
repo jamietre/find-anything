@@ -198,7 +198,8 @@ impl ArchiveManager {
     ///
     /// Acquires the per-archive rewrite lock from `SharedArchiveState` before
     /// each rewrite so that two workers rewriting the same archive serialise.
-    pub fn remove_chunks(&self, refs: Vec<ChunkRef>) -> Result<()> {
+    /// Remove chunks from their archives and return the total compressed bytes freed.
+    pub fn remove_chunks(&self, refs: Vec<ChunkRef>) -> Result<u64> {
         // Group by archive
         let mut by_archive: HashMap<String, HashSet<String>> = HashMap::new();
         for chunk_ref in refs {
@@ -207,6 +208,8 @@ impl ArchiveManager {
                 .or_default()
                 .insert(chunk_ref.chunk_name);
         }
+
+        let mut bytes_freed: u64 = 0;
 
         for (archive_name, chunks_to_remove) in by_archive {
             let archive_path = if let Some(num) = parse_archive_number(&archive_name) {
@@ -224,7 +227,7 @@ impl ArchiveManager {
                     // Serialise concurrent rewrites to the same archive.
                     let lock = self.state.rewrite_lock_for(&archive_path);
                     let _guard = lock.lock().unwrap();
-                    self.rewrite_archive(&archive_path, &chunks_to_remove)?;
+                    bytes_freed += self.rewrite_archive(&archive_path, &chunks_to_remove)?;
                 } else {
                     tracing::warn!(
                         "skipping corrupt archive during chunk removal: {}",
@@ -234,7 +237,7 @@ impl ArchiveManager {
             }
         }
 
-        Ok(())
+        Ok(bytes_freed)
     }
 
     /// Read chunk content from archive
@@ -321,7 +324,8 @@ impl ArchiveManager {
         Ok(())
     }
 
-    fn rewrite_archive(&self, archive_path: &Path, chunks_to_remove: &HashSet<String>) -> Result<()> {
+    /// Rewrite an archive omitting the named chunks; returns compressed bytes freed.
+    fn rewrite_archive(&self, archive_path: &Path, chunks_to_remove: &HashSet<String>) -> Result<u64> {
         let temp_path = archive_path.with_extension("zip.tmp");
 
         let file = File::open(archive_path)?;
@@ -334,11 +338,14 @@ impl ArchiveManager {
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(6));
 
+        let mut bytes_freed: u64 = 0;
         for i in 0..old_zip.len() {
             let mut entry = old_zip.by_index(i)?;
             let name = entry.name().to_string();
 
-            if !chunks_to_remove.contains(&name) {
+            if chunks_to_remove.contains(&name) {
+                bytes_freed += entry.compressed_size();
+            } else {
                 new_zip.start_file(&name, options)?;
                 std::io::copy(&mut entry, &mut new_zip)?;
             }
@@ -349,7 +356,7 @@ impl ArchiveManager {
 
         std::fs::rename(&temp_path, archive_path)?;
 
-        Ok(())
+        Ok(bytes_freed)
     }
 }
 

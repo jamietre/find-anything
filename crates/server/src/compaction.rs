@@ -12,6 +12,7 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -281,47 +282,71 @@ fn rewrite_without(archive_path: &Path, to_remove: &HashSet<String>) -> Result<(
 
 // ── Background scanner ────────────────────────────────────────────────────────
 
-/// Spawn a background task that periodically computes wasted-space statistics
-/// and caches them in `data_dir/server.db` and in `stats_slot`.
+/// Spawn a background task that computes wasted-space statistics and caches
+/// the results in `data_dir/server.db` and in `stats_slot`.
 ///
-/// The first scan runs after a short initial delay (30 s) so that the server
-/// finishes startup before the scan begins.  Subsequent scans run every
-/// `interval_mins` minutes.  If `interval_mins` is 0 the scanner is disabled.
+/// Scans run at two points:
+/// - Once at startup (after a 30 s settle delay).
+/// - 60 s after the last delete operation, provided no new delete has started
+///   in that window.  Every time the worker calls `notify_one()` the 60 s
+///   timer resets, so rapid back-to-back deletes coalesce into a single scan.
+///
+/// After each scan `deleted_since_scan` is reset to zero.  Between scans,
+/// callers can estimate current wasted bytes as
+/// `last_scan.orphaned_bytes + deleted_since_scan`.
 pub fn start_compaction_scanner(
     data_dir: PathBuf,
     stats_slot: Arc<std::sync::RwLock<Option<CompactionStats>>>,
-    interval_mins: u64,
+    deleted_since_scan: Arc<AtomicU64>,
+    delete_notify: Arc<tokio::sync::Notify>,
 ) {
-    if interval_mins == 0 {
-        return;
-    }
     tokio::spawn(async move {
-        // Initial delay: let the server fully start before scanning.
+        // Initial delay: let the server fully start before the first scan.
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+        run_and_save_scan(&data_dir, &stats_slot, &deleted_since_scan).await;
 
-        let interval = std::time::Duration::from_secs(interval_mins * 60);
+        // Event-driven: scan 60 s after the last delete, deferring on each
+        // new delete that arrives within the window.
         loop {
-            let data_dir2 = data_dir.clone();
-            let result = tokio::task::spawn_blocking(move || scan_wasted_space(&data_dir2)).await;
-            match result {
-                Ok(Ok(stats)) => {
-                    tracing::info!(
-                        "compaction scan: {}/{} bytes orphaned ({:.1}%)",
-                        stats.orphaned_bytes, stats.total_bytes,
-                        if stats.total_bytes > 0 {
-                            stats.orphaned_bytes as f64 / stats.total_bytes as f64 * 100.0
-                        } else { 0.0 },
-                    );
-                    if let Ok(mut slot) = stats_slot.write() {
-                        *slot = Some(stats);
-                    }
-                    let _ = save_stats(&data_dir, &stats);
-                }
-                Ok(Err(e)) => tracing::warn!("compaction scan failed: {e:#}"),
-                Err(e)     => tracing::warn!("compaction scan task panicked: {e}"),
+            delete_notify.notified().await;
+
+            while tokio::time::timeout(
+                std::time::Duration::from_secs(60),
+                delete_notify.notified(),
+            ).await.is_ok() {
+                // another delete arrived — reset the 60 s timer
             }
-            tokio::time::sleep(interval).await;
+            // 60 s of silence — scan now
+
+            run_and_save_scan(&data_dir, &stats_slot, &deleted_since_scan).await;
         }
     });
+}
+
+async fn run_and_save_scan(
+    data_dir: &Path,
+    stats_slot: &Arc<std::sync::RwLock<Option<CompactionStats>>>,
+    deleted_since_scan: &Arc<AtomicU64>,
+) {
+    let data_dir2 = data_dir.to_path_buf();
+    let result = tokio::task::spawn_blocking(move || scan_wasted_space(&data_dir2)).await;
+    match result {
+        Ok(Ok(stats)) => {
+            tracing::info!(
+                "compaction scan: {}/{} bytes orphaned ({:.1}%)",
+                stats.orphaned_bytes, stats.total_bytes,
+                if stats.total_bytes > 0 {
+                    stats.orphaned_bytes as f64 / stats.total_bytes as f64 * 100.0
+                } else { 0.0 },
+            );
+            deleted_since_scan.store(0, Ordering::Relaxed);
+            if let Ok(mut slot) = stats_slot.write() {
+                *slot = Some(stats);
+            }
+            let _ = save_stats(data_dir, &stats);
+        }
+        Ok(Err(e)) => tracing::warn!("compaction scan failed: {e:#}"),
+        Err(e)     => tracing::warn!("compaction scan task panicked: {e}"),
+    }
 }
 

@@ -4,7 +4,7 @@ mod subprocess;
 mod watch;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 #[cfg(windows)]
 use clap::Subcommand;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
@@ -193,7 +193,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer().with_filter(LogIgnoreFilter))
         .init();
 
-    let args = Args::parse();
+    let args = Args::from_arg_matches(&Args::command().version(find_common::tool_version!()).get_matches()).unwrap_or_else(|e| e.exit());
     let config_path = resolve_config(args.config);
 
     #[cfg(windows)]

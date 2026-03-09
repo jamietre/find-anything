@@ -1,7 +1,7 @@
 mod api;
 
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 use colored::Colorize;
 
 use find_common::config::{default_config_path, parse_client_config};
@@ -48,7 +48,7 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let args = Args::parse();
+    let args = Args::from_arg_matches(&Args::command().version(find_common::tool_version!()).get_matches()).unwrap_or_else(|e| e.exit());
 
     if args.no_color {
         colored::control::set_override(false);

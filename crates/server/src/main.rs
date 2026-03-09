@@ -19,9 +19,9 @@ use axum::{
 };
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
-use clap::Parser;
+use clap::{CommandFactory, FromArgMatches, Parser};
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use find_common::api::WorkerStatus;
 use find_common::config::{default_server_config_path, parse_server_config, ServerAppConfig};
 use archive::SharedArchiveState;
@@ -102,8 +102,15 @@ pub struct AppState {
     pub inbox_paused: Arc<AtomicBool>,
     /// Most recently computed orphaned-chunk statistics.  `None` until the
     /// background scanner completes its first run.  Populated from
-    /// `data_dir/server.db` on startup and refreshed periodically.
+    /// `data_dir/server.db` on startup and refreshed after each delete batch.
     pub compaction_stats: Arc<std::sync::RwLock<Option<compaction::CompactionStats>>>,
+    /// Compressed bytes deleted from archives since the last compaction scan.
+    /// Reset to zero after each scan.  Combined with `compaction_stats` to
+    /// estimate current wasted space without re-scanning.
+    pub deleted_bytes_since_scan: Arc<AtomicU64>,
+    /// Notified by workers after each `remove_chunks` call to trigger a
+    /// deferred compaction scan (60 s after the last delete).
+    pub delete_notify: Arc<tokio::sync::Notify>,
     /// True when running under systemd (INVOCATION_ID is set).
     pub under_systemd: bool,
     /// Cached result of the last GitHub update check (refreshed at most once per hour).
@@ -118,7 +125,7 @@ async fn main() -> Result<()> {
         .with(tracing_subscriber::fmt::layer().with_filter(LogIgnoreFilter))
         .init();
 
-    let args = Args::parse();
+    let args = Args::from_arg_matches(&Args::command().version(find_common::tool_version!()).get_matches()).unwrap_or_else(|e| e.exit());
     let config_path = args.config.unwrap_or_else(default_server_config_path);
 
     let config_str = std::fs::read_to_string(&config_path)
@@ -149,6 +156,8 @@ async fn main() -> Result<()> {
     // a value immediately after restart rather than waiting for the first scan.
     let initial_compaction_stats = compaction::load_cached_stats(&data_dir);
     let compaction_stats = Arc::new(std::sync::RwLock::new(initial_compaction_stats));
+    let deleted_bytes_since_scan = Arc::new(AtomicU64::new(0));
+    let delete_notify = Arc::new(tokio::sync::Notify::new());
     let state = Arc::new(AppState {
         config,
         data_dir: data_dir.clone(),
@@ -156,6 +165,8 @@ async fn main() -> Result<()> {
         archive_state: Arc::clone(&archive_state),
         inbox_paused: Arc::clone(&inbox_paused),
         compaction_stats: Arc::clone(&compaction_stats),
+        deleted_bytes_since_scan: Arc::clone(&deleted_bytes_since_scan),
+        delete_notify: Arc::clone(&delete_notify),
         under_systemd,
         update_cache: tokio::sync::RwLock::new(None),
     });
@@ -185,6 +196,8 @@ async fn main() -> Result<()> {
             delete_batch_size,
             archive_state,
             inbox_paused,
+            deleted_bytes_since_scan,
+            delete_notify,
         ).await {
             tracing::error!("Inbox worker failed: {e}");
         }
@@ -200,7 +213,8 @@ async fn main() -> Result<()> {
     compaction::start_compaction_scanner(
         data_dir.clone(),
         compaction_stats,
-        state.config.server.compact_scan_interval_mins,
+        Arc::clone(&state.deleted_bytes_since_scan),
+        Arc::clone(&state.delete_notify),
     );
 
     // Upload routes are mounted WITHOUT the DefaultBodyLimit so that large files

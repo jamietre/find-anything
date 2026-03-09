@@ -123,6 +123,9 @@ pub async fn get_stats(
         .map(|g| g.clone())
         .unwrap_or(WorkerStatus::Idle);
 
+    let deleted_since_scan = state.deleted_bytes_since_scan
+        .load(std::sync::atomic::Ordering::Relaxed);
+
     let (orphaned_bytes, orphaned_stats_age_secs) = state.compaction_stats
         .read()
         .ok()
@@ -132,7 +135,10 @@ pub async fn get_stats(
                 .unwrap_or_default()
                 .as_secs() as i64;
             let age = (now - s.scanned_at).max(0) as u64;
-            (Some(s.orphaned_bytes), Some(age))
+            // Estimate current orphaned bytes: last scan result plus bytes
+            // deleted from archives since then (which are now unreferenced).
+            let estimated = s.orphaned_bytes.saturating_add(deleted_since_scan);
+            (Some(estimated), Some(age))
         }))
         .unwrap_or((None, None));
 

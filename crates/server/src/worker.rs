@@ -76,6 +76,8 @@ pub async fn start_inbox_worker(
     delete_batch_size: usize,
     shared_archive_state: Arc<SharedArchiveState>,
     inbox_paused: Arc<AtomicBool>,
+    deleted_bytes_since_scan: Arc<std::sync::atomic::AtomicU64>,
+    delete_notify: Arc<tokio::sync::Notify>,
 ) -> Result<()> {
     let inbox_dir = data_dir.join("inbox");
     let failed_dir = inbox_dir.join("failed");
@@ -99,6 +101,8 @@ pub async fn start_inbox_worker(
         let inbox_dir_clone = inbox_dir.clone();
         let status = status.clone();
         let shared = Arc::clone(&shared_archive_state);
+        let deleted_bytes = Arc::clone(&deleted_bytes_since_scan);
+        let notify = Arc::clone(&delete_notify);
 
         tokio::spawn(async move {
             tracing::debug!("Inbox worker {worker_idx} started");
@@ -123,6 +127,8 @@ pub async fn start_inbox_worker(
                     delete_batch_size,
                     &shared,
                     worker_idx,
+                    &deleted_bytes,
+                    &notify,
                 )
                 .await;
             }
@@ -203,6 +209,8 @@ async fn process_request_async(
     delete_batch_size: usize,
     shared_archive_state: &Arc<SharedArchiveState>,
     worker_idx: usize,
+    deleted_bytes_since_scan: &Arc<std::sync::atomic::AtomicU64>,
+    delete_notify: &Arc<tokio::sync::Notify>,
 ) {
     let status_reset = status.clone();
 
@@ -210,7 +218,9 @@ async fn process_request_async(
         let data_dir = data_dir.to_path_buf();
         let request_path = request_path.to_path_buf();
         let shared = Arc::clone(shared_archive_state);
-        move || process_request(&data_dir, &request_path, &status, log_batch_detail_limit, delete_batch_size, &shared, worker_idx)
+        let deleted_bytes = Arc::clone(deleted_bytes_since_scan);
+        let notify = Arc::clone(delete_notify);
+        move || process_request(&data_dir, &request_path, &status, log_batch_detail_limit, delete_batch_size, &shared, worker_idx, &deleted_bytes, &notify)
     });
 
     let timed_result = tokio::time::timeout(request_timeout, blocking_task).await;
@@ -275,6 +285,7 @@ async fn process_request_async(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn process_request(
     data_dir: &Path,
     request_path: &Path,
@@ -283,6 +294,8 @@ fn process_request(
     delete_batch_size: usize,
     shared_archive_state: &Arc<SharedArchiveState>,
     worker_idx: usize,
+    deleted_bytes_since_scan: &Arc<std::sync::atomic::AtomicU64>,
+    delete_notify: &Arc<tokio::sync::Notify>,
 ) -> Result<()> {
     let request_start = std::time::Instant::now();
 
@@ -355,7 +368,11 @@ fn process_request(
         all_delete_refs.extend(refs);
     }
     if !all_delete_refs.is_empty() {
-        archive_mgr.remove_chunks(all_delete_refs)?;
+        let freed = archive_mgr.remove_chunks(all_delete_refs)?;
+        if freed > 0 {
+            deleted_bytes_since_scan.fetch_add(freed, std::sync::atomic::Ordering::Relaxed);
+            delete_notify.notify_one();
+        }
     }
 
     let mut server_side_failures: Vec<IndexingFailure> = Vec::new();

@@ -64,7 +64,6 @@ struct ServerSettingsDefaults {
     inbox_workers: usize,
     inbox_request_timeout_secs: u64,
     inbox_delete_batch_size: usize,
-    compact_scan_interval_mins: u64,
 }
 
 #[derive(Deserialize)]
@@ -571,10 +570,6 @@ pub struct ServerAppSettings {
     /// workers responsive. Default: 100.
     #[serde(default = "default_inbox_delete_batch_size")]
     pub inbox_delete_batch_size: usize,
-    /// How often (in minutes) the background scanner recomputes orphaned-chunk
-    /// statistics across all ZIP archives.  Set to 0 to disable.  Default: 60.
-    #[serde(default = "default_compact_scan_interval_mins")]
-    pub compact_scan_interval_mins: u64,
 }
 
 fn default_bind() -> String { server_defaults().server.bind.clone() }
@@ -583,7 +578,6 @@ fn default_log_batch_detail_limit() -> usize     { server_defaults().server.log_
 fn default_inbox_workers() -> usize              { server_defaults().server.inbox_workers }
 fn default_inbox_request_timeout_secs() -> u64   { server_defaults().server.inbox_request_timeout_secs }
 fn default_inbox_delete_batch_size() -> usize    { server_defaults().server.inbox_delete_batch_size }
-fn default_compact_scan_interval_mins() -> u64   { server_defaults().server.compact_scan_interval_mins }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchSettings {

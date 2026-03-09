@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use colored::Colorize;
 
 use find_common::api::WorkerStatus;
@@ -91,7 +91,7 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
 
-    let args = Args::parse();
+    let args = Args::from_arg_matches(&Args::command().version(find_common::tool_version!()).get_matches()).unwrap_or_else(|e| e.exit());
 
     let config_path = args.config.clone().unwrap_or_else(default_config_path);
     let config_str = std::fs::read_to_string(&config_path)
