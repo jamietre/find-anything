@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Search input loses focus while typing** — switching from `pushState` to `replaceState` during debounced searches prevents SvelteKit navigation from stealing focus mid-keystroke; back-button history no longer accumulates an entry per search term
+
 ### Added
 
 - **`find-admin recent`** — new subcommand lists the N most recently indexed or recently modified files across all sources; supports `--limit` and `--mtime` flags; `--json` for machine-readable output

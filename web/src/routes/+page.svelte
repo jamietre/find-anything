@@ -107,6 +107,17 @@
 		svelteKitPushState(buildUrl(s) + formatHash(fileSelection), serializeState(s));
 	}
 
+	// Like pushState but replaces the current history entry instead of adding one.
+	// Used during search so that typing doesn't flood the back-button history.
+	// Uses native history.replaceState (bypassing SvelteKit's navigation state
+	// machine) to avoid rapid calls leaving SvelteKit stuck in a "navigating"
+	// state that blocks pointer and keyboard events.
+	function replaceSearchState() {
+		const s = captureState();
+		const url = buildUrl(s) + formatHash(fileSelection);
+		history.replaceState(history.state, '', url);
+	}
+
 	function syncHash() {
 		const hash = formatHash(fileSelection);
 		const base = location.pathname + location.search;
@@ -251,7 +262,7 @@
 		noMoreResults = false;
 		loadOffset = 0;
 		if (push) {
-			pushState();
+			replaceSearchState();
 			window.scrollTo(0, 0);
 		}
 		try {
