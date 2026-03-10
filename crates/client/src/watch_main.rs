@@ -12,8 +12,6 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 use find_common::config::{default_config_path, parse_client_config};
 use find_common::logging::LogIgnoreFilter;
 #[cfg(windows)]
-use find_common::config::ClientConfig;
-#[cfg(windows)]
 use std::sync::OnceLock;
 
 /// Config path captured in main() and shared with service_entry via OnceLock,
@@ -66,7 +64,7 @@ fn service_entry(args: Vec<std::ffi::OsString>) {
         let config = match config_path
             .as_ref()
             .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| toml::from_str::<ClientConfig>(&s).ok())
+            .and_then(|s| parse_client_config(&s).ok())
         {
             Some(c) => c,
             None => {

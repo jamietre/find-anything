@@ -134,22 +134,27 @@ async fn main() -> Result<()> {
                     print!("{}", format_status(&stats));
                 }
             } else {
-                // Watch mode: redraw in-place every 2 seconds until Ctrl+C.
+                // Watch mode: clear screen then redraw from top every 2 seconds.
                 use std::io::Write;
-                let mut prev_lines: usize = 0;
+                let mut first = true;
                 loop {
                     match client.get_stats().await {
                         Ok(stats) => {
                             let output = format_status(&stats);
-                            let new_lines = output.lines().count();
-                            if prev_lines > 0 {
-                                // Move cursor up to the first line we drew, then
-                                // clear from cursor to end of screen.
-                                print!("\x1b[{}A\x1b[0J", prev_lines);
+                            if first {
+                                // Clear entire screen and move to top-left.
+                                print!("\x1b[2J\x1b[H");
+                                first = false;
+                            } else {
+                                // Move to top-left without clearing — content is
+                                // overwritten in-place; trailing lines are cleared below.
+                                print!("\x1b[H");
                             }
                             print!("{output}");
+                            // Clear from cursor to end of screen so any previously
+                            // longer output doesn't leave stale lines behind.
+                            print!("\x1b[0J");
                             std::io::stdout().flush().ok();
-                            prev_lines = new_lines;
                         }
                         Err(e) => {
                             eprintln!("Error fetching stats: {e:#}");

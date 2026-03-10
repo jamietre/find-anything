@@ -28,6 +28,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Windows service ignores `exclude_extra`** — the Windows service code path used `toml::from_str::<ClientConfig>` directly, bypassing `parse_client_config` which merges `exclude_extra` globs into `exclude`; switched to `parse_client_config` so exclusion rules apply correctly when running as a service
+- **Windows service not restarted after reinstall** — InnoSetup `[UninstallRun]` only fires on explicit uninstall, not on upgrade/reinstall; the installer now explicitly calls `find-watch.exe uninstall` before `find-watch.exe install` in `ssPostInstall`, ensuring a clean service restart on every upgrade
+- **InnoSetup "Existing Configuration Found" page text clipped** — label heights and vertical positions adjusted so the descriptive text and file path are fully visible without truncation
+- **`find-admin status --watch` leaves stale lines on resize** — the old approach moved the cursor up by the logical line count, which under-counted when lines wrapped at the terminal width; now uses clear-to-end-of-screen (`\x1b[0J`) after each redraw and a full screen clear (`\x1b[2J\x1b[H`) on the first draw, so the display is always correct regardless of line count changes
+
 - **Scroll position restored on back navigation** — clicking "← results" from a file detail view now scrolls the results list back to the position it was at before the file was opened
 - **Scan progress log omits zero-count fields** — the periodic progress line now always shows `N unchanged` but suppresses `new`, `modified`, and `upgraded` when they are zero, reducing noise during incremental scans where most files are unchanged
 - **Sidebar scrolls independently from search results** — the page layout is now `height: 100vh; overflow: hidden` with the main content column (`overflow-y: auto`) as the scroll container instead of the window; the sidebar tree keeps its position while the user scrolls through results; the load-more scroll listener is moved from `window` to the main-content element (no behavioural change since `isNearBottom` already used viewport-relative `getBoundingClientRect`)

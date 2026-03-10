@@ -257,24 +257,24 @@ begin
   LabelFound.Left := 0;
   LabelFound.Width := ExistingConfigPage.SurfaceWidth;
   LabelFound.AutoSize := False;
-  LabelFound.Height := 40;
+  LabelFound.Height := 64;
   LabelFound.WordWrap := True;
 
   LabelPath := TLabel.Create(ExistingConfigPage);
   LabelPath.Caption := 'Existing config file: ' + ExistingConfigPath;
   LabelPath.Parent := ExistingConfigPage.Surface;
-  LabelPath.Top := 56;
+  LabelPath.Top := 80;
   LabelPath.Left := 0;
   LabelPath.Width := ExistingConfigPage.SurfaceWidth;
   LabelPath.AutoSize := False;
-  LabelPath.Height := 32;
+  LabelPath.Height := 40;
   LabelPath.WordWrap := True;
 
   UseExistingCheck := TCheckBox.Create(ExistingConfigPage);
   UseExistingCheck.Caption :=
     'Keep existing configuration (skip server setup)';
   UseExistingCheck.Parent := ExistingConfigPage.Surface;
-  UseExistingCheck.Top := 104;
+  UseExistingCheck.Top := 132;
   UseExistingCheck.Left := 0;
   UseExistingCheck.Width := ExistingConfigPage.SurfaceWidth;
   UseExistingCheck.Checked := True; // safe default: don't overwrite
@@ -429,6 +429,12 @@ begin
     end;
 
     ConfigPath := ExpandConstant('{%USERPROFILE}\.config\FindAnything\client.toml');
+
+    // Stop and remove any existing service before registering the new one.
+    // On a fresh install this is a no-op; on upgrade it ensures a clean restart.
+    Exec(ExpandConstant('{app}\find-watch.exe'),
+         'uninstall',
+         '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
     // Register and start the Windows service automatically (no checkbox).
     Exec(ExpandConstant('{app}\find-watch.exe'),
