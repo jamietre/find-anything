@@ -40,7 +40,7 @@ pub async fn bulk(
 
     match tokio::fs::write(&inbox_path, &body).await {
         Ok(()) => {
-            tracing::info!("Queued bulk request: {}", inbox_path.display());
+            tracing::debug!("Queued bulk request: {}", inbox_path.display());
             StatusCode::ACCEPTED.into_response()
         }
         Err(e) => {

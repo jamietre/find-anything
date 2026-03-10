@@ -321,7 +321,7 @@ async fn process_request_async(
                         e
                     );
                 } else {
-                    tracing::info!("Phase 1 complete, queued for archive: {}", to_archive_path.display());
+                    tracing::debug!("Phase 1 complete, queued for archive: {}", to_archive_path.display());
                     archive_notify.notify_one();
                 }
             }
@@ -361,10 +361,6 @@ fn process_request_phase1(
 ) -> Result<()> {
     let request_start = std::time::Instant::now();
 
-    let inbox_file = request_path.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("?");
-
     let compressed = std::fs::read(request_path)?;
     let compressed_bytes = compressed.len();
     let mut decoder = GzDecoder::new(&compressed[..]);
@@ -383,20 +379,18 @@ fn process_request_phase1(
         .map(|l| l.content.len())
         .sum();
 
-    tracing::info!(
-        "[phase1] start {inbox_file} [{}]: {} files, {} deletes, {} renames",
-        request.source, n_files, n_deletes, n_renames,
-    );
+    // req_tag is the filename stem (without .gz), used as the log prefix.
+    let req_tag = request_path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
+    let tag = format!("[indexer:{}:{}]", request.source, req_tag);
 
-    if n_deletes > 0 {
-        tracing::info!("[phase1] Processing {} deletes [{}]", n_deletes, request.source);
-    }
+    tracing::debug!("{tag} start: {} files, {} deletes, {} renames", n_files, n_deletes, n_renames);
+
     if n_files <= log_batch_detail_limit {
         for f in &request.files {
-            tracing::info!("[phase1] Indexing [{}] {}", request.source, f.path);
+            tracing::info!("{tag} indexing {}", f.path);
         }
-    } else {
-        tracing::info!("[phase1] Indexing {} files [{}]", n_files, request.source);
+    } else if n_files > 0 {
+        tracing::info!("{tag} indexing {} files", n_files);
     }
 
     let db_path = data_dir.join("sources").join(format!("{}.db", request.source));
@@ -424,7 +418,6 @@ fn process_request_phase1(
     // Process renames after deletes, before upserts.
     if !request.rename_paths.is_empty() {
         db::rename_files(&conn, &request.rename_paths)?;
-        tracing::info!("[phase1] Processed {} renames [{}]", n_renames, request.source);
     }
 
     let mut server_side_failures: Vec<IndexingFailure> = Vec::new();
@@ -519,9 +512,9 @@ fn process_request_phase1(
     let content_kb = total_content_bytes / 1024;
     let compressed_kb = compressed_bytes / 1024;
     tracing::info!(
-        "[phase1] done {inbox_file} [{}]: {} files, {} deletes, {} renames, {} lines, \
+        "{tag} indexed {} files, {} deletes, {} renames, {} lines, \
          {} KB content, {} KB compressed, {:.1}s",
-        request.source, n_files, n_deletes, n_renames, total_content_lines,
+        n_files, n_deletes, n_renames, total_content_lines,
         content_kb, compressed_kb, elapsed_secs,
     );
     if elapsed.as_secs() >= 120 {
@@ -533,8 +526,8 @@ fn process_request_phase1(
             content_lines = total_content_lines,
             content_kb,
             compressed_kb,
-            "slow batch {inbox_file} [{}]: {:.1}s — {} files, {} deletes, {} renames, {} lines, {} KB content, {} KB compressed",
-            request.source, elapsed_secs, n_files, n_deletes, n_renames, total_content_lines,
+            "{tag} slow batch: {:.1}s — {} files, {} deletes, {} renames, {} lines, {} KB content, {} KB compressed",
+            elapsed_secs, n_files, n_deletes, n_renames, total_content_lines,
             content_kb, compressed_kb,
         );
     }
@@ -877,6 +870,7 @@ fn process_archive_batch(
         }; // _guard dropped here — lock released before ZIP I/O
 
         // Rewrite ZIPs for pending removes (group by archive_name).
+        let chunk_removes_count = chunk_removes.len();
         if !chunk_removes.is_empty() {
             use std::collections::{HashMap as HM, HashSet};
             let mut by_archive: HM<String, HashSet<String>> = HM::new();
@@ -1046,10 +1040,14 @@ fn process_archive_batch(
             tx.commit()?;
         }
 
-        tracing::info!(
-            "[archive] processed {} files for source {source}",
-            archived_files.len()
-        );
+        if !archived_files.is_empty() || chunk_removes_count > 0 {
+            tracing::info!(
+                "[archive:{source}] {} requests: archived {} files, removed {} chunks",
+                requests.len(),
+                archived_files.len(),
+                chunk_removes_count,
+            );
+        }
     }
 
     // Delete all processed .gz files from to-archive/.
