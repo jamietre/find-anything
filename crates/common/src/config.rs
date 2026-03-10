@@ -40,6 +40,7 @@ struct ArchiveDefaults {
 #[derive(Deserialize)]
 struct WatchDefaults {
     debounce_ms: u64,
+    scan_interval_hours: f64,
 }
 
 #[derive(Deserialize)]
@@ -401,6 +402,11 @@ pub struct WatchConfig {
     /// None = auto-detect (same dir as find-watch, then PATH).
     #[serde(default)]
     pub extractor_dir: Option<String>,
+
+    /// How often to run a full `find-scan` in the background (hours).
+    /// Set to 0.0 to disable scheduled scanning entirely.
+    #[serde(default = "default_scan_interval_hours")]
+    pub scan_interval_hours: f64,
 }
 
 impl Default for WatchConfig {
@@ -408,6 +414,7 @@ impl Default for WatchConfig {
         Self {
             debounce_ms: default_debounce_ms(),
             extractor_dir: None,
+            scan_interval_hours: default_scan_interval_hours(),
         }
     }
 }
@@ -431,7 +438,8 @@ impl Default for TrayConfig {
 
 fn default_tray_poll_interval_ms() -> u64 { 1000 }
 
-fn default_debounce_ms() -> u64         { client_defaults().watch.debounce_ms }
+fn default_debounce_ms() -> u64             { client_defaults().watch.debounce_ms }
+fn default_scan_interval_hours() -> f64     { client_defaults().watch.scan_interval_hours }
 fn default_excludes() -> Vec<String>         { client_defaults().scan.exclude.clone() }
 fn default_max_content_size_mb() -> u64      { client_defaults().scan.max_content_size_mb }
 fn default_max_line_length() -> usize        { client_defaults().scan.max_line_length }

@@ -106,8 +106,14 @@ fn service_entry(args: Vec<std::ffi::OsString>) {
         });
 
         // Run the watcher until the SCM sends Stop.
+        // scan_now is always false for the service — no immediate startup scan.
+        let svc_config_path = config_path
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let svc_opts = watch::WatchOptions { config_path: svc_config_path, scan_now: false };
         tokio::select! {
-            _ = watch::run_watch(&config) => {}
+            _ = watch::run_watch(&config, &svc_opts) => {}
             _ = async {
                 loop {
                     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -146,6 +152,10 @@ struct Args {
     /// Path to the client config file.
     #[arg(long, global = true)]
     config: Option<String>,
+
+    /// Run find-scan immediately at startup (in addition to the scheduled interval).
+    #[arg(long, short = 'S')]
+    scan_now: bool,
 
     #[cfg(windows)]
     #[command(subcommand)]
@@ -213,7 +223,11 @@ async fn main() -> Result<()> {
     let client = api::ApiClient::new(&config.server.url, &config.server.token);
     client.check_server_version().await?;
 
-    watch::run_watch(&config).await
+    let opts = watch::WatchOptions {
+        config_path: config_path.clone(),
+        scan_now: args.scan_now,
+    };
+    watch::run_watch(&config, &opts).await
 }
 
 #[cfg(windows)]

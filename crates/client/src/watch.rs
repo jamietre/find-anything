@@ -1,7 +1,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::Result;
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -18,6 +18,14 @@ use crate::api::ApiClient;
 use crate::batch::build_index_files;
 use crate::subprocess;
 
+/// Options passed to `run_watch` from the CLI entry point.
+pub struct WatchOptions {
+    /// Path to the client config file; forwarded to scheduled `find-scan` invocations.
+    pub config_path: String,
+    /// If true, run one `find-scan` immediately at startup before the interval begins.
+    pub scan_now: bool,
+}
+
 /// (root_path, source_name, root_str, include_globset)
 type SourceMap = Vec<(PathBuf, String, String, GlobSet)>;
 
@@ -28,7 +36,17 @@ enum AccumulatedKind {
     Delete,
 }
 
-pub async fn run_watch(config: &ClientConfig) -> Result<()> {
+pub async fn run_watch(config: &ClientConfig, opts: &WatchOptions) -> Result<()> {
+    // Spawn the periodic find-scan scheduler as a background task.
+    {
+        let config_path = opts.config_path.clone();
+        let scan_now = opts.scan_now;
+        let interval_hours = config.watch.scan_interval_hours;
+        tokio::spawn(async move {
+            run_scan_scheduler(interval_hours, &config_path, scan_now).await;
+        });
+    }
+
     let api = ApiClient::new(&config.server.url, &config.server.token);
     let source_map = build_source_map(&config.sources);
 
@@ -415,6 +433,81 @@ async fn handle_delete(
         indexing_failures: vec![],
     })
     .await
+}
+
+// ── Scheduled scan ────────────────────────────────────────────────────────────
+
+/// Background task that spawns `find-scan --config <path>` on a fixed interval.
+///
+/// - `interval_hours == 0.0` → disabled, returns immediately.
+/// - `scan_now == true` → one scan is spawned immediately before the interval starts.
+/// - Overlap: if the previous scan is still running when the next tick fires,
+///   that tick is skipped and a warning is logged.
+async fn run_scan_scheduler(interval_hours: f64, config_path: &str, scan_now: bool) {
+    if interval_hours <= 0.0 {
+        return;
+    }
+
+    let mut child: Option<tokio::process::Child> = None;
+
+    if scan_now {
+        child = spawn_scan(config_path);
+    }
+
+    let dur = Duration::from_secs_f64(interval_hours * 3600.0);
+    let mut ticker = tokio::time::interval(dur);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    ticker.tick().await; // consume the initial immediate tick
+
+    loop {
+        ticker.tick().await;
+
+        // Check whether the previous scan is still running.
+        let still_running = match child.as_mut().map(|c| c.try_wait()) {
+            Some(Ok(None)) => true,  // child exists and has not exited yet
+            Some(Err(e)) => {
+                tracing::warn!("scheduled scan: error checking child process: {e:#}");
+                false
+            }
+            _ => false, // no child, or child has exited
+        };
+
+        if still_running {
+            tracing::warn!("scheduled scan: previous scan still running, skipping tick");
+            continue;
+        }
+
+        child = spawn_scan(config_path);
+    }
+}
+
+/// Spawn `find-scan --config <config_path>` and return the child handle.
+fn spawn_scan(config_path: &str) -> Option<tokio::process::Child> {
+    let binary = find_scan_binary();
+    match tokio::process::Command::new(&binary)
+        .arg("--config")
+        .arg(config_path)
+        .spawn()
+    {
+        Ok(c) => {
+            tracing::info!("scheduled scan: started {}", binary.display());
+            Some(c)
+        }
+        Err(e) => {
+            tracing::warn!("scheduled scan: failed to spawn {}: {e:#}", binary.display());
+            None
+        }
+    }
+}
+
+/// Resolve the `find-scan` binary path: look next to the current executable first,
+/// then fall back to relying on PATH.
+fn find_scan_binary() -> PathBuf {
+    let name = if cfg!(windows) { "find-scan.exe" } else { "find-scan" };
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join(name)))
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 // ── Filesystem helpers ────────────────────────────────────────────────────────
