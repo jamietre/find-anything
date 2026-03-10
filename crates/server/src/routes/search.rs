@@ -27,6 +27,8 @@ pub struct SearchParams {
     /// Optional unix timestamp bounds for mtime filtering.
     pub date_from: Option<i64>,
     pub date_to: Option<i64>,
+    /// Optional file kind allowlist (e.g. "pdf", "image"). Empty = any kind.
+    pub kinds: Vec<String>,
 }
 
 impl<S: Send + Sync> FromRequestParts<S> for SearchParams {
@@ -41,12 +43,14 @@ impl<S: Send + Sync> FromRequestParts<S> for SearchParams {
         let mut offset = None;
         let mut date_from = None;
         let mut date_to = None;
+        let mut kinds = Vec::new();
 
         for (k, v) in form_urlencoded::parse(raw.as_bytes()) {
             match k.as_ref() {
                 "q"         => q         = Some(v.into_owned()),
                 "mode"      => mode      = Some(v.into_owned()),
                 "source"    => source.push(v.into_owned()),
+                "kind"      => kinds.push(v.into_owned()),
                 "limit"     => limit     = Some(v.parse::<usize>()
                     .map_err(|_| (StatusCode::BAD_REQUEST, "invalid limit".to_string()))?),
                 "offset"    => offset    = Some(v.parse::<usize>()
@@ -67,6 +71,7 @@ impl<S: Send + Sync> FromRequestParts<S> for SearchParams {
             offset:    offset.unwrap_or(0),
             date_from,
             date_to,
+            kinds,
         })
     }
 }
@@ -163,7 +168,7 @@ pub async fn search(
 
     let data_dir = state.data_dir.clone();
     let offset = params.offset;
-    let date_filter = DateFilter { from: params.date_from, to: params.date_to };
+    let date_filter = DateFilter { from: params.date_from, to: params.date_to, kinds: params.kinds };
 
     // Only score enough candidates to fill this page plus a buffer for fuzzy
     // filtering. This avoids reading thousands of ZIP chunks for common queries
@@ -177,6 +182,7 @@ pub async fn search(
             let query = query.clone();
             let mode = mode.clone();
             let data_dir = data_dir.clone();
+            let date_filter = date_filter.clone();
             spawn_blocking(move || -> anyhow::Result<(usize, Vec<SearchResult>)> {
                 if !db_path.exists() { return Ok((0, vec![])); }
                 let conn = db::open(&db_path)?;
@@ -220,7 +226,7 @@ pub async fn search(
                 };
 
                 // Fast count via FTS5 only — no ZIP reads, no JOINs.
-                let source_total = db::fts_count(&conn, &fts_query, fts_limit, fts_phrase, date_filter)?;
+                let source_total = db::fts_count(&conn, &fts_query, fts_limit, fts_phrase, date_filter.clone())?;
 
                 // Score only as many candidates as needed for this page.
                 let candidates = db::fts_candidates(&conn, &archive_mgr, &fts_query, scoring_limit, fts_phrase, date_filter)?;

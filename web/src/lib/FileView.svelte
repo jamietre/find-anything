@@ -20,13 +20,14 @@
 	export let searching: boolean;
 	export let sources: string[];
 	export let selectedSources: string[];
+	export let selectedKinds: string[] = [];
 	export let dateFrom = '';
 	export let dateTo = '';
 
 	const dispatch = createEventDispatcher<{
 		back: void;
 		search: { query: string; mode: string };
-		filterChange: { sources: string[]; dateFrom?: number; dateTo?: number };
+		filterChange: { sources: string[]; kinds: string[]; dateFrom?: number; dateTo?: number };
 		treeToggle: void;
 		openFileFromTree: { source: string; path: string; kind: string; archivePath?: string; showAsDirectory?: boolean };
 		openDirFile: { source: string; path: string; kind: string; archivePath?: string };
@@ -61,6 +62,7 @@
 		<AdvancedSearch
 			{sources}
 			{selectedSources}
+			{selectedKinds}
 			{dateFrom}
 			{dateTo}
 			on:change={(e) => dispatch('filterChange', e.detail)}

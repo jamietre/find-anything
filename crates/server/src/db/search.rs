@@ -8,18 +8,31 @@ use crate::archive::ArchiveManager;
 use super::read_chunk_lines;
 use super::split_composite_path;
 
-/// Optional date range filter applied to `files.mtime` (unix seconds, inclusive).
-/// Either bound may be absent for an open-ended range.
-#[derive(Debug, Clone, Copy, Default)]
+/// Combined search filter: optional date range (mtime) and optional kind allowlist.
+#[derive(Debug, Clone, Default)]
 pub struct DateFilter {
     pub from: Option<i64>,
     pub to: Option<i64>,
+    /// Allowlist of `files.kind` values (e.g. "pdf", "image"). Empty = any kind.
+    pub kinds: Vec<String>,
 }
 
 impl DateFilter {
     pub fn is_active(&self) -> bool {
-        self.from.is_some() || self.to.is_some()
+        self.from.is_some() || self.to.is_some() || !self.kinds.is_empty()
     }
+}
+
+/// Build `AND f.kind IN (?{start}, ...)` for `n` kind values, or empty if n == 0.
+fn kind_in_clause(n: usize, start: usize) -> String {
+    if n == 0 {
+        return String::new();
+    }
+    let placeholders = (start..start + n)
+        .map(|i| format!("?{i}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("AND f.kind IN ({placeholders})")
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -80,10 +93,11 @@ pub fn fts_count(conn: &Connection, query: &str, limit: usize, phrase: bool, dat
         )?;
         return Ok(count as usize);
     }
-    // Date filter active: need JOIN to files to check mtime.
+    // Date/kind filter active: need JOIN to files.
     let from = date.from.unwrap_or(i64::MIN);
     let to = date.to.unwrap_or(i64::MAX);
-    let count: i64 = conn.query_row(
+    let kind_clause = kind_in_clause(date.kinds.len(), 5);
+    let sql = format!(
         "SELECT count(*) FROM (
              SELECT 1
              FROM lines_fts
@@ -91,9 +105,22 @@ pub fn fts_count(conn: &Connection, query: &str, limit: usize, phrase: bool, dat
              JOIN files f ON f.id = l.file_id
              WHERE lines_fts MATCH ?1
                AND f.mtime BETWEEN ?3 AND ?4
+               {kind_clause}
              LIMIT ?2
-         )",
-        params![fts_query, limit as i64, from, to],
+         )"
+    );
+    let mut dyn_params: Vec<Box<dyn rusqlite::ToSql>> = vec![
+        Box::new(fts_query),
+        Box::new(limit as i64),
+        Box::new(from),
+        Box::new(to),
+    ];
+    for k in &date.kinds {
+        dyn_params.push(Box::new(k.clone()));
+    }
+    let count: i64 = conn.query_row(
+        &sql,
+        rusqlite::params_from_iter(dyn_params.iter().map(|p| p.as_ref())),
         |row| row.get(0),
     )?;
     Ok(count as usize)
@@ -141,7 +168,8 @@ pub fn fts_candidates(
     let raw: Vec<RawRow> = if date.is_active() {
         let from = date.from.unwrap_or(i64::MIN);
         let to = date.to.unwrap_or(i64::MAX);
-        let mut stmt = conn.prepare(
+        let kind_clause = kind_in_clause(date.kinds.len(), 5);
+        let sql = format!(
             "SELECT f.path, f.kind, l.line_number,
                     l.chunk_archive, l.chunk_name, l.line_offset_in_chunk, f.id,
                     f.mtime, f.size
@@ -150,10 +178,23 @@ pub fn fts_candidates(
              JOIN files f ON f.id = l.file_id
              WHERE lines_fts MATCH ?1
                AND f.mtime BETWEEN ?3 AND ?4
-             LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![fts_query, limit as i64, from, to], map_row)?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+               {kind_clause}
+             LIMIT ?2"
+        );
+        let mut dyn_params: Vec<Box<dyn rusqlite::ToSql>> = vec![
+            Box::new(fts_query.clone()),
+            Box::new(limit as i64),
+            Box::new(from),
+            Box::new(to),
+        ];
+        for k in &date.kinds {
+            dyn_params.push(Box::new(k.clone()));
+        }
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(dyn_params.iter().map(|p| p.as_ref())),
+            map_row,
+        )?.collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     } else {
         let mut stmt = conn.prepare(
@@ -252,24 +293,35 @@ pub fn document_candidates(
         .reduce(|a, b| a.intersection(&b).copied().collect())
         .unwrap_or_default();
 
-    // Apply date filter: keep only files whose mtime is within [from, to].
+    // Apply date/kind filter: keep only files that match mtime range and/or kind allowlist.
     if date.is_active() && !qualifying_ids.is_empty() {
         let from = date.from.unwrap_or(i64::MIN);
         let to = date.to.unwrap_or(i64::MAX);
-        // Build an IN clause for the current qualifying set.
-        let placeholders: String = qualifying_ids
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("?{}", i + 3))
+        let id_count = qualifying_ids.len();
+        // Build an IN clause for the current qualifying set: ?3..?(id_count+2)
+        let id_placeholders: String = (3..3 + id_count)
+            .map(|i| format!("?{i}"))
             .collect::<Vec<_>>()
             .join(", ");
+        // Kind IN clause starts after the id placeholders: ?(id_count+3)..
+        let kind_start = id_count + 3;
+        let kind_clause = if date.kinds.is_empty() {
+            String::new()
+        } else {
+            let placeholders = (kind_start..kind_start + date.kinds.len())
+                .map(|i| format!("?{i}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("AND kind IN ({placeholders})")
+        };
         let sql = format!(
-            "SELECT id FROM files WHERE id IN ({placeholders}) AND mtime BETWEEN ?1 AND ?2"
+            "SELECT id FROM files WHERE id IN ({id_placeholders}) AND mtime BETWEEN ?1 AND ?2 {kind_clause}"
         );
         let mut stmt = conn.prepare(&sql)?;
         let id_params: Vec<Box<dyn rusqlite::ToSql>> = std::iter::once(Box::new(from) as Box<dyn rusqlite::ToSql>)
             .chain(std::iter::once(Box::new(to) as Box<dyn rusqlite::ToSql>))
             .chain(qualifying_ids.iter().map(|&id| Box::new(id) as Box<dyn rusqlite::ToSql>))
+            .chain(date.kinds.iter().map(|k| Box::new(k.clone()) as Box<dyn rusqlite::ToSql>))
             .collect();
         let filtered: HashSet<i64> = stmt
             .query_map(rusqlite::params_from_iter(id_params.iter().map(|p| p.as_ref())), |row| row.get(0))?

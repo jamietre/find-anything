@@ -6,25 +6,41 @@
 	export let sources: string[] = [];
 	/** Currently active sources (empty = all). */
 	export let selectedSources: string[] = [];
+	/** Currently active kind filter (empty = all). */
+	export let selectedKinds: string[] = [];
 	/** Current date-from value as ISO string (YYYY-MM-DD), or empty. */
 	export let dateFrom = '';
 	/** Current date-to value as ISO string (YYYY-MM-DD), or empty. */
 	export let dateTo = '';
 
 	const dispatch = createEventDispatcher<{
-		change: { sources: string[]; dateFrom?: number; dateTo?: number };
+		change: { sources: string[]; kinds: string[]; dateFrom?: number; dateTo?: number };
 	}>();
+
+	// All supported kind values and their display labels.
+	const KIND_OPTIONS: { value: string; label: string }[] = [
+		{ value: 'pdf',      label: 'PDF' },
+		{ value: 'document', label: 'Office / eBook' },
+		{ value: 'text',     label: 'Code & Text' },
+		{ value: 'image',    label: 'Image' },
+		{ value: 'audio',    label: 'Audio' },
+		{ value: 'video',    label: 'Video' },
+		{ value: 'archive',  label: 'Archive' },
+		{ value: 'binary',   label: 'Binary' },
+	];
 
 	let isOpen = false;
 
 	// Draft state — what the user is currently editing inside the panel.
 	let draftSources: string[] = [];
+	let draftKinds: string[] = [];
 	let draftFrom = '';
 	let draftTo = '';
 
 	// Sync draft from props whenever the panel opens.
 	function openPanel() {
 		draftSources = [...selectedSources];
+		draftKinds = [...selectedKinds];
 		draftFrom = dateFrom;
 		draftTo = dateTo;
 		isOpen = true;
@@ -39,6 +55,7 @@
 	function apply() {
 		dispatch('change', {
 			sources: draftSources,
+			kinds: draftKinds,
 			dateFrom: isoToUnix(draftFrom),
 			dateTo: isoToUnix(draftTo)
 		});
@@ -47,9 +64,10 @@
 
 	function clearAll() {
 		draftSources = [];
+		draftKinds = [];
 		draftFrom = '';
 		draftTo = '';
-		dispatch('change', { sources: [] });
+		dispatch('change', { sources: [], kinds: [] });
 		isOpen = false;
 	}
 
@@ -61,18 +79,28 @@
 		}
 	}
 
+	function toggleDraftKind(kind: string) {
+		if (draftKinds.includes(kind)) {
+			draftKinds = draftKinds.filter((k) => k !== kind);
+		} else {
+			draftKinds = [...draftKinds, kind];
+		}
+	}
+
 	// Whether the draft differs from what's currently applied (props).
 	$: isDirty =
 		JSON.stringify(draftSources.slice().sort()) !== JSON.stringify(selectedSources.slice().sort()) ||
+		JSON.stringify(draftKinds.slice().sort()) !== JSON.stringify(selectedKinds.slice().sort()) ||
 		draftFrom !== dateFrom ||
 		draftTo !== dateTo;
 
 	$: sourceFiltered = selectedSources.length > 0 && selectedSources.length < sources.length;
+	$: kindFiltered = selectedKinds.length > 0;
 	$: dateFiltered = dateFrom !== '' || dateTo !== '';
-	$: anyFilter = sourceFiltered || dateFiltered;
+	$: anyFilter = sourceFiltered || kindFiltered || dateFiltered;
 
 	// Count badge: number of active filter dimensions
-	$: filterCount = (sourceFiltered ? 1 : 0) + (dateFiltered ? 1 : 0);
+	$: filterCount = (sourceFiltered ? 1 : 0) + (kindFiltered ? 1 : 0) + (dateFiltered ? 1 : 0);
 
 	function showFromPicker() {
 		(document.getElementById('adv-date-from') as HTMLInputElement)?.showPicker();
@@ -121,6 +149,27 @@
 					</div>
 				</div>
 			{/if}
+
+		<div class="section">
+				<div class="section-header">
+					<span class="section-title">File type</span>
+					{#if draftKinds.length > 0}
+						<button class="clear-link" on:click={() => (draftKinds = [])}>All</button>
+					{/if}
+				</div>
+				<div class="kind-grid">
+					{#each KIND_OPTIONS as opt}
+						<label class="kind-item">
+							<input
+								type="checkbox"
+								checked={draftKinds.includes(opt.value)}
+								on:change={() => toggleDraftKind(opt.value)}
+							/>
+							<span class="kind-label">{opt.label}</span>
+						</label>
+					{/each}
+				</div>
+			</div>
 
 			<div class="section">
 				<div class="section-header">
@@ -289,6 +338,30 @@
 	}
 
 	.source-name {
+		font-size: 13px;
+		color: var(--text);
+	}
+
+	.kind-grid {
+		display: grid;
+		grid-template-columns: 1fr 1fr;
+		gap: 2px 8px;
+	}
+
+	.kind-item {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 3px 0;
+		cursor: pointer;
+	}
+
+	.kind-item input[type='checkbox'] {
+		cursor: pointer;
+		margin: 0;
+	}
+
+	.kind-label {
 		font-size: 13px;
 		color: var(--text);
 	}

@@ -122,6 +122,8 @@ export interface SearchParams {
 	dateFrom?: number;
 	/** Unix timestamp seconds (inclusive upper bound for file mtime). */
 	dateTo?: number;
+	/** Allowlist of file kinds (e.g. "pdf", "image"). Empty/omitted = any kind. */
+	kinds?: string[];
 }
 
 export async function search(params: SearchParams): Promise<SearchResponse> {
@@ -135,6 +137,9 @@ export async function search(params: SearchParams): Promise<SearchResponse> {
 	if (params.offset != null) url.searchParams.set('offset', String(params.offset));
 	if (params.dateFrom != null) url.searchParams.set('date_from', String(params.dateFrom));
 	if (params.dateTo != null) url.searchParams.set('date_to', String(params.dateTo));
+	if (params.kinds && params.kinds.length > 0) {
+		params.kinds.forEach((k) => url.searchParams.append('kind', k));
+	}
 
 	const resp = await apiFetch(url.toString());
 	if (!resp.ok) {

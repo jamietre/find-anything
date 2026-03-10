@@ -11,6 +11,7 @@
 	export let searching: boolean;
 	export let sources: string[];
 	export let selectedSources: string[];
+	export let selectedKinds: string[] = [];
 	export let dateFrom = '';
 	export let dateTo = '';
 	export let results: SearchResult[] = [];
@@ -26,7 +27,7 @@
 
 	const dispatch = createEventDispatcher<{
 		search: { query: string; mode: string };
-		filterChange: { sources: string[]; dateFrom?: number; dateTo?: number };
+		filterChange: { sources: string[]; kinds: string[]; dateFrom?: number; dateTo?: number };
 		clearNlpDate: void;
 		open: SearchResult;
 		treeToggle: void;
@@ -76,6 +77,7 @@
 		<AdvancedSearch
 			{sources}
 			{selectedSources}
+			{selectedKinds}
 			{dateFrom}
 			{dateTo}
 			on:change={(e) => dispatch('filterChange', e.detail)}

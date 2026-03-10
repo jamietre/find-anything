@@ -11,6 +11,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **File type filter in advanced search** — the Advanced search panel now has a "File type" section with checkboxes for PDF, Office/eBook, Code & Text, Image, Audio, Video, Archive, and Binary; selected kinds are sent as repeated `?kind=` query params and applied server-side as an `AND f.kind IN (...)` filter in all three search paths (FTS5 count, FTS5 candidates, document-mode candidate intersection); the filter badge count includes active kind selections
 - **Windows tray popup improvements** — popup is wider (660×480), shows "Recent activity" title, has 6 px padding between the border and controls, displays full file path per row (`[source]  full/path/to/file`), uses Segoe UI 10 pt ClearType font, always shows a vertical scrollbar, and has a native drop shadow
 - **Windows tray interim service status** — stopping or starting the watcher service immediately shows "Watcher: Stopping…" / "Watcher: Starting…" and disables the toggle button until the next status poll confirms the new state
 - **Windows tray recent files increased to 50** — the poller now requests the 50 most recently indexed files (was 20)

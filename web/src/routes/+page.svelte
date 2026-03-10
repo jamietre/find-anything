@@ -34,6 +34,7 @@
 
 	let sources: SourceInfo[] = [];
 	let selectedSources: string[] = [];
+	let selectedKinds: string[] = [];
 	// ISO date strings bound to the AdvancedSearch inputs (propagated back for controlled state).
 	let dateFromStr = '';
 	let dateToStr = '';
@@ -215,7 +216,7 @@
 		if (loadingMore || noMoreResults || query.trim().length < 3) return;
 		loadingMore = true;
 		try {
-			const resp = await search({ q: nlpResult?.query ?? query, mode, sources: selectedSources, limit: 50, offset: loadOffset, dateFrom: effectiveDateFrom, dateTo: effectiveDateTo });
+			const resp = await search({ q: nlpResult?.query ?? query, mode, sources: selectedSources, kinds: selectedKinds, limit: 50, offset: loadOffset, dateFrom: effectiveDateFrom, dateTo: effectiveDateTo });
 			if (resp.results.length === 0) {
 				noMoreResults = true;
 			} else {
@@ -267,7 +268,7 @@
 			window.scrollTo(0, 0);
 		}
 		try {
-			const resp = await search({ q: apiQuery, mode: m, sources: srcs, limit: 50, offset: 0, dateFrom: effectiveDateFrom, dateTo: effectiveDateTo });
+			const resp = await search({ q: apiQuery, mode: m, sources: srcs, kinds: selectedKinds, limit: 50, offset: 0, dateFrom: effectiveDateFrom, dateTo: effectiveDateTo });
 			results = resp.results;
 			totalResults = resp.total;
 			loadOffset = resp.results.length; // server cursor starts after page 0
@@ -303,8 +304,9 @@
 		doSearch(query, mode, selectedSources);
 	}
 
-	function handleFilterChange(e: CustomEvent<{ sources: string[]; dateFrom?: number; dateTo?: number }>) {
+	function handleFilterChange(e: CustomEvent<{ sources: string[]; kinds: string[]; dateFrom?: number; dateTo?: number }>) {
 		selectedSources = e.detail.sources;
+		selectedKinds = e.detail.kinds;
 		dateFromTs = e.detail.dateFrom;
 		dateToTs = e.detail.dateTo;
 		// Keep ISO strings in sync so AdvancedSearch inputs remain controlled.
@@ -456,6 +458,7 @@
 				{searching}
 				sources={sourceNames}
 				{selectedSources}
+				{selectedKinds}
 				dateFrom={dateFromStr}
 				dateTo={dateToStr}
 				on:back={handleBack}
@@ -474,6 +477,7 @@
 				{searching}
 				sources={sourceNames}
 				{selectedSources}
+				{selectedKinds}
 				dateFrom={dateFromStr}
 				dateTo={dateToStr}
 				{results}
