@@ -190,6 +190,7 @@
 	// ── Load more ───────────────────────────────────────────────────────────────
 
 	let mainContent: HTMLElement;
+	let savedScrollTop = 0;
 	let loadingMore = false;
 	let noMoreResults = false;
 	// Tracks server cursor independently of results.length. Client dedup can
@@ -328,6 +329,7 @@
 			? [r.line_number, ...extraLines]
 			: extraLines.length ? extraLines : [];
 		panelMode = 'file';
+		savedScrollTop = mainContent?.scrollTop ?? 0;
 		view = 'file';
 		pushState();
 	}
@@ -368,9 +370,11 @@
 		showTree = !showTree;
 	}
 
-	function handleBack() {
+	async function handleBack() {
 		view = 'results';
 		pushState();
+		await tick();
+		if (mainContent) mainContent.scrollTop = savedScrollTop;
 	}
 
 	// ── Command palette ──────────────────────────────────────────────────────────

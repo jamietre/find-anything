@@ -162,6 +162,16 @@ pub async fn run_scan(
     let mut new_files: usize = 0;   // in local but absent from server DB
     let mut modified: usize = 0;    // mtime changed since last scan
     let mut upgraded: usize = 0;    // mtime unchanged but scanner_version outdated
+
+    // Build the "N unchanged[, M new][, P modified][, Q upgraded]" summary,
+    // omitting new/modified/upgraded when they are zero.
+    let fmt_changes = |skipped: usize, new_files: usize, modified: usize, upgraded: usize| -> String {
+        let mut parts = vec![format!("{skipped} unchanged")];
+        if new_files > 0 { parts.push(format!("{new_files} new")); }
+        if modified  > 0 { parts.push(format!("{modified} modified")); }
+        if upgraded  > 0 { parts.push(format!("{upgraded} upgraded")); }
+        parts.join(", ")
+    };
     let log_interval = std::time::Duration::from_secs(5);
     let mut last_log = std::time::Instant::now();
 
@@ -188,7 +198,7 @@ pub async fn run_scan(
             if !needs_index {
                 if last_log.elapsed() >= log_interval {
                     let total = indexed + skipped;
-                    info!("processed {total} files ({skipped} unchanged, {new_files} new, {modified} modified, {upgraded} upgraded) so far...");
+                    info!("processed {total} files ({}) so far...", fmt_changes(skipped, new_files, modified, upgraded));
                     last_log = std::time::Instant::now();
                 }
                 continue;
@@ -202,7 +212,8 @@ pub async fn run_scan(
         if last_log.elapsed() >= log_interval {
             let total = indexed + skipped;
             info!(
-                "processed {total} files ({skipped} unchanged, {new_files} new, {modified} modified, {upgraded} upgraded) so far, {} in current batch...",
+                "processed {total} files ({}) so far, {} in current batch...",
+                fmt_changes(skipped, new_files, modified, upgraded),
                 ctx.batch.len(),
             );
             last_log = std::time::Instant::now();

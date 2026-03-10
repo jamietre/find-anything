@@ -299,6 +299,10 @@ fn process_request(
 ) -> Result<()> {
     let request_start = std::time::Instant::now();
 
+    let inbox_file = request_path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("?");
+
     let compressed = std::fs::read(request_path)?;
     let compressed_bytes = compressed.len();
     let mut decoder = GzDecoder::new(&compressed[..]);
@@ -315,6 +319,11 @@ fn process_request(
         .flat_map(|f| f.lines.iter())
         .map(|l| l.content.len())
         .sum();
+
+    tracing::info!(
+        "[worker {worker_idx}] start {inbox_file} [{}]: {} files, {} deletes",
+        request.source, n_files, n_deletes,
+    );
 
     if n_deletes > 0 {
         tracing::info!("[worker {worker_idx}] Processing {} deletes [{}]", n_deletes, request.source);
@@ -445,7 +454,7 @@ fn process_request(
     let content_kb = total_content_bytes / 1024;
     let compressed_kb = compressed_bytes / 1024;
     tracing::info!(
-        "[worker {worker_idx}] batch complete [{}]: {} files, {} deletes, {} lines, \
+        "[worker {worker_idx}] done {inbox_file} [{}]: {} files, {} deletes, {} lines, \
          {} KB content, {} KB compressed, {:.1}s",
         request.source, n_files, n_deletes, total_content_lines,
         content_kb, compressed_kb, elapsed_secs,
@@ -458,7 +467,7 @@ fn process_request(
             content_lines = total_content_lines,
             content_kb,
             compressed_kb,
-            "slow batch [{}]: {:.1}s — {} files, {} deletes, {} lines, {} KB content, {} KB compressed",
+            "slow batch {inbox_file} [{}]: {:.1}s — {} files, {} deletes, {} lines, {} KB content, {} KB compressed",
             request.source, elapsed_secs, n_files, n_deletes, total_content_lines,
             content_kb, compressed_kb,
         );

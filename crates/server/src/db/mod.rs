@@ -102,6 +102,17 @@ pub fn open(db_path: &Path) -> Result<Connection> {
     Ok(conn)
 }
 
+/// Open a source DB for **read-only stats queries** with a short (1 s) busy
+/// timeout.  If the DB is locked by a worker, the stats background task will
+/// just skip it and return stale / zero values rather than blocking.
+pub fn open_for_stats(db_path: &Path) -> Result<Connection> {
+    let conn = Connection::open(db_path)
+        .with_context(|| format!("opening {}", db_path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(1))?;
+    register_scalar_functions(&conn)?;
+    Ok(conn)
+}
+
 /// Register custom scalar functions that SQLite does not provide built-in.
 pub fn register_scalar_functions(conn: &Connection) -> Result<()> {
     let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;

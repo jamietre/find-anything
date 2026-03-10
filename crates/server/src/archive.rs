@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 use zip::write::SimpleFileOptions;
@@ -24,6 +24,10 @@ pub struct SharedArchiveState {
     /// Next archive number to allocate. Monotonically increasing; each
     /// `fetch_add` gives the caller exclusive ownership of that archive.
     next_archive_num: AtomicU32,
+    /// Running count of archive ZIP files on disk.
+    total_archives: AtomicU64,
+    /// Running sum of archive ZIP on-disk sizes (compressed bytes).
+    archive_size_bytes: AtomicU64,
     /// Per-archive rewrite lock, keyed by absolute archive path.
     rewrite_locks: Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
     /// Per-source DB write lock, keyed by source name.
@@ -39,15 +43,28 @@ pub struct SharedArchiveState {
 
 impl SharedArchiveState {
     /// Initialise shared state for `data_dir`, scanning the existing content
-    /// directory to seed the counter above the highest existing archive number.
+    /// directory to seed the counter above the highest existing archive number
+    /// and to populate the running archive count and size totals.
     pub fn new(data_dir: PathBuf) -> Result<Arc<Self>> {
-        let max_num = Self::find_max_archive_num(&data_dir);
+        let (max_num, total_archives, archive_size_bytes) = Self::scan_archives(&data_dir);
         Ok(Arc::new(Self {
             data_dir,
             next_archive_num: AtomicU32::new(max_num.saturating_add(1)),
+            total_archives: AtomicU64::new(total_archives),
+            archive_size_bytes: AtomicU64::new(archive_size_bytes),
             rewrite_locks: Mutex::new(HashMap::new()),
             source_locks: Mutex::new(HashMap::new()),
         }))
+    }
+
+    /// Running count of archive ZIP files (updated incrementally).
+    pub fn total_archives(&self) -> u64 {
+        self.total_archives.load(Ordering::Relaxed)
+    }
+
+    /// Running sum of archive ZIP on-disk sizes in bytes (updated incrementally).
+    pub fn archive_size_bytes(&self) -> u64 {
+        self.archive_size_bytes.load(Ordering::Relaxed)
     }
 
     /// Return (creating if necessary) the write-serialisation mutex for `source`.
@@ -58,10 +75,12 @@ impl SharedArchiveState {
             .clone()
     }
 
-    /// Scan the content directory tree and return the highest archive number found.
-    fn find_max_archive_num(data_dir: &Path) -> u32 {
+    /// Scan the content directory tree; return (max_archive_num, count, total_bytes).
+    fn scan_archives(data_dir: &Path) -> (u32, u64, u64) {
         let content_dir = data_dir.join("sources").join("content");
         let mut max_num = 0u32;
+        let mut count = 0u64;
+        let mut size_bytes = 0u64;
         if let Ok(entries) = std::fs::read_dir(&content_dir) {
             for entry in entries.flatten() {
                 if entry.path().is_dir() {
@@ -70,6 +89,8 @@ impl SharedArchiveState {
                             if let Some(name) = file_entry.file_name().to_str() {
                                 if let Some(num) = parse_archive_number(name) {
                                     max_num = max_num.max(num as u32);
+                                    count += 1;
+                                    size_bytes += file_entry.metadata().map(|m| m.len()).unwrap_or(0);
                                 }
                             }
                         }
@@ -77,7 +98,7 @@ impl SharedArchiveState {
                 }
             }
         }
-        max_num
+        (max_num, count, size_bytes)
     }
 
     /// Atomically claim the next archive number. The caller has exclusive
@@ -153,10 +174,12 @@ impl ArchiveManager {
     /// worker pool — no appending or rewriting should be done through this
     /// instance.
     pub fn new_for_reading(data_dir: PathBuf) -> Self {
-        // Counter starts at 0; irrelevant since no archives are allocated.
+        // Counters start at 0; irrelevant since this instance never writes.
         let state = Arc::new(SharedArchiveState {
             data_dir,
             next_archive_num: AtomicU32::new(0),
+            total_archives: AtomicU64::new(0),
+            archive_size_bytes: AtomicU64::new(0),
             rewrite_locks: Mutex::new(HashMap::new()),
             source_locks: Mutex::new(HashMap::new()),
         });
@@ -287,6 +310,10 @@ impl ArchiveManager {
         let file = File::create(&new_path)?;
         ZipWriter::new(file).finish()?;
 
+        self.state.total_archives.fetch_add(1, Ordering::Relaxed);
+        let initial_size = std::fs::metadata(&new_path).map(|m| m.len()).unwrap_or(0);
+        self.state.archive_size_bytes.fetch_add(initial_size, Ordering::Relaxed);
+
         self.current_archive_num = Some(new_num);
         Ok(new_path)
     }
@@ -306,6 +333,9 @@ impl ArchiveManager {
             }
         }
 
+        // Measure size after any stale-chunk removal above, before the new write.
+        let size_before = std::fs::metadata(archive_path).map(|m| m.len()).unwrap_or(0);
+
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -321,11 +351,17 @@ impl ArchiveManager {
         zip.write_all(content)?;
         zip.finish()?;
 
+        let size_after = std::fs::metadata(archive_path).map(|m| m.len()).unwrap_or(0);
+        if size_after > size_before {
+            self.state.archive_size_bytes.fetch_add(size_after - size_before, Ordering::Relaxed);
+        }
+
         Ok(())
     }
 
     /// Rewrite an archive omitting the named chunks; returns compressed bytes freed.
     fn rewrite_archive(&self, archive_path: &Path, chunks_to_remove: &HashSet<String>) -> Result<u64> {
+        let size_before = std::fs::metadata(archive_path).map(|m| m.len()).unwrap_or(0);
         let temp_path = archive_path.with_extension("zip.tmp");
 
         let file = File::open(archive_path)?;
@@ -355,6 +391,21 @@ impl ArchiveManager {
         drop(old_zip);
 
         std::fs::rename(&temp_path, archive_path)?;
+
+        // Update running size total.
+        let size_after = std::fs::metadata(archive_path).map(|m| m.len()).unwrap_or(0);
+        match size_after.cmp(&size_before) {
+            std::cmp::Ordering::Greater => {
+                self.state.archive_size_bytes.fetch_add(size_after - size_before, Ordering::Relaxed);
+            }
+            std::cmp::Ordering::Less => {
+                let _ = self.state.archive_size_bytes.fetch_update(
+                    Ordering::Relaxed, Ordering::Relaxed,
+                    |v| Some(v.saturating_sub(size_before - size_after)),
+                );
+            }
+            std::cmp::Ordering::Equal => {}
+        }
 
         Ok(bytes_freed)
     }

@@ -25,7 +25,11 @@ enum Command {
     /// Print effective client configuration with defaults filled in
     Config,
     /// Print per-source statistics from the server
-    Status,
+    Status {
+        /// Refresh statistics every 2 seconds until Ctrl+C
+        #[arg(long, short)]
+        watch: bool,
+    },
     /// List indexed sources
     Sources,
     /// Check server connectivity and authentication
@@ -120,46 +124,41 @@ async fn main() -> Result<()> {
             }
         }
 
-        Command::Status => {
+        Command::Status { watch } => {
             let client = api::ApiClient::new(&config.server.url, &config.server.token);
-            let stats = client.get_stats().await.context("fetching stats")?;
-            if args.json {
-                println!("{}", serde_json::to_string_pretty(&stats)?);
+            if args.json || !watch {
+                let stats = client.get_stats().await.context("fetching stats")?;
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&stats)?);
+                } else {
+                    print!("{}", format_status(&stats));
+                }
             } else {
-                println!("Sources:");
-                for s in &stats.sources {
-                    let age = s.last_scan.map(|ts| {
-                        let secs = chrono_age_secs(ts);
-                        format_age(secs)
-                    }).unwrap_or_else(|| "never".to_string());
-                    println!(
-                        "  {:20}  {:>6} files  {:>10}  last scan: {}",
-                        s.name,
-                        s.total_files,
-                        format_bytes(s.total_size as u64),
-                        age,
-                    );
-                }
-                println!();
-                println!("Inbox:    {} pending, {} failed", stats.inbox_pending, stats.failed_requests);
-                println!("Archives: {} ZIP files ({})", stats.total_archives, format_bytes(stats.archive_size_bytes));
-                println!("DB size:  {}", format_bytes(stats.db_size_bytes));
-                match (stats.orphaned_bytes, stats.orphaned_stats_age_secs) {
-                    (Some(orphaned), Some(age)) => {
-                        let pct = if stats.archive_size_bytes > 0 {
-                            orphaned as f64 / stats.archive_size_bytes as f64 * 100.0
-                        } else { 0.0 };
-                        println!(
-                            "Wasted:   {} ({:.1}%)  [stats {}]",
-                            format_bytes(orphaned), pct, format_age(age),
-                        );
+                // Watch mode: redraw in-place every 2 seconds until Ctrl+C.
+                use std::io::Write;
+                let mut prev_lines: usize = 0;
+                loop {
+                    match client.get_stats().await {
+                        Ok(stats) => {
+                            let output = format_status(&stats);
+                            let new_lines = output.lines().count();
+                            if prev_lines > 0 {
+                                // Move cursor up to the first line we drew, then
+                                // clear from cursor to end of screen.
+                                print!("\x1b[{}A\x1b[0J", prev_lines);
+                            }
+                            print!("{output}");
+                            std::io::stdout().flush().ok();
+                            prev_lines = new_lines;
+                        }
+                        Err(e) => {
+                            eprintln!("Error fetching stats: {e:#}");
+                        }
                     }
-                    _ => println!("Wasted:   (pending first scan)"),
-                }
-                match &stats.worker_status {
-                    WorkerStatus::Idle => println!("Worker:   idle"),
-                    WorkerStatus::Processing { source, file } =>
-                        println!("Worker:   {} processing {}/{}", "●".cyan(), source, file),
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                        _ = tokio::signal::ctrl_c() => { println!(); break; }
+                    }
                 }
             }
         }
@@ -456,6 +455,49 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn format_status(stats: &find_common::api::StatsResponse) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    writeln!(out, "Sources:").unwrap();
+    for s in &stats.sources {
+        let age = s.last_scan.map(|ts| {
+            let secs = chrono_age_secs(ts);
+            format_age(secs)
+        }).unwrap_or_else(|| "never".to_string());
+        writeln!(
+            out,
+            "  {:20}  {:>6} files  {:>10}  last scan: {}",
+            s.name,
+            s.total_files,
+            format_bytes(s.total_size as u64),
+            age,
+        ).unwrap();
+    }
+    writeln!(out).unwrap();
+    writeln!(out, "Inbox:    {} pending, {} failed", stats.inbox_pending, stats.failed_requests).unwrap();
+    writeln!(out, "Archives: {} ZIP files ({})", stats.total_archives, format_bytes(stats.archive_size_bytes)).unwrap();
+    writeln!(out, "DB size:  {}", format_bytes(stats.db_size_bytes)).unwrap();
+    match (stats.orphaned_bytes, stats.orphaned_stats_age_secs) {
+        (Some(orphaned), Some(age)) => {
+            let pct = if stats.archive_size_bytes > 0 {
+                orphaned as f64 / stats.archive_size_bytes as f64 * 100.0
+            } else { 0.0 };
+            writeln!(
+                out,
+                "Wasted:   {} ({:.1}%)  [stats {}]",
+                format_bytes(orphaned), pct, format_age(age),
+            ).unwrap();
+        }
+        _ => writeln!(out, "Wasted:   (pending first scan)").unwrap(),
+    }
+    match &stats.worker_status {
+        WorkerStatus::Idle => writeln!(out, "Worker:   idle").unwrap(),
+        WorkerStatus::Processing { source, file } =>
+            writeln!(out, "Worker:   {} processing {}/{}", "●".cyan(), source, file).unwrap(),
+    }
+    out
 }
 
 fn format_bytes(bytes: u64) -> String {

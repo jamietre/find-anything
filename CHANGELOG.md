@@ -11,6 +11,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **`find-admin status --watch`** — new `--watch` / `-w` flag keeps the command running, redrawing stats in-place every 2 seconds using ANSI cursor-up escape codes; exits cleanly on Ctrl+C; the watch loop is sequential — it never starts a new request until the previous one has returned, so at most one stats query is open at a time
+- **Worker batch start/done logging** — the worker now logs a `start` line when it picks up an inbox file (showing the inbox filename, source, file count, and delete count) and names the inbox file again in the existing `done` completion line; slow-batch warnings also include the inbox filename
+- **Archive totals tracked incrementally** — `SharedArchiveState` now maintains `total_archives` and `archive_size_bytes` as atomics, seeded from the startup directory scan and updated in-place on every archive create, append, and rewrite; `GET /api/v1/stats` reads these atomics directly (zero I/O for archive stats) and uses a single `spawn_blocking` for DB-only queries with a 1 s busy-timeout; the 30 s background refresh task is removed entirely
 - **File type filter in advanced search** — the Advanced search panel now has a "File type" section with checkboxes for PDF, Office/eBook, Code & Text, Image, Audio, Video, Archive, and Binary; selected kinds are sent as repeated `?kind=` query params and applied server-side as an `AND f.kind IN (...)` filter in all three search paths (FTS5 count, FTS5 candidates, document-mode candidate intersection); the filter badge count includes active kind selections
 - **Windows tray popup improvements** — popup is wider (660×480), shows "Recent activity" title, has 6 px padding between the border and controls, displays full file path per row (`[source]  full/path/to/file`), uses Segoe UI 10 pt ClearType font, always shows a vertical scrollbar, and has a native drop shadow
 - **Windows tray interim service status** — stopping or starting the watcher service immediately shows "Watcher: Stopping…" / "Watcher: Starting…" and disables the toggle button until the next status poll confirms the new state
@@ -18,6 +21,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **Scroll position restored on back navigation** — clicking "← results" from a file detail view now scrolls the results list back to the position it was at before the file was opened
+- **Scan progress log omits zero-count fields** — the periodic progress line now always shows `N unchanged` but suppresses `new`, `modified`, and `upgraded` when they are zero, reducing noise during incremental scans where most files are unchanged
 - **Sidebar scrolls independently from search results** — the page layout is now `height: 100vh; overflow: hidden` with the main content column (`overflow-y: auto`) as the scroll container instead of the window; the sidebar tree keeps its position while the user scrolls through results; the load-more scroll listener is moved from `window` to the main-content element (no behavioural change since `isNearBottom` already used viewport-relative `getBoundingClientRect`)
 - **Windows tray right-click menu clipped at screen bottom** — the context menu is now shown via `TrackPopupMenuEx` with `TPM_BOTTOMALIGN | TPM_RIGHTALIGN` so it always pops up above the cursor; muda's default `TPM_TOPALIGN` caused the bottom items to be clipped off-screen when the taskbar is at the bottom of the display
 
