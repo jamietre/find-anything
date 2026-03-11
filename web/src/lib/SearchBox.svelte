@@ -35,6 +35,14 @@
 		}
 	}
 
+	function clearQuery() {
+		query = '';
+		isTyping = false;
+		clearTimeout(debounceTimer);
+		dispatch('change', { query: '', mode });
+		inputEl?.focus();
+	}
+
 	export function focus() {
 		inputEl?.focus();
 	}
@@ -90,6 +98,13 @@
 				<path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
 			</svg>
 		</div>
+	{:else if query}
+		<button class="clear-btn" on:click={clearQuery} title="Clear search" aria-label="Clear search">
+			<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+				<circle cx="8" cy="8" r="7" fill="currentColor" opacity="0.25"/>
+				<path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+			</svg>
+		</button>
 	{/if}
 </div>
 
@@ -181,6 +196,30 @@
 		height: 16px;
 		color: var(--accent);
 		animation: spin 0.8s linear infinite;
+	}
+
+	.clear-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 32px;
+		height: 32px;
+		margin-right: 4px;
+		flex-shrink: 0;
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		color: var(--text-muted);
+	}
+
+	.clear-btn:hover {
+		color: var(--text);
+	}
+
+	.clear-btn svg {
+		width: 16px;
+		height: 16px;
 	}
 
 	@keyframes spin {

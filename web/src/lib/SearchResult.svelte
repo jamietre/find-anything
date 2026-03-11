@@ -130,18 +130,20 @@
 		{#if hits.length === 1 && hits[0].line_number > 0}
 			<span class="line-ref">:{hits[0].line_number}</span>
 		{:else if hits.length > 1}
-			<span class="line-refs">
-				{#each hits as hit, i}
-					{#if hit.line_number > 0}
-						<!-- svelte-ignore a11y-click-events-have-key-events -->
-						<span
-							class="line-ref-btn"
-							class:active={i === activeHitIndex}
-							title="Show context at line {hit.line_number}"
-							on:click|stopPropagation={() => switchToHit(i)}
-						>:{hit.line_number}</span>
-					{/if}
-				{/each}
+			<!-- svelte-ignore a11y-no-static-element-interactions -->
+			<!-- svelte-ignore a11y-click-events-have-key-events -->
+			<span class="hit-nav" title="{activeHitIndex + 1} of {hits.length} hits" on:click|stopPropagation>
+				<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex === 0} on:click|stopPropagation={() => switchToHit(activeHitIndex - 1)} title="Previous hit (line {hits[activeHitIndex - 1]?.line_number})">
+					<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+						<polyline points="5.5,1.5 2.5,4 5.5,6.5"/>
+					</svg>
+				</button>
+				<span class="line-ref nav-line-ref">:{hits[activeHitIndex].line_number}</span>
+				<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex >= hits.length - 1} on:click|stopPropagation={() => switchToHit(activeHitIndex + 1)} title="Next hit (line {hits[activeHitIndex + 1]?.line_number})">
+					<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+						<polyline points="2.5,1.5 5.5,4 2.5,6.5"/>
+					</svg>
+				</button>
 			</span>
 		{/if}
 		{#if result.aliases && result.aliases.length > 0}
@@ -260,32 +262,48 @@
 		flex-shrink: 0;
 	}
 
-	.line-refs {
-		display: flex;
-		flex-wrap: nowrap;
-		gap: 2px;
-		min-width: 0;
-		overflow: hidden;
-	}
-
-	.line-ref-btn {
-		color: var(--text-dim);
-		font-family: var(--font-mono);
-		font-size: 12px;
-		cursor: pointer;
-		padding: 0 3px;
-		border-radius: 3px;
+	.hit-nav {
+		display: inline-flex;
+		align-items: center;
 		flex-shrink: 0;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		overflow: hidden;
+		height: 20px;
 	}
 
-	.line-ref-btn:hover {
+	.nav-line-ref {
+		padding: 0 5px;
+		border-left: 1px solid var(--border);
+		border-right: 1px solid var(--border);
+		cursor: default;
+	}
+
+	.hit-nav-btn {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 20px;
+		height: 20px;
+		background: none;
+		border: none;
+		padding: 0;
+		cursor: pointer;
+		color: var(--text-dim);
+		flex-shrink: 0;
+		transition: color 0.1s, background-color 0.1s;
+	}
+
+	.hit-nav-btn:hover {
 		color: var(--accent);
 		background: var(--bg-hover);
 	}
 
-	.line-ref-btn.active {
-		color: var(--accent);
+	.hit-nav-hidden {
+		visibility: hidden;
+		pointer-events: none;
 	}
+
 
 	.context-lines {
 		background: var(--bg);

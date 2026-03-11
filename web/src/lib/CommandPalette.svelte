@@ -2,7 +2,7 @@
 	import { createEventDispatcher, tick } from 'svelte';
 	import { listFiles } from '$lib/api';
 	import type { FileRecord } from '$lib/api';
-	import { buildItems, filterItems, displayPath, archivePathOf } from '$lib/commandPaletteLogic';
+	import { buildItems, filterItems, splitDisplayPath, archivePathOf } from '$lib/commandPaletteLogic';
 
 	/** Set to true to show the palette. */
 	export let open = false;
@@ -119,7 +119,10 @@
 							on:click={confirm}
 							on:mouseenter={() => (selected = i)}
 						>
-							<span class="cp-path">{displayPath(item.path)}</span>
+							<span class="cp-name">{splitDisplayPath(item.path).name}</span>
+							{#if splitDisplayPath(item.path).dir}
+								<span class="cp-dir">{splitDisplayPath(item.path).dir}</span>
+							{/if}
 							{#if sources.length > 1}
 								<span class="cp-source">{item.source}</span>
 							{/if}
@@ -225,9 +228,21 @@
 		color: var(--accent, #58a6ff);
 	}
 
-	.cp-path {
+	.cp-name {
+		flex-shrink: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		max-width: 50%;
+	}
+
+	.cp-dir {
 		flex: 1;
 		overflow: hidden;
 		text-overflow: ellipsis;
+		color: var(--text-muted);
+		font-size: 11px;
+		padding-left: 10px;
+		white-space: nowrap;
+		opacity: 0.65;
 	}
 </style>

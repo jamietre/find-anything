@@ -116,14 +116,13 @@
 <style>
 	.path-bar {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		gap: 10px;
 		padding: 8px 16px;
 		background: var(--bg-secondary);
 		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
 		min-height: 38px;
-		overflow: hidden;
 	}
 
 	.back-btn {
@@ -160,16 +159,14 @@
 	.path-plain {
 		font-family: var(--font-mono);
 		font-size: 12px;
-		overflow-x: hidden;
-		overflow-y: visible;
-		text-overflow: ellipsis;
-		white-space: nowrap;
 		flex: 1;
 		min-width: 0;
 		display: flex;
-		align-items: center;
+		flex-wrap: wrap;
+		align-items: baseline;
 		gap: 0;
 		color: var(--accent);
+		padding-top: 2px;
 	}
 
 	.sep {
@@ -181,7 +178,7 @@
 	.seg {
 		font-family: var(--font-mono);
 		font-size: 12px;
-		white-space: nowrap;
+		word-break: break-all;
 	}
 
 	.seg--current {
