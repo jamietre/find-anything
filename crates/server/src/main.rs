@@ -181,7 +181,6 @@ async fn main() -> Result<()> {
     // Spawn the two-phase inbox worker.
     let worker_data_dir = data_dir.clone();
     let worker_cfg = worker::WorkerConfig {
-        log_batch_detail_limit: state.config.server.log_batch_detail_limit,
         request_timeout: std::time::Duration::from_secs(
             state.config.server.inbox_request_timeout_secs,
         ),

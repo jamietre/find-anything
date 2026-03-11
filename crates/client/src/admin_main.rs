@@ -445,16 +445,16 @@ async fn main() -> Result<()> {
                             .format("%Y-%m-%d %H:%M").to_string())
                         .unwrap_or_else(|| f.indexed_at.to_string());
                     let action_label = match f.action.as_str() {
-                        "added"    => "+",
-                        "modified" => "~",
-                        "deleted"  => "-",
-                        "renamed"  => "→",
-                        _          => "?",
+                        "added"    => "added   ",
+                        "modified" => "modified",
+                        "deleted"  => "deleted ",
+                        "renamed"  => "renamed ",
+                        other      => other,
                     };
                     if let Some(new_path) = &f.new_path {
-                        println!("  {}  [{}]  {} {}  →  {}", ts, f.source, action_label, f.path, new_path);
+                        println!("  {}  [{}]  {}  {}  →  {}", ts, f.source, action_label, f.path, new_path);
                     } else {
-                        println!("  {}  [{}]  {} {}", ts, f.source, action_label, f.path);
+                        println!("  {}  [{}]  {}  {}", ts, f.source, action_label, f.path);
                     }
                 }
             }

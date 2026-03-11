@@ -24,7 +24,6 @@ const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 /// stable when new settings are added.
 #[derive(Clone, Copy)]
 pub struct WorkerConfig {
-    pub log_batch_detail_limit: usize,
     pub request_timeout: std::time::Duration,
     pub inline_threshold_bytes: u64,
     pub archive_batch_size: usize,
@@ -388,14 +387,6 @@ fn process_request_phase1(
 
     tracing::debug!("{tag} start: {} files, {} deletes, {} renames", n_files, n_deletes, n_renames);
 
-    if n_files <= cfg.log_batch_detail_limit {
-        for f in &request.files {
-            tracing::info!("{tag} indexing {}", f.path);
-        }
-    } else if n_files > 0 {
-        tracing::info!("{tag} indexing {} files", n_files);
-    }
-
     let db_path = data_dir.join("sources").join(format!("{}.db", request.source));
     let mut conn = db::open(&db_path)?;
 
@@ -436,15 +427,17 @@ fn process_request_phase1(
         }
         let file_start = std::time::Instant::now();
         match pipeline::process_file_phase1(&mut conn, file, cfg.inline_threshold_bytes) {
-            Ok(()) => {
+            Ok(outcome) => {
                 successfully_indexed.push(file.path.clone());
                 // Track adds vs modifies for the activity log.
                 // Skip mtime=0 archive sentinels and composite archive-member paths.
+                // Use the server-determined outcome (not file.is_new from the client)
+                // so the activity log is accurate regardless of client binary version.
                 if file.mtime != 0 && !is_composite(&file.path) {
-                    if file.is_new {
-                        activity_added.push(file.path.clone());
-                    } else {
-                        activity_modified.push(file.path.clone());
+                    match outcome {
+                        pipeline::Phase1Outcome::New      => activity_added.push(file.path.clone()),
+                        pipeline::Phase1Outcome::Modified => activity_modified.push(file.path.clone()),
+                        pipeline::Phase1Outcome::Skipped  => {} // stale mtime: no activity to log
                     }
                 }
             }

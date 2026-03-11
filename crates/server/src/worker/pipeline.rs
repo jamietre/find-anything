@@ -11,13 +11,24 @@ use find_common::path::{composite_like_prefix, is_composite};
 
 // ── Public entry points ───────────────────────────────────────────────────────
 
+/// Outcome returned by `process_file_phase1` / `process_file_phase1_fallback`.
+/// Used by the caller to decide how to log this file in the activity log.
+pub(super) enum Phase1Outcome {
+    /// Path was not previously in the `files` table — this is the first index.
+    New,
+    /// Path already existed in the `files` table — this is a re-index.
+    Modified,
+    /// Stale-mtime guard: incoming mtime < stored mtime; nothing was written.
+    Skipped,
+}
+
 /// Write a single file's metadata and content lines to SQLite.
 /// Thin wrapper that calls `process_file_phase1_fallback` with `skip_inner_delete = false`.
 pub(super) fn process_file_phase1(
     conn: &mut Connection,
     file: &IndexFile,
     inline_threshold_bytes: u64,
-) -> Result<()> {
+) -> Result<Phase1Outcome> {
     process_file_phase1_fallback(conn, file, false, inline_threshold_bytes)
 }
 
@@ -28,7 +39,7 @@ pub(super) fn process_file_phase1_fallback(
     file: &IndexFile,
     skip_inner_delete: bool,
     inline_threshold_bytes: u64,
-) -> Result<()> {
+) -> Result<Phase1Outcome> {
     let now_secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
@@ -57,6 +68,17 @@ pub(super) fn process_file_phase1_fallback(
         tx.execute("DELETE FROM files WHERE path LIKE ?1", rusqlite::params![like_pat])?;
         tx.commit()?;
     }
+
+    // Single query for both the existing record id and its stored mtime.
+    // Used for: dedup outcome, stale-mtime guard, chunk-removal queue, and
+    // Phase1Outcome (New vs Modified) — avoids two separate SELECT round-trips.
+    let existing_record: Option<(i64, i64)> = conn.query_row(
+        "SELECT id, mtime FROM files WHERE path = ?1",
+        rusqlite::params![file.path],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional()?;
+    let existing_id    = existing_record.map(|(id, _)| id);
+    let stored_mtime   = existing_record.map(|(_, mtime)| mtime);
 
     // Dedup check: if another canonical with the same content hash exists,
     // register this file as an alias and skip chunk/lines/FTS writes.
@@ -90,32 +112,20 @@ pub(super) fn process_file_phase1_fallback(
                     canonical_id,
                 ],
             )?;
-            return Ok(());
+            return Ok(if existing_id.is_none() { Phase1Outcome::New } else { Phase1Outcome::Modified });
         }
     }
 
     // Stale-mtime guard: skip if the stored mtime is already newer.
-    let stored_mtime: Option<i64> = conn.query_row(
-        "SELECT mtime FROM files WHERE path = ?1",
-        rusqlite::params![file.path],
-        |row| row.get(0),
-    ).optional()?;
     if let Some(stored) = stored_mtime {
         if file.mtime > 0 && file.mtime < stored {
             tracing::debug!(
                 "skipping stale upsert for {} (incoming mtime={} < stored={})",
                 file.path, file.mtime, stored
             );
-            return Ok(());
+            return Ok(Phase1Outcome::Skipped);
         }
     }
-
-    // Collect old chunk refs for this file and queue them for removal.
-    let existing_id: Option<i64> = conn.query_row(
-        "SELECT id FROM files WHERE path = ?1",
-        rusqlite::params![file.path],
-        |row| row.get(0),
-    ).optional()?;
 
     // Decide: inline vs deferred archive storage.
     let total_content_bytes: usize = file.lines.iter().map(|l| l.content.len()).sum();
@@ -227,7 +237,7 @@ pub(super) fn process_file_phase1_fallback(
     tx.commit()?;
     super::warn_slow(t_fts, 10, "fts_insert_phase1", &file.path);
 
-    Ok(())
+    Ok(if existing_id.is_none() { Phase1Outcome::New } else { Phase1Outcome::Modified })
 }
 
 // ── Helper constructors ───────────────────────────────────────────────────────
