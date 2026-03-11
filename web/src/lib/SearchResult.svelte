@@ -126,7 +126,7 @@
 		title={result.line_number > 0 ? `Open file at line ${result.line_number}` : 'Open file'}
 	>
 		<span class="badge">{result.source}</span>
-		<span class="file-path">{displayPath(result)}</span>
+		<span class="file-path" title={displayPath(result)}>{displayPath(result)}</span>
 		{#if hits.length === 1 && hits[0].line_number > 0}
 			<span class="line-ref">:{hits[0].line_number}</span>
 		{:else if hits.length > 1}
@@ -249,8 +249,8 @@
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
-		flex-shrink: 0;
-		max-width: 60%;
+		flex: 1;
+		min-width: 0;
 	}
 
 	.line-ref {

@@ -253,6 +253,7 @@
 		searching = true;
 		searchError = null;
 		searchId += 1;
+		const mySearchId = searchId;
 		noMoreResults = false;
 		loadOffset = 0;
 		if (push) {
@@ -261,17 +262,19 @@
 		}
 		try {
 			const resp = await search({ q: apiQuery, mode: m, sources: srcs, kinds: selectedKinds, limit: 50, offset: 0, dateFrom: effectiveDateFrom, dateTo: effectiveDateTo });
+			if (mySearchId !== searchId) return;
 			results = resp.results;
 			totalResults = resp.total;
 			loadOffset = resp.results.length; // server cursor starts after page 0
 			if (resp.results.length === 0) noMoreResults = true;
 			if (push) fileView = null;
 		} catch (e) {
+			if (mySearchId !== searchId) return;
 			searchError = String(e);
 			results = []; totalResults = 0; noMoreResults = true; loadOffset = 0;
 			if (push) fileView = null;
 		} finally {
-			searching = false;
+			if (mySearchId === searchId) searching = false;
 		}
 		// Auto-fill viewport if the first page doesn't reach the scroll threshold.
 		await tick();

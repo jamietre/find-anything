@@ -103,6 +103,9 @@ pub async fn run_watch(config: &ClientConfig, opts: &WatchOptions) -> Result<()>
 
     // Accumulator: path → what to do.
     let mut pending: HashMap<PathBuf, AccumulatedKind> = HashMap::new();
+    // Paths whose very first event in this window was a Create (i.e. never previously indexed).
+    // Used by rename detection to avoid sending a rename when the old path was ephemeral.
+    let mut first_seen_creates: HashSet<PathBuf> = HashSet::new();
     // When the batch window opened (i.e. when the first event in this batch arrived).
     let mut window_start: Option<tokio::time::Instant> = None;
 
@@ -112,7 +115,7 @@ pub async fn run_watch(config: &ClientConfig, opts: &WatchOptions) -> Result<()>
             // Nothing pending — block indefinitely waiting for the first event.
             match rx.recv().await {
                 Some(ev) => {
-                    accumulate(&mut pending, ev);
+                    accumulate(&mut pending, &mut first_seen_creates, ev);
                     window_start = Some(tokio::time::Instant::now());
                     false
                 }
@@ -128,7 +131,7 @@ pub async fn run_watch(config: &ClientConfig, opts: &WatchOptions) -> Result<()>
             } else {
                 // Wait for either a new event or the window to expire.
                 match tokio::time::timeout(remaining, rx.recv()).await {
-                    Ok(Some(ev)) => { accumulate(&mut pending, ev); false }
+                    Ok(Some(ev)) => { accumulate(&mut pending, &mut first_seen_creates, ev); false }
                     Ok(None)     => break, // channel closed
                     Err(_)       => true,  // window expired
                 }
@@ -137,7 +140,7 @@ pub async fn run_watch(config: &ClientConfig, opts: &WatchOptions) -> Result<()>
 
         // Drain any immediately-available events before deciding to flush.
         while let Ok(ev) = rx.try_recv() {
-            accumulate(&mut pending, ev);
+            accumulate(&mut pending, &mut first_seen_creates, ev);
         }
 
         // Flush if the window expired or the batch has hit its size limit.
@@ -154,9 +157,10 @@ pub async fn run_watch(config: &ClientConfig, opts: &WatchOptions) -> Result<()>
 
         // Flush accumulated events.
         let mut batch = std::mem::take(&mut pending);
+        let fresh_creates = std::mem::take(&mut first_seen_creates);
 
         // Detect rename pairs and process them; removes paired entries from batch.
-        process_renames(&mut batch, &source_map, &config.scan, &config.watch.extractor_dir, &api).await;
+        process_renames(&mut batch, &source_map, &config.scan, &config.watch.extractor_dir, &api, &fresh_creates).await;
 
         for (abs_path, kind) in batch {
             // Skip paths that contain '::' — those are archive member paths
@@ -310,7 +314,11 @@ use crate::path_util::{normalise_path_sep, normalise_root};
 
 // ── Event accumulation ────────────────────────────────────────────────────────
 
-fn accumulate(pending: &mut HashMap<PathBuf, AccumulatedKind>, res: notify::Result<Event>) {
+fn accumulate(
+    pending: &mut HashMap<PathBuf, AccumulatedKind>,
+    first_seen_creates: &mut HashSet<PathBuf>,
+    res: notify::Result<Event>,
+) {
     let event = match res {
         Ok(e) => e,
         Err(e) => { warn!("watch error: {e:#}"); return; }
@@ -339,12 +347,18 @@ fn accumulate(pending: &mut HashMap<PathBuf, AccumulatedKind>, res: notify::Resu
             _ => continue,
         };
 
-        match pending.entry(path) {
+        match pending.entry(path.clone()) {
             Entry::Occupied(mut occ) => {
                 let existing = occ.get_mut();
                 *existing = collapse(existing, &new_kind);
             }
             Entry::Vacant(vac) => {
+                // Track paths whose first event was a Create — these were never previously
+                // indexed, so a rename of such a path should index the destination rather
+                // than sending a path-rename that the server has no record to rename.
+                if new_kind == AccumulatedKind::Create {
+                    first_seen_creates.insert(path);
+                }
                 vac.insert(new_kind);
             }
         }
@@ -475,6 +489,7 @@ async fn process_renames(
     global_scan: &ScanConfig,
     extractor_dir: &Option<String>,
     api: &ApiClient,
+    first_seen_creates: &HashSet<PathBuf>,
 ) {
     // --- Directory rename detection ---
     // Look for a Delete path paired with an Update path that is a directory,
@@ -625,6 +640,20 @@ async fn process_renames(
         };
         if is_excluded(new_path, source_map, &eff_excludes) {
             continue; // excluded by per-dir glob — fall back to plain delete
+        }
+
+        // If the old path was first seen as a Create in this window, it was never
+        // previously indexed (e.g. a browser's temporary download file that was
+        // renamed to its final name before the batch flushed). Sending a rename
+        // would be a no-op on the server. Instead, upgrade the new path's
+        // accumulated kind to Create so the main loop indexes it as a new file.
+        if first_seen_creates.contains(old_path) {
+            info!("create+rename: indexing new file {}", new_rel);
+            file_handled.insert(old_path.clone());
+            if let Some(kind) = batch.get_mut(new_path) {
+                *kind = AccumulatedKind::Create;
+            }
+            continue;
         }
 
         info!("rename: {} → {}", old_rel, new_rel);
