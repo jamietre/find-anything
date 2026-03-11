@@ -113,6 +113,8 @@ pub struct ClientConfig {
     pub log: LogConfig,
     #[serde(default)]
     pub tray: TrayConfig,
+    #[serde(default)]
+    pub cli: CliConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -443,6 +445,22 @@ impl Default for TrayConfig {
 }
 
 fn default_tray_poll_interval_ms() -> u64 { 1000 }
+
+/// CLI tool configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CliConfig {
+    /// Poll interval for `--follow` / `--watch` modes (seconds). Default: 2.0.
+    #[serde(default = "default_cli_poll_interval_secs")]
+    pub poll_interval_secs: f64,
+}
+
+impl Default for CliConfig {
+    fn default() -> Self {
+        Self { poll_interval_secs: default_cli_poll_interval_secs() }
+    }
+}
+
+fn default_cli_poll_interval_secs() -> f64 { 2.0 }
 
 fn default_batch_window_secs() -> f64       { client_defaults().watch.batch_window_secs }
 fn default_scan_interval_hours() -> f64     { client_defaults().watch.scan_interval_hours }

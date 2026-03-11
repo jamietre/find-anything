@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use find_common::api::{BulkRequest, IndexingFailure, WorkerStatus};
+use find_common::api::{BulkRequest, IndexingFailure, RecentFile, WorkerStatus};
 use find_common::path::is_composite;
 
 use crate::archive::SharedArchiveState;
@@ -45,6 +45,19 @@ pub(super) fn warn_slow(start: std::time::Instant, threshold_secs: u64, step: &s
 }
 
 type StatusHandle = std::sync::Arc<std::sync::Mutex<WorkerStatus>>;
+
+/// Runtime handles passed to the inbox worker at startup.
+/// Bundles the Arc channels and broadcast sender so `start_inbox_worker`
+/// stays under the clippy argument-count limit.
+pub struct WorkerHandles {
+    pub status: StatusHandle,
+    pub archive_state: Arc<SharedArchiveState>,
+    pub inbox_paused: Arc<AtomicBool>,
+    pub deleted_bytes_since_scan: Arc<AtomicU64>,
+    pub delete_notify: Arc<tokio::sync::Notify>,
+    /// Broadcast channel for live activity events sent to SSE subscribers.
+    pub recent_tx: tokio::sync::broadcast::Sender<RecentFile>,
+}
 
 /// Ensure inbox subdirectories exist on startup.
 ///
@@ -90,12 +103,9 @@ pub async fn recover_stranded_requests(data_dir: &Path) -> Result<()> {
 pub async fn start_inbox_worker(
     data_dir: PathBuf,
     cfg: WorkerConfig,
-    status: StatusHandle,
-    shared_archive_state: Arc<SharedArchiveState>,
-    inbox_paused: Arc<AtomicBool>,
-    deleted_bytes_since_scan: Arc<AtomicU64>,
-    delete_notify: Arc<tokio::sync::Notify>,
+    handles: WorkerHandles,
 ) -> Result<()> {
+    let WorkerHandles { status, archive_state: shared_archive_state, inbox_paused, deleted_bytes_since_scan, delete_notify, recent_tx } = handles;
     let inbox_dir = data_dir.join("inbox");
     let failed_dir = inbox_dir.join("failed");
     let to_archive_dir = inbox_dir.join("to-archive");
@@ -135,6 +145,7 @@ pub async fn start_inbox_worker(
                     cfg,
                     &archive_notify,
                     Arc::clone(&shared),
+                    recent_tx.clone(),
                 )
                 .await;
                 // Signal the router that this path is done (success or failure).
@@ -285,13 +296,14 @@ async fn process_request_async(
     cfg: WorkerConfig,
     archive_notify: &Arc<tokio::sync::Notify>,
     shared_archive_state: Arc<SharedArchiveState>,
+    recent_tx: tokio::sync::broadcast::Sender<RecentFile>,
 ) {
     let status_reset = status.clone();
 
     let blocking_task = tokio::task::spawn_blocking({
         let data_dir = data_dir.to_path_buf();
         let request_path = request_path.to_path_buf();
-        move || process_request_phase1(&data_dir, &request_path, &status, cfg, &shared_archive_state)
+        move || process_request_phase1(&data_dir, &request_path, &status, cfg, &shared_archive_state, &recent_tx)
     });
 
     let timed_result = tokio::time::timeout(cfg.request_timeout, blocking_task).await;
@@ -360,6 +372,7 @@ fn process_request_phase1(
     status: &StatusHandle,
     cfg: WorkerConfig,
     shared_archive_state: &Arc<SharedArchiveState>,
+    recent_tx: &tokio::sync::broadcast::Sender<RecentFile>,
 ) -> Result<()> {
     let request_start = std::time::Instant::now();
 
@@ -500,6 +513,22 @@ fn process_request_phase1(
             .collect();
         if let Err(e) = db::log_activity(&conn, now, &activity_added, &activity_modified, &deleted, &renamed, cfg.activity_log_max_entries) {
             tracing::warn!("Failed to write activity log: {e:#}");
+        } else {
+            // Broadcast each event to any connected SSE clients.
+            // `send` returns Err only when there are no receivers — ignore it.
+            let source = &request.source;
+            for path in &activity_added {
+                let _ = recent_tx.send(RecentFile { source: source.clone(), path: path.clone(), indexed_at: now, action: "added".into(),    new_path: None });
+            }
+            for path in &activity_modified {
+                let _ = recent_tx.send(RecentFile { source: source.clone(), path: path.clone(), indexed_at: now, action: "modified".into(), new_path: None });
+            }
+            for path in &deleted {
+                let _ = recent_tx.send(RecentFile { source: source.clone(), path: path.clone(), indexed_at: now, action: "deleted".into(),  new_path: None });
+            }
+            for (old, new) in &renamed {
+                let _ = recent_tx.send(RecentFile { source: source.clone(), path: old.clone(),  indexed_at: now, action: "renamed".into(),  new_path: Some(new.clone()) });
+            }
         }
     }
 

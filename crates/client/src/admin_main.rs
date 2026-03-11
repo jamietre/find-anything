@@ -77,6 +77,9 @@ enum Command {
         /// Sort by file modification time (mtime) instead of index time
         #[arg(long)]
         mtime: bool,
+        /// Stay connected and print new entries as they arrive (server-sent events)
+        #[arg(long, short = 'f')]
+        follow: bool,
     },
     /// Delete all indexed data for a source (DB + content chunks in ZIP archives)
     DeleteSource {
@@ -134,10 +137,11 @@ async fn main() -> Result<()> {
                     print!("{}", format_status(&stats));
                 }
             } else {
-                // Watch mode: clear screen and redraw from top every 2 seconds.
+                // Watch mode: clear screen and redraw from top on each poll.
                 // Always do a full clear so lines that got shorter don't leave
                 // trailing characters from the previous draw.
                 use std::io::Write;
+                let poll = std::time::Duration::from_secs_f64(config.cli.poll_interval_secs);
                 loop {
                     match client.get_stats().await {
                         Ok(stats) => {
@@ -150,7 +154,7 @@ async fn main() -> Result<()> {
                         }
                     }
                     tokio::select! {
-                        _ = tokio::time::sleep(std::time::Duration::from_secs(2)) => {}
+                        _ = tokio::time::sleep(poll) => {}
                         _ = tokio::signal::ctrl_c() => { println!(); break; }
                     }
                 }
@@ -429,32 +433,33 @@ async fn main() -> Result<()> {
             }
         }
 
-        Command::Recent { limit, mtime } => {
+        Command::Recent { limit, mtime, follow } => {
             let client = api::ApiClient::new(&config.server.url, &config.server.token);
-            let files = client.get_recent(limit, mtime).await.context("fetching recent files")?;
-            if args.json {
-                println!("{}", serde_json::to_string_pretty(&files)?);
-            } else if files.is_empty() {
-                println!("No recent activity.");
+            if follow {
+                // SSE follow mode: stream live events, print as they arrive.
+                // The initial burst (last `limit` entries) is sent by the server
+                // before the live stream begins, matching `tail -f` semantics.
+                eprintln!("Streaming activity (Ctrl+C to stop)…");
+                let stream = client.stream_recent(limit, mtime, |f| {
+                    print_recent_line(&f);
+                });
+                tokio::select! {
+                    result = stream => {
+                        if let Err(e) = result { eprintln!("Stream error: {e:#}"); }
+                    }
+                    _ = tokio::signal::ctrl_c() => { eprintln!(); }
+                }
             } else {
-                let label = if mtime { "modified" } else { "activity" };
-                println!("Recent {label} ({} files):", files.len());
-                for f in &files {
-                    let ts = chrono::DateTime::from_timestamp(f.indexed_at, 0)
-                        .map(|utc| chrono::DateTime::<chrono::Local>::from(utc)
-                            .format("%Y-%m-%d %H:%M").to_string())
-                        .unwrap_or_else(|| f.indexed_at.to_string());
-                    let action_label = match f.action.as_str() {
-                        "added"    => "added   ",
-                        "modified" => "modified",
-                        "deleted"  => "deleted ",
-                        "renamed"  => "renamed ",
-                        other      => other,
-                    };
-                    if let Some(new_path) = &f.new_path {
-                        println!("  {}  [{}]  {}  {}  →  {}", ts, f.source, action_label, f.path, new_path);
-                    } else {
-                        println!("  {}  [{}]  {}  {}", ts, f.source, action_label, f.path);
+                let files = client.get_recent(limit, mtime).await.context("fetching recent files")?;
+                if args.json {
+                    println!("{}", serde_json::to_string_pretty(&files)?);
+                } else if files.is_empty() {
+                    println!("No recent activity.");
+                } else {
+                    let label = if mtime { "modified" } else { "activity" };
+                    println!("Recent {label} ({} files):", files.len());
+                    for f in &files {
+                        print_recent_line(f);
                     }
                 }
             }
@@ -462,6 +467,25 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+fn print_recent_line(f: &find_common::api::RecentFile) {
+    let ts = chrono::DateTime::from_timestamp(f.indexed_at, 0)
+        .map(|utc| chrono::DateTime::<chrono::Local>::from(utc)
+            .format("%Y-%m-%d %H:%M").to_string())
+        .unwrap_or_else(|| f.indexed_at.to_string());
+    let action_label = match f.action.as_str() {
+        "added"    => "added   ",
+        "modified" => "modified",
+        "deleted"  => "deleted ",
+        "renamed"  => "renamed ",
+        other      => other,
+    };
+    if let Some(new_path) = &f.new_path {
+        println!("  {}  [{}]  {}  {}  →  {}", ts, f.source, action_label, f.path, new_path);
+    } else {
+        println!("  {}  [{}]  {}  {}", ts, f.source, action_label, f.path);
+    }
 }
 
 fn format_status(stats: &find_common::api::StatsResponse) -> String {

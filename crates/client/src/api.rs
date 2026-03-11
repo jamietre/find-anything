@@ -172,6 +172,46 @@ impl ApiClient {
             .map(|r| r.files)
     }
 
+    /// GET /api/v1/recent/stream — SSE stream of live activity events.
+    ///
+    /// Connects to the server-sent-events endpoint and calls `on_event` for
+    /// each event received.  Runs until the connection drops or the returned
+    /// future is cancelled (e.g. via `tokio::select!` with a ctrl-c branch).
+    pub async fn stream_recent<F>(&self, limit: usize, sort_by_mtime: bool, mut on_event: F) -> Result<()>
+    where
+        F: FnMut(RecentFile),
+    {
+        let sort = if sort_by_mtime { "mtime" } else { "indexed" };
+        let mut resp = self.client
+            .get(self.url(&format!("/api/v1/recent/stream?limit={limit}&sort={sort}")))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("GET /api/v1/recent/stream")?
+            .error_for_status()
+            .context("recent/stream status")?;
+
+        // Parse SSE frames: lines starting with "data:" separated by blank lines.
+        let mut buf = Vec::<u8>::new();
+        while let Some(chunk) = resp.chunk().await.context("reading SSE stream")? {
+            buf.extend_from_slice(&chunk);
+            // Process all complete events (terminated by \n\n).
+            while let Some(pos) = find_double_newline(&buf) {
+                if let Ok(event_str) = std::str::from_utf8(&buf[..pos]) {
+                    for line in event_str.lines() {
+                        if let Some(data) = line.strip_prefix("data:") {
+                            if let Ok(file) = serde_json::from_str::<RecentFile>(data.trim()) {
+                                on_event(file);
+                            }
+                        }
+                    }
+                }
+                buf.drain(..pos + 2);
+            }
+        }
+        Ok(())
+    }
+
     /// GET /api/v1/admin/inbox
     pub async fn inbox_status(&self) -> Result<InboxStatusResponse> {
         self.client
@@ -440,4 +480,9 @@ fn version_meets_minimum(client_ver: &str, min_ver: &str) -> bool {
         (Some(c), Some(m)) => c >= m,
         _ => true,
     }
+}
+
+/// Find the position of the first `\n\n` sequence in `buf`.
+fn find_double_newline(buf: &[u8]) -> Option<usize> {
+    buf.windows(2).position(|w| w == b"\n\n")
 }

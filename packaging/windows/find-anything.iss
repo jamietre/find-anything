@@ -227,7 +227,10 @@ begin
     '# extractor_dir     = ""   # Path to find-extract-* binaries (default: auto-detect)' + NL +
     NL +
     '[tray]' + NL +
-    '# poll_interval_ms = 1000   # Refresh interval while popup is open (ms)' + NL;
+    '# poll_interval_ms = 1000   # Refresh interval while popup is open (ms)' + NL +
+    NL +
+    '[cli]' + NL +
+    '# poll_interval_secs = 2.0  # Poll interval for --follow / --watch modes (seconds)' + NL;
 end;
 
 // ── Create custom wizard pages ────────────────────────────────────────────────

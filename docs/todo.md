@@ -1,0 +1,78 @@
+# TODO
+
+Stream of consciousness for bugfixes and features approaching V1
+
+## Bugs/Enhancements
+
+[ ] BUG: Fetching existing file list seems to not be targeted to a particular tree (e.g. find-scan /path/to/dir)
+[ ] BUG: Monhegan Lighthouse DOry 2005.tif can't be shown
+[ ] FEAT: Add query syntax "type: image" with intellisense
+[ ] FEAT:Add query syntax "path: /backups/" with intellisense
+[ ] FEAT: UX is bad when showing full context for large text documents. Use some kind of scroll pattern to not render the whole thing onscreen
+[ ] FEAT: add -f/--follow to find-recent/ /btw
+[ ] FEAT: make "find-admin inbox" have subcommands
+[ ] FEAT: Run compaction scan only once a day, or on demand
+[ ] BUG: App ID is not persisted, each rebuild makes it not show up in pinned taskbar items
+[ ] BUG: Windows shows "stop watcher" before connecting to service, it should know right away status of watcher
+[ ] FEAT: Give higher priority to more recently modified documents
+[ ] FEAT: UX to retry failed scans (admin page)
+[ ] FEAT: Render SVG by default
+[ ] FEAT: Add "format json' button
+[ ] Searching on ".png" doesn't work is that improvable
+[ ] Include **/AppData/**, **/bin/**, **/obj/**, **/\*.log by default, "**/pnpm/\*\*", vscode-remote-wsl
+[ ] Unit test for handling of retrieveal duplicated items in index
+[ ] Duplicate file link missing from one file?
+[ ] Do we actually want to recode innner archives?
+[ ] Do we actually want to index inner archives?
+[ ] refactor front end to split svg assets out into files, etc
+[ ] Server install should also be able to chain client install
+[ ] Add providing uname/password for share to config for each source
+[ ] find-watch should buffer changes for some configurable # of seconds before sending the update
+[ ] Inline extraction of safe file types instread of making subporocesses
+[ ] 2026-03-05T04:36:02.219180Z WARN find_scan::scan: walk error: IO error for operation on C:/Users\Administrator: Access is denied. (os error 5)
+[ ] Code quality: avoid optional typescript parameters; default values should be set at as high a level as possible and propagated conclusively. Add to claude.md
+[ ] Custom protocol handler (chrome) to allow exploring the file location. Requires client config for roots which we just removed
+
+### Major features/Integration
+
+[ ] WinGet
+[ ] Use Signpath code signing
+[ ] Stand up demo on fly.io
+
+### Completed Items
+
+[x] BUG: Searches are case sensitiive
+[x] FEAT: Add an X to search box
+[x] FEAT: emit version with each tool --version
+[x] FEAT: Show full path when hovering in search results view
+[x] BUG: File path in search detail view cuts off on right, should go multiline
+[x] FEAT: find-admin --watch feature
+[x] FEAT: UX - sources should have no triangle. When selected, they become bold. Font slightly bigger than tree font.
+[x] BUG: Address locked file handling
+[x] BUG: Ensure that we don't reindex something with a datestamp older than file was actually indexed in our database
+[x] FEAT:In this log, don't emit pieces that have 0 files changed: 2026-03-07T02:49:24.771634Z INFO find_scan::scan: processed 5724 files (5723 unchanged, 1 new, 0 modified, 0 upgraded) so far, 0 in current batch...
+[x] CHORE: Remove Base URL feature from config
+[x] BUG: Installer on windows doens't really work, there is no service created.
+[x] BUG: Windows - left-clcking shows only filename - need path. UX is weird, need a scrollbar. Need time,.
+[x] FEAT: If a path is truncated, the "copy path" icon should still be visible flushed right. So if the path fits onscreen, the copyt icon should be to the right of the end ofit, but if the path is truncated the icon should remain onscreen flished right, after the truncated path.
+[x] BUG: The tree view should scroll indendently of search results
+[x] FEAT: Add "include" also to [scan] for clients. So we can make .index that only includes certain things
+[x] BUG: UX - our UX update about focus results in page being unclickable except for scrollbars
+[x] FEAT: `tool --version` should also show (release) or commit hash, same as in web UX
+[x] FEAT: Add link to github repo in Find Anything watcher
+[x] FEAT: default windows config should include commented-out options
+[x] FEAT: Self-update in about
+[x] FEAT: Natural language search terms -- start with chrono-node for natural language date queries 1. should be able to type "automation or foo" in the last 2 days 2. should return a search construct that is compatible 3. need to add 'or' searches, compose or/and/etc 4. need config for llm - openai? local?
+[x] CHORE: Remove baseurl & baseurl overrides in ux
+[x] FEAT: Fix the search bar at the top of the screen
+[x] FEAT: Copy to clipoboard icon should be immediately at end fo filename, and doesn't work, and should show tooltip "copied" that disappears in 2 seconds
+[x] FEAT: When multiple results in a file, only show one entry, but show multiple line numbers :123,456 and make them clickable to change context.
+[x] FEAT: Show build hash in about
+[x] BUG: a file with 3 lines, and a context window of +/-2 shows with no context
+[x] FEAT: find-scan should allow a directory as argument, not just a file
+[x] FEAT: Show timestamp on search result
+[x] FEAT: When clicking a PDF from navigator, show it immediately, only show extracted text first when navigating from search resuilt
+[x] FEAT: Limit results to mtime range
+[x] FEAT: Add "exclude_extra = []' to default config
+
+#### Ecosystem

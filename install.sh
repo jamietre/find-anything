@@ -259,6 +259,9 @@ path = "$DIR_ESC"
 
 [tray]
 # poll_interval_ms = 1000   # Refresh interval while popup is open (ms)
+
+[cli]
+# poll_interval_secs = 2.0  # Poll interval for --follow / --watch modes (seconds)
 EOF
 
 echo ""

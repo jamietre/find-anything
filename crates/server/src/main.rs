@@ -22,7 +22,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 use clap::{CommandFactory, FromArgMatches, Parser};
 
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use find_common::api::WorkerStatus;
+use find_common::api::{RecentFile, WorkerStatus};
 use find_common::config::{default_server_config_path, parse_server_config, ServerAppConfig};
 use archive::SharedArchiveState;
 use find_common::logging::LogIgnoreFilter;
@@ -115,6 +115,9 @@ pub struct AppState {
     pub under_systemd: bool,
     /// Cached result of the last GitHub update check (refreshed at most once per hour).
     pub update_cache: tokio::sync::RwLock<Option<CachedUpdateCheck>>,
+    /// Broadcast channel for live activity events (SSE / `find-admin recent --follow`).
+    /// The worker publishes here after each successful `log_activity` write.
+    pub recent_tx: tokio::sync::broadcast::Sender<RecentFile>,
 }
 
 #[tokio::main]
@@ -158,6 +161,9 @@ async fn main() -> Result<()> {
     let compaction_stats = Arc::new(std::sync::RwLock::new(initial_compaction_stats));
     let deleted_bytes_since_scan = Arc::new(AtomicU64::new(0));
     let delete_notify = Arc::new(tokio::sync::Notify::new());
+    // Broadcast channel for live activity events.  Capacity 256: if all
+    // subscribers are slow we drop old events rather than blocking the worker.
+    let (recent_tx, _) = tokio::sync::broadcast::channel::<RecentFile>(256);
     let state = Arc::new(AppState {
         config,
         data_dir: data_dir.clone(),
@@ -169,6 +175,7 @@ async fn main() -> Result<()> {
         delete_notify: Arc::clone(&delete_notify),
         under_systemd,
         update_cache: tokio::sync::RwLock::new(None),
+        recent_tx,
     });
 
     // Always recover stranded requests first — this moves any files left in
@@ -188,15 +195,19 @@ async fn main() -> Result<()> {
         archive_batch_size: state.config.server.archive_batch_size,
         activity_log_max_entries: state.config.server.activity_log_max_entries,
     };
+    let worker_handles = worker::WorkerHandles {
+        status: worker_status,
+        archive_state,
+        inbox_paused,
+        deleted_bytes_since_scan,
+        delete_notify,
+        recent_tx: state.recent_tx.clone(),
+    };
     tokio::spawn(async move {
         if let Err(e) = worker::start_inbox_worker(
             worker_data_dir,
             worker_cfg,
-            worker_status,
-            archive_state,
-            inbox_paused,
-            deleted_bytes_since_scan,
-            delete_notify,
+            worker_handles,
         ).await {
             tracing::error!("Inbox worker failed: {e}");
         }
@@ -237,6 +248,7 @@ async fn main() -> Result<()> {
         .route("/api/v1/stats",          get(routes::get_stats))
         .route("/api/v1/errors",         get(routes::get_errors))
         .route("/api/v1/recent",         get(routes::get_recent))
+        .route("/api/v1/recent/stream",  get(routes::stream_recent))
         .route("/api/v1/tree",           get(routes::list_dir))
         .route("/api/v1/raw",            get(routes::get_raw))
         .route("/api/v1/auth/session",   post(routes::create_session).delete(routes::delete_session))
