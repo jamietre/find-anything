@@ -251,7 +251,14 @@ pub struct AppSettingsResponse {
     /// backwards compatibility with older servers that don't send this field.
     #[serde(default)]
     pub min_client_version: String,
+    /// Maximum markdown file size (KB) the UI will render as formatted HTML.
+    /// Files larger than this are shown as plain text.
+    /// Defaults to 512 for backwards compatibility with older servers.
+    #[serde(default = "default_max_markdown_render_kb")]
+    pub max_markdown_render_kb: usize,
 }
+
+fn default_max_markdown_render_kb() -> usize { 512 }
 
 // ── Stats types ───────────────────────────────────────────────────────────────
 

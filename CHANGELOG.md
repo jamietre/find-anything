@@ -11,6 +11,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **Text normalization** — the server now normalizes all text content before writing it to ZIP archives; minified JSON/TOML files are pretty-printed using built-in formatters; any file type can be routed through an optional external formatter binary (e.g. biome, prettier, rustfmt) configured in `server.toml`; lines exceeding `normalization.max_line_length` (default 120) are word-wrapped; markdown files are exempt (line structure is semantically meaningful); normalization runs in phase 1 and the normalized content is written to a new `.gz` in `to-archive/` so the archive phase reads pre-formatted content without re-invoking any formatter
+- **`max_markdown_render_kb` setting** — added to `ServerAppSettings` (default 512); exposed via `GET /api/v1/settings`; the file viewer skips HTML rendering and shows plain text when a markdown file exceeds this threshold, preventing browser stalls from very large files
+- **Text file "Download" button** — the `FileViewer` toolbar now shows a `Download` link for text files (replaces the non-applicable `View Original` toggle); PDF and image files keep their existing `View Original` / `View Extracted` / `View Split` toggles unchanged
+- **HTTP request tracing** — `tower_http::TraceLayer` added to the axum router; each request logs method + URI on arrival and status + elapsed on completion at DEBUG level; enable with `RUST_LOG=tower_http=debug`
+- **Worker debug timing logs** — a `timed!` macro wraps all expensive steps in both the indexing phase (`read+decode gz`, `open db`, `acquire source lock`, `delete/rename paths`, `normalize <file>`, `index N files`, `cleanup writes`, `write normalized gz`) and the archive phase (`parse gz files`, `take pending chunk removes`, `remove N chunks from ZIPs`, `append chunks`, `update line refs`); each step logs elapsed ms at DEBUG level
+- **`serde_json` `preserve_order` feature** — JSON objects are now pretty-printed in their original key order rather than alphabetically sorted; applies to the built-in JSON normalizer and all other `serde_json` serialization in the server
+
+### Changed
+
+- **`WorkerConfig` changed from `Copy` to `Clone`** — required to hold `NormalizationSettings` (which contains a `Vec`); all call sites updated to use explicit `.clone()`
+
 - **Activity log for `find-admin recent`** — each source DB now has an `activity_log` table recording add, modify, delete, and rename events for outer files; `GET /api/v1/recent` reads from it by default (falling back to `sort=mtime` for file-table ordering); `RecentFile` response gains `action` (`"added"` / `"modified"` / `"deleted"` / `"renamed"`) and `new_path` (for renames); `find-admin recent` output shows `+`/`~`/`-`/`→` action prefixes and old→new paths for renames; deleted and renamed files remain visible up to `server.activity_log_max_entries` events (default 10 000, pruned oldest-first)
 - **`IndexFile.is_new` field** — `find-scan` sets `is_new = true` when the server has no prior entry for a file (server_entry is None); `find-watch` adds `AccumulatedKind::Create` so OS create events are distinguished from modifies across the debounce window (`Create→Modify=Create`, `Create→Delete=Delete`, `Delete→Create=Create`); the server uses this field directly instead of a pre-batch DB lookup to log "added" vs "modified"
 

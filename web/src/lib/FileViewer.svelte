@@ -13,6 +13,7 @@
 	import { profile } from '$lib/profile';
 	import { parseImageDimensions } from '$lib/imageMeta';
 	import { marked } from 'marked';
+	import { maxMarkdownRenderKb } from '$lib/settingsStore';
 
 	export let source: string;
 	export let path: string;
@@ -117,8 +118,11 @@
 	// Markdown format preference
 	$: markdownFormat = $profile.markdownFormat ?? false;
 
-	// Render markdown to HTML
-	$: renderedMarkdown = markdownFormat && isMarkdown
+	// True when the markdown content exceeds the server-configured size cap.
+	$: markdownTooLarge = isMarkdown && rawContent.length > $maxMarkdownRenderKb * 1024;
+
+	// Render markdown to HTML (skipped when file exceeds size cap).
+	$: renderedMarkdown = markdownFormat && isMarkdown && !markdownTooLarge
 		? marked.parse(rawContent, { gfm: true, breaks: true })
 		: '';
 
@@ -223,12 +227,12 @@
 			<button class="toolbar-btn" on:click={toggleWordWrap} title="Toggle word wrap">
 				{wordWrap ? '⊟' : '⊞'} Wrap
 			</button>
-			{#if isMarkdown}
+			{#if isMarkdown && !markdownTooLarge}
 				<button class="toolbar-btn" on:click={toggleMarkdownFormat} title="Toggle markdown formatting">
-					📝 {markdownFormat ? 'Raw' : 'Format'}
+					{markdownFormat ? 'Plain' : 'Formatted'}
 				</button>
 			{/if}
-			{#if canViewInline}
+			{#if canViewInline && (fileKind === 'image' || fileKind === 'pdf')}
 				{#if fileKind === 'image'}
 					{#if imageFullWidth}
 						<button class="toolbar-btn" on:click={() => imageFullWidth = false}>View Split</button>
@@ -246,7 +250,7 @@
 				<a href={rawInlineUrl} download={memberFileName} class="toolbar-btn">Download</a>
 			{:else}
 				<a href={rawUrl} download={fileName} class="toolbar-btn">
-					{isArchiveMember || fileKind === 'archive' ? 'Download Archive' : 'Download Original'}
+					{isArchiveMember || fileKind === 'archive' ? 'Download Archive' : 'Download'}
 				</a>
 			{/if}
 			<div class="metadata">
@@ -300,7 +304,10 @@
 						{/each}
 					</div>
 				{/if}
-				{#if markdownFormat && isMarkdown}
+				{#if markdownTooLarge && markdownFormat}
+					<div class="no-content">File too large to render as markdown ({Math.round(rawContent.length / 1024)} KB &gt; {$maxMarkdownRenderKb} KB limit). Showing plain text.</div>
+				{/if}
+				{#if markdownFormat && isMarkdown && !markdownTooLarge}
 					<MarkdownViewer rendered={String(renderedMarkdown)} />
 				{:else if codeLines.length === 0 && metaLines.length === 0 && duplicatePaths.length === 0 && fileKind === 'archive' && !archivePath}
 					<!-- Archive root: show member listing inline -->

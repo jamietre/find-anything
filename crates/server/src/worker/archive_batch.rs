@@ -21,6 +21,16 @@ use crate::archive::{self, ArchiveManager, ChunkRef, SharedArchiveState};
 use crate::db;
 use super::WorkerConfig;
 
+macro_rules! timed {
+    ($tag:expr, $label:expr, $body:expr) => {{
+        tracing::debug!("{} → {}", $tag, $label);
+        let __t = std::time::Instant::now();
+        let __r = $body;
+        tracing::debug!("{} ← {} ({:.1}ms)", $tag, $label, __t.elapsed().as_secs_f64() * 1000.0);
+        __r
+    }};
+}
+
 // ── Public entry points ───────────────────────────────────────────────────────
 
 /// Scan `to_archive_dir` for `.gz` files, process up to `cfg.archive_batch_size`
@@ -82,16 +92,19 @@ fn process_archive_batch(
         request: BulkRequest,
     }
 
+    let tag = "[archive-batch]";
     let mut parsed_requests: Vec<ParsedRequest> = Vec::new();
-    for gz_path in gz_paths {
-        match parse_gz_request(gz_path) {
-            Ok(request) => parsed_requests.push(ParsedRequest { gz_path: gz_path.clone(), request }),
-            Err(e) => {
-                tracing::error!("Archive batch: failed to parse {}: {e:#}", gz_path.display());
-                // Skip this file but don't delete it — leave for manual inspection.
+    timed!(tag, format!("parse {} gz files", gz_paths.len()), {
+        for gz_path in gz_paths {
+            match parse_gz_request(gz_path) {
+                Ok(request) => parsed_requests.push(ParsedRequest { gz_path: gz_path.clone(), request }),
+                Err(e) => {
+                    tracing::error!("Archive batch: failed to parse {}: {e:#}", gz_path.display());
+                    // Skip this file but don't delete it — leave for manual inspection.
+                }
             }
         }
-    }
+    });
 
     if parsed_requests.is_empty() {
         // Delete any files that failed to parse (to avoid stuck queue).
@@ -121,8 +134,9 @@ fn process_archive_batch(
 
         // --- SQLite write segment 1: drain pending_chunk_removes ---
         // Hold source_lock only for this write transaction; release before ZIP I/O.
+        let src_tag = format!("[archive:{source}]");
         let source_lock = shared_archive_state.source_lock(source);
-        let chunk_removes = {
+        let chunk_removes = timed!(src_tag, "take pending chunk removes", {
             let _guard = source_lock.lock()
                 .map_err(|_| anyhow::anyhow!("source lock poisoned for {source}"))?;
             match db::take_pending_chunk_removes(&conn) {
@@ -132,7 +146,7 @@ fn process_archive_batch(
                     vec![]
                 }
             }
-        }; // _guard dropped here — lock released before ZIP I/O
+        }); // _guard dropped here — lock released before ZIP I/O
 
         // Rewrite ZIPs for pending removes (group by archive_name).
         let chunk_removes_count = chunk_removes.len();
@@ -153,10 +167,13 @@ fn process_archive_batch(
                 })
                 .collect();
 
-            match archive_mgr.remove_chunks(chunk_refs) {
-                Ok(freed) => total_bytes_freed += freed,
-                Err(e) => tracing::error!("Archive batch: failed to remove chunks for {source}: {e:#}"),
-            }
+            let n_chunk_refs = chunk_refs.len();
+            timed!(src_tag, format!("remove {n_chunk_refs} chunks from ZIPs"), {
+                match archive_mgr.remove_chunks(chunk_refs) {
+                    Ok(freed) => total_bytes_freed += freed,
+                    Err(e) => tracing::error!("Archive batch: failed to remove chunks for {source}: {e:#}"),
+                }
+            });
         }
 
         // Coalesce upserts: last-writer-wins by submission order (mtime sort).
@@ -244,27 +261,33 @@ fn process_archive_batch(
         }
         let mut archived_files: Vec<ArchivedFile> = Vec::new();
 
-        for work in archive_works {
-            let chunk_result = archive::chunk_lines(work.file_id, &work.path, &work.line_data);
-            match archive_mgr.append_chunks(chunk_result.chunks) {
-                Ok(chunk_refs) => {
-                    archived_files.push(ArchivedFile {
-                        file_id: work.file_id,
-                        line_mappings: chunk_result.line_mappings,
-                        chunk_refs,
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Archive batch: failed to append chunks for {}: {e:#}", work.path);
+        let n_archive_works = archive_works.len();
+        timed!(src_tag, format!("append chunks for {} files", n_archive_works), {
+            for work in archive_works {
+                let chunk_result = archive::chunk_lines(work.file_id, &work.path, &work.line_data);
+                match archive_mgr.append_chunks(chunk_result.chunks) {
+                    Ok(chunk_refs) => {
+                        archived_files.push(ArchivedFile {
+                            file_id: work.file_id,
+                            line_mappings: chunk_result.line_mappings,
+                            chunk_refs,
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("Archive batch: failed to append chunks for {}: {e:#}", work.path);
+                    }
                 }
             }
-        }
+        });
 
         // --- SQLite write segment 2: update line refs ---
         // Re-acquire source_lock for this write transaction.
         if !archived_files.is_empty() {
-            let _guard = source_lock.lock()
-                .map_err(|_| anyhow::anyhow!("source lock poisoned for {source}"))?;
+            let _guard = timed!(src_tag, "acquire source lock for line-ref update", {
+                source_lock.lock()
+                    .map_err(|_| anyhow::anyhow!("source lock poisoned for {source}"))?
+            });
+            timed!(src_tag, format!("update line refs for {} files", archived_files.len()), {
             let tx = conn.unchecked_transaction()?;
             for af in &archived_files {
                 // chunk_refs[i] corresponds to chunk i (by chunk_number order after sort).
@@ -295,6 +318,7 @@ fn process_archive_batch(
                 }
             }
             tx.commit()?;
+            }); // timed! update line refs
         }
 
         if !archived_files.is_empty() || chunk_removes_count > 0 {

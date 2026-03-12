@@ -3,18 +3,21 @@ mod pipeline;
 
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 use rusqlite::ErrorCode;
 use std::ffi::OsStr;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use find_common::api::{BulkRequest, IndexingFailure, RecentFile, WorkerStatus};
+use find_common::config::NormalizationSettings;
 use find_common::path::is_composite;
 
 use crate::archive::SharedArchiveState;
 use crate::db;
+use crate::normalize;
 
 
 const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
@@ -22,12 +25,32 @@ const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 /// Configuration values for the inbox worker — plain scalars read from the
 /// server config at startup. Bundled into a struct so function signatures stay
 /// stable when new settings are added.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct WorkerConfig {
     pub request_timeout: std::time::Duration,
     pub inline_threshold_bytes: u64,
     pub archive_batch_size: usize,
     pub activity_log_max_entries: usize,
+    pub normalization: NormalizationSettings,
+}
+
+/// Log the start and finish of a labelled step at DEBUG level, including elapsed ms.
+///
+/// ```ignore
+/// let value = timed!(tag, "parse gz", { expensive_call()? });
+/// ```
+///
+/// `$tag` is an arbitrary prefix (e.g. a `[source:req]` string) printed before
+/// the step name so log lines are easy to correlate.  Because the body is
+/// inlined as a macro arm, `?` and `return` work as expected.
+macro_rules! timed {
+    ($tag:expr, $label:expr, $body:expr) => {{
+        tracing::debug!("{} → {}", $tag, $label);
+        let __t = std::time::Instant::now();
+        let __r = $body;
+        tracing::debug!("{} ← {} ({:.1}ms)", $tag, $label, __t.elapsed().as_secs_f64() * 1000.0);
+        __r
+    }};
 }
 
 /// Log a warning if `start` is older than `threshold_secs`.
@@ -132,6 +155,7 @@ pub async fn start_inbox_worker(
         let status = status.clone();
         let archive_notify = Arc::clone(&archive_notify);
         let shared = Arc::clone(&shared_archive_state);
+        let cfg_index = cfg.clone();
 
         tokio::spawn(async move {
             tracing::debug!("Indexing worker started");
@@ -142,7 +166,7 @@ pub async fn start_inbox_worker(
                     &failed_dir,
                     &to_archive_dir_clone,
                     status.clone(),
-                    cfg,
+                    cfg_index.clone(),
                     &archive_notify,
                     Arc::clone(&shared),
                     recent_tx.clone(),
@@ -185,8 +209,9 @@ pub async fn start_inbox_worker(
                     let sh = Arc::clone(&shared);
                     let db = Arc::clone(&deleted_bytes);
                     let dn = Arc::clone(&notify);
+                    let cfg_clone = cfg.clone();
                     let batch_result = tokio::task::spawn_blocking(move || {
-                        archive_batch::run_archive_batch(&data, &to_archive, cfg, &sh, &db, &dn)
+                        archive_batch::run_archive_batch(&data, &to_archive, cfg_clone, &sh, &db, &dn)
                     })
                     .await;
 
@@ -299,14 +324,16 @@ async fn process_request_async(
     recent_tx: tokio::sync::broadcast::Sender<RecentFile>,
 ) {
     let status_reset = status.clone();
+    let request_timeout = cfg.request_timeout;
 
     let blocking_task = tokio::task::spawn_blocking({
         let data_dir = data_dir.to_path_buf();
         let request_path = request_path.to_path_buf();
-        move || process_request_phase1(&data_dir, &request_path, &status, cfg, &shared_archive_state, &recent_tx)
+        let to_archive_dir = to_archive_dir.to_path_buf();
+        move || process_request_phase1(&data_dir, &request_path, &to_archive_dir, &status, cfg, &shared_archive_state, &recent_tx)
     });
 
-    let timed_result = tokio::time::timeout(cfg.request_timeout, blocking_task).await;
+    let timed_result = tokio::time::timeout(request_timeout, blocking_task).await;
 
     if let Ok(mut guard) = status_reset.lock() {
         *guard = WorkerStatus::Idle;
@@ -316,30 +343,28 @@ async fn process_request_async(
         Err(_timeout) => {
             tracing::error!(
                 "Request processing timed out after {}s, abandoning: {}",
-                cfg.request_timeout.as_secs(),
+                request_timeout.as_secs(),
                 request_path.display(),
             );
             handle_failure(
                 request_path,
                 failed_dir,
-                anyhow::anyhow!("Processing timed out after {}s", cfg.request_timeout.as_secs()),
+                anyhow::anyhow!("Processing timed out after {}s", request_timeout.as_secs()),
             )
             .await;
         }
         Ok(Ok(Ok(()))) => {
-            // Move to to-archive/ for the archive thread.
-            if let Some(file_name) = request_path.file_name() {
-                let to_archive_path = to_archive_dir.join(file_name);
-                if let Err(e) = tokio::fs::rename(request_path, &to_archive_path).await {
-                    tracing::error!(
-                        "Failed to move processed request {} to to-archive/: {}",
-                        request_path.display(),
-                        e
-                    );
-                } else {
-                    tracing::debug!("Phase 1 complete, queued for archive: {}", to_archive_path.display());
-                    archive_notify.notify_one();
-                }
+            // The normalized .gz was already written to to-archive/ by the blocking task.
+            // Delete the original from inbox/.
+            if let Err(e) = tokio::fs::remove_file(request_path).await {
+                tracing::error!(
+                    "Failed to delete processed request {}: {}",
+                    request_path.display(),
+                    e
+                );
+            } else {
+                tracing::debug!("Phase 1 complete, queued for archive: {}", request_path.display());
+                archive_notify.notify_one();
             }
         }
         Ok(Ok(Err(e))) => {
@@ -366,9 +391,11 @@ async fn process_request_async(
 }
 
 /// Phase 1: process a single inbox request — SQLite only, no ZIP I/O.
+/// Writes a normalized `.gz` to `to_archive_dir` for the archive phase.
 fn process_request_phase1(
     data_dir: &Path,
     request_path: &Path,
+    to_archive_dir: &Path,
     status: &StatusHandle,
     cfg: WorkerConfig,
     shared_archive_state: &Arc<SharedArchiveState>,
@@ -376,14 +403,20 @@ fn process_request_phase1(
 ) -> Result<()> {
     let request_start = std::time::Instant::now();
 
-    let compressed = std::fs::read(request_path)?;
-    let compressed_bytes = compressed.len();
-    let mut decoder = GzDecoder::new(&compressed[..]);
-    let mut json = String::new();
-    decoder.read_to_string(&mut json)?;
+    // Use a placeholder tag until we've parsed the request.
+    let req_stem = request_path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
+    let pre_tag = format!("[indexer:?:{req_stem}]");
 
-    let request: BulkRequest = serde_json::from_str(&json)
-        .context("parsing bulk request JSON")?;
+    let (compressed, request): (Vec<u8>, BulkRequest) = timed!(pre_tag, "read+decode gz", {
+        let compressed = std::fs::read(request_path)?;
+        let mut decoder = GzDecoder::new(&compressed[..]);
+        let mut json = String::new();
+        decoder.read_to_string(&mut json)?;
+        let request: BulkRequest = serde_json::from_str(&json)
+            .context("parsing bulk request JSON")?;
+        (compressed, request)
+    });
+    let compressed_bytes = compressed.len();
 
     let n_files = request.files.len();
     let n_deletes = request.delete_paths.len();
@@ -395,21 +428,22 @@ fn process_request_phase1(
         .sum();
 
     // req_tag is the filename stem (without .gz), used as the log prefix.
-    let req_tag = request_path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
-    let tag = format!("[indexer:{}:{}]", request.source, req_tag);
+    let tag = format!("[indexer:{}:{req_stem}]", request.source);
 
     tracing::debug!("{tag} start: {} files, {} deletes, {} renames", n_files, n_deletes, n_renames);
 
     let db_path = data_dir.join("sources").join(format!("{}.db", request.source));
-    let mut conn = db::open(&db_path)?;
+    let mut conn = timed!(tag, "open db", { db::open(&db_path)? });
 
     // Acquire the per-source write lock before any SQLite writes.
     // The archive thread also holds this lock while writing to the same DB,
     // so this prevents concurrent write transactions even if SQLite WAL
     // advisory locking is unreliable on WSL/network mounts.
     let source_lock = shared_archive_state.source_lock(&request.source);
-    let _source_guard = source_lock.lock()
-        .map_err(|_| anyhow::anyhow!("source lock poisoned for {}", request.source))?;
+    let _source_guard = timed!(tag, "acquire source lock", {
+        source_lock.lock()
+            .map_err(|_| anyhow::anyhow!("source lock poisoned for {}", request.source))?
+    });
 
     // Process deletes (SQLite only — queues chunk refs to pending_chunk_removes).
     if !request.delete_paths.is_empty() {
@@ -419,18 +453,26 @@ fn process_request_phase1(
                 file: format!("(deleting {} files)", n_deletes),
             };
         }
-        db::delete_files_phase1(&conn, &request.delete_paths)?;
+        timed!(tag, format!("delete {} paths", n_deletes), {
+            db::delete_files_phase1(&conn, &request.delete_paths)?
+        });
     }
 
     // Process renames after deletes, before upserts.
     if !request.rename_paths.is_empty() {
-        db::rename_files(&conn, &request.rename_paths)?;
+        timed!(tag, format!("rename {} paths", n_renames), {
+            db::rename_files(&conn, &request.rename_paths)?
+        });
     }
 
     let mut server_side_failures: Vec<IndexingFailure> = Vec::new();
     let mut successfully_indexed: Vec<String> = Vec::new();
     let mut activity_added: Vec<String> = Vec::new();
     let mut activity_modified: Vec<String> = Vec::new();
+    // Collect normalized files to write the to-archive .gz after the loop.
+    let mut normalized_files: Vec<find_common::api::IndexFile> = Vec::with_capacity(request.files.len());
+    tracing::debug!("{tag} → index {} files", n_files);
+    let index_loop_start = std::time::Instant::now();
     for file in &request.files {
         if let Ok(mut guard) = status.lock() {
             *guard = WorkerStatus::Processing {
@@ -439,6 +481,26 @@ fn process_request_phase1(
             };
         }
         let file_start = std::time::Instant::now();
+        // Normalize text content before writing to the index.
+        // Applies built-in pretty-printing (JSON, TOML), optional external
+        // formatters, and word-wrap. No-op for non-text kinds or when disabled.
+        let normalized_file;
+        let file = if file.kind == "text" || file.kind == "pdf" {
+            let normalized_lines = timed!(tag, format!("normalize {}", file.path), {
+                normalize::normalize_lines(
+                    file.lines.clone(),
+                    &file.path,
+                    &cfg.normalization,
+                )
+            });
+            normalized_file = find_common::api::IndexFile {
+                lines: normalized_lines,
+                ..file.clone()
+            };
+            &normalized_file
+        } else {
+            file
+        };
         match pipeline::process_file_phase1(&mut conn, file, cfg.inline_threshold_bytes) {
             Ok(outcome) => {
                 successfully_indexed.push(file.path.clone());
@@ -479,7 +541,9 @@ fn process_request_phase1(
             }
         }
         warn_slow(file_start, 30, "process_file_phase1", &file.path);
+        normalized_files.push(file.clone());
     }
+    tracing::debug!("{tag} ← index {} files ({:.1}ms)", n_files, index_loop_start.elapsed().as_secs_f64() * 1000.0);
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -492,13 +556,15 @@ fn process_request_phase1(
         .chain(server_side_failures.iter())
         .cloned()
         .collect();
-    db::do_cleanup_writes(
-        &conn,
-        &successfully_indexed,
-        &all_failures,
-        now,
-        request.scan_timestamp,
-    )?;
+    timed!(tag, "cleanup writes", {
+        db::do_cleanup_writes(
+            &conn,
+            &successfully_indexed,
+            &all_failures,
+            now,
+            request.scan_timestamp,
+        )?
+    });
 
     // Log activity: adds/modifies were accumulated during the loop above;
     // deletes and renames come directly from the request.
@@ -556,6 +622,29 @@ fn process_request_phase1(
             content_kb, compressed_kb,
         );
     }
+
+    // Write a normalized BulkRequest as a .gz to to-archive/ so the archive
+    // phase reads already-normalized content without re-running formatters.
+    timed!(tag, "write normalized gz", {
+        let normalized_request = BulkRequest {
+            source: request.source.clone(),
+            files: normalized_files,
+            delete_paths: request.delete_paths.clone(),
+            scan_timestamp: request.scan_timestamp,
+            indexing_failures: request.indexing_failures.clone(),
+            rename_paths: request.rename_paths.clone(),
+        };
+        let json = serde_json::to_vec(&normalized_request)
+            .context("serializing normalized request")?;
+        let file_name = request_path.file_name()
+            .context("request path has no filename")?;
+        let to_archive_path = to_archive_dir.join(file_name);
+        let out = std::fs::File::create(&to_archive_path)
+            .context("creating to-archive file")?;
+        let mut encoder = GzEncoder::new(out, flate2::Compression::default());
+        encoder.write_all(&json).context("writing normalized gz")?;
+        encoder.finish().context("finalizing normalized gz")?
+    });
 
     Ok(())
 }

@@ -20,6 +20,7 @@ Full documentation for find-anything — distributed full-content file indexing 
    - [Scan settings](02-configuration.md#scan-settings)
    - [Archive settings](02-configuration.md#archive-settings)
    - [Per-directory control (.noindex / .index)](02-configuration.md#per-directory-control-noindex--index)
+   - [Text normalization](02-configuration.md#text-normalization)
    - [Log suppression](02-configuration.md#log-suppression)
 
 3. [Indexing](03-indexing.md)

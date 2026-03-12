@@ -251,6 +251,8 @@ export interface AppSettings {
 	context_window: number;
 	version: string;
 	git_hash: string;
+	/** Maximum markdown file size (KB) the UI will render as formatted HTML. */
+	max_markdown_render_kb: number;
 }
 
 export async function getSettings(): Promise<AppSettings> {

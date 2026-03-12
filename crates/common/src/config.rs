@@ -507,6 +507,8 @@ pub struct ServerAppConfig {
     #[serde(default)]
     pub extraction: ExtractionSettings,
     #[serde(default)]
+    pub normalization: NormalizationSettings,
+    #[serde(default)]
     pub log: LogConfig,
     /// Per-source server configuration (e.g. filesystem root for raw file serving).
     #[serde(default)]
@@ -566,8 +568,14 @@ pub struct ServerAppSettings {
     /// Default: 10000.
     #[serde(default = "default_activity_log_max_entries")]
     pub activity_log_max_entries: usize,
+    /// Maximum markdown file size (in KB) that the UI will render as formatted
+    /// HTML. Files larger than this threshold are shown as plain text.
+    /// Default: 512.
+    #[serde(default = "default_max_markdown_render_kb")]
+    pub max_markdown_render_kb: usize,
 }
 
+fn default_max_markdown_render_kb() -> usize { 512 }
 fn default_bind() -> String { server_defaults().server.bind.clone() }
 fn default_download_zip_member_levels() -> usize { server_defaults().server.download_zip_member_levels }
 fn default_log_batch_detail_limit() -> usize     { server_defaults().server.log_batch_detail_limit }
@@ -633,6 +641,46 @@ impl Default for ExtractionSettings {
 fn default_extraction_max_content_size_mb() -> u64 { server_defaults().extraction.max_content_size_mb }
 fn default_extraction_max_line_length() -> usize   { server_defaults().extraction.max_line_length }
 fn default_extraction_max_archive_depth() -> usize { server_defaults().extraction.max_archive_depth }
+
+// ── Normalization settings ─────────────────────────────────────────────────────
+
+/// Configuration for a single external formatter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FormatterConfig {
+    /// Absolute path to the formatter binary.
+    pub path: String,
+    /// File extensions this formatter handles (without leading dot, lowercase).
+    pub extensions: Vec<String>,
+    /// Command-line arguments. Use `{name}` as a placeholder for the filename
+    /// (used by tools like biome/prettier to detect the file type).
+    /// Example: `["format", "--stdin-filepath", "{name}", "-"]`
+    pub args: Vec<String>,
+}
+
+/// Server-side text normalization settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NormalizationSettings {
+    /// Maximum line length before word-wrap is applied. 0 = disabled.
+    /// Default: 120.
+    #[serde(default = "default_norm_max_line_length")]
+    pub max_line_length: usize,
+
+    /// External formatters tried in order. First matching extension that exits
+    /// successfully wins. Empty list = word-wrap only.
+    #[serde(default)]
+    pub formatters: Vec<FormatterConfig>,
+}
+
+fn default_norm_max_line_length() -> usize { 120 }
+
+impl Default for NormalizationSettings {
+    fn default() -> Self {
+        Self {
+            max_line_length: default_norm_max_line_length(),
+            formatters: Vec::new(),
+        }
+    }
+}
 
 // ── Log config ────────────────────────────────────────────────────────────────
 

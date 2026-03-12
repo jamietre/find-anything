@@ -10,7 +10,7 @@
 	import { search, listSources, getSettings, activateSession, AuthError } from '$lib/api';
 	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { getToken, setToken } from '$lib/token';
-	import { contextWindow } from '$lib/settingsStore';
+	import { contextWindow, maxMarkdownRenderKb } from '$lib/settingsStore';
 	import { formatHash } from '$lib/lineSelection';
 	import type { LineSelection } from '$lib/lineSelection';
 	import { FilePath } from '$lib/filePath';
@@ -91,6 +91,7 @@
 			// Use profile override if set; fall back to server default.
 			const profileWindow = get(profile).contextWindow;
 			contextWindow.set(profileWindow ?? s.context_window);
+			maxMarkdownRenderKb.set(s.max_markdown_render_kb ?? 512);
 		} catch { /* silent */ }
 	}
 

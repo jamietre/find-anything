@@ -32,3 +32,53 @@ max_limit = 500
 # Number of FTS5 candidates evaluated per source before scoring.
 # Increase for more thorough results at the cost of higher latency.
 fts_candidate_limit = 2000
+
+# ── Text normalization ────────────────────────────────────────────────────────
+# The server normalizes text content before writing it to the index.
+# Built-in: JSON and TOML are always pretty-printed.
+# External formatters below are tried in order; first match that exits 0 wins.
+# Any line still exceeding max_line_length is word-wrapped as a final step.
+# Markdown files are excluded (line structure is semantically meaningful).
+
+[normalization]
+# max_line_length = 120   # Wrap lines longer than this (0 = disable)
+
+# Biome — fast Rust-based formatter for JS/TS/CSS/JSON (no Node required).
+# https://biomejs.dev/installation/
+#
+# [[normalization.formatters]]
+# path       = "/usr/local/bin/biome"
+# extensions = ["js", "ts", "jsx", "tsx", "css", "graphql", "json", "jsonc"]
+# args       = ["format", "--stdin-file-path", "{name}", "-"]
+
+# rustfmt — Rust formatter, bundled with rustup.
+# rustup component add rustfmt
+#
+# [[normalization.formatters]]
+# path       = "/home/user/.cargo/bin/rustfmt"
+# extensions = ["rs"]
+# args       = ["--edition", "2021"]
+
+# gofmt — Go formatter, bundled with the Go toolchain.
+# https://go.dev/doc/install
+#
+# [[normalization.formatters]]
+# path       = "/usr/local/go/bin/gofmt"
+# extensions = ["go"]
+# args       = []
+
+# ruff — fast Python formatter.
+# https://docs.astral.sh/ruff/installation/
+#
+# [[normalization.formatters]]
+# path       = "/usr/local/bin/ruff"
+# extensions = ["py", "pyi"]
+# args       = ["format", "--stdin-filename", "{name}", "-"]
+
+# Prettier — covers HTML, Vue, Svelte, YAML, SCSS, and more.
+# https://prettier.io/docs/en/install.html
+#
+# [[normalization.formatters]]
+# path       = "/usr/local/bin/prettier"
+# extensions = ["html", "vue", "svelte", "scss", "less", "yaml", "yml"]
+# args       = ["--stdin-filepath", "{name}"]

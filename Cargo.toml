@@ -29,7 +29,7 @@ blake3          = "1"
 clap            = { version = "4", features = ["derive"] }
 libc            = "0.2"
 serde           = { version = "1", features = ["derive"] }
-serde_json      = "1"
+serde_json      = { version = "1", features = ["preserve_order"] }
 serde_ignored   = "0.1"
 toml            = "0.8"
 tokio           = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "time", "io-util", "process", "sync", "signal"] }

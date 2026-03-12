@@ -4,6 +4,10 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
 
+[ ] Systemd service with options?? (to debug)
+[ ] FEAT: Guard against low disk space
+[ ] BUG: Create a file, then rename it, it has a duplicate pointing to original
+[ ] BUG: "WARN find_server::routes::search: search source error: fts5: syntax error near ".": Error code 1: SQL logic error"
 [ ] BUG: Fetching existing file list seems to not be targeted to a particular tree (e.g. find-scan /path/to/dir)
 [ ] BUG: Monhegan Lighthouse DOry 2005.tif can't be shown
 [ ] FEAT: Add query syntax "type: image" with intellisense

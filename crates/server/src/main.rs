@@ -2,6 +2,7 @@ mod archive;
 mod compaction;
 mod db;
 mod fuzzy;
+mod normalize;
 mod routes;
 mod upload;
 mod worker;
@@ -17,6 +18,7 @@ use axum::{
     routing::{delete, get, head, patch, post},
     Router,
 };
+use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 use clap::{CommandFactory, FromArgMatches, Parser};
@@ -194,6 +196,7 @@ async fn main() -> Result<()> {
         inline_threshold_bytes: state.config.server.inline_threshold_bytes,
         archive_batch_size: state.config.server.archive_batch_size,
         activity_log_max_entries: state.config.server.activity_log_max_entries,
+        normalization: state.config.normalization.clone(),
     };
     let worker_handles = worker::WorkerHandles {
         status: worker_status,
@@ -266,7 +269,10 @@ async fn main() -> Result<()> {
         .with_state(Arc::clone(&state));
 
     // Merge upload routes (no body limit) with the main router.
-    let app = upload_routes.merge(app);
+    // TraceLayer logs each request at DEBUG on arrival and DEBUG on completion
+    // (with status + elapsed). Enable with RUST_LOG=tower_http=debug.
+    let app = upload_routes.merge(app)
+        .layer(TraceLayer::new_for_http());
 
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
