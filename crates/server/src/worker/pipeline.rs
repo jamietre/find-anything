@@ -46,25 +46,10 @@ pub(super) fn process_file_phase1_fallback(
         .as_secs() as i64;
 
     // If re-indexing an outer archive, delete stale inner members first (SQL only).
+    // Orphaned chunks left in ZIPs are reclaimed by the periodic compaction pass.
     if !skip_inner_delete && is_outer_archive(&file.path, &file.kind) && file.mtime == 0 {
         let like_pat = composite_like_prefix(&file.path);
-        // Collect chunk refs for inner members and queue them for removal.
-        let file_ids: Vec<i64> = {
-            let mut stmt = conn.prepare("SELECT id FROM files WHERE path LIKE ?1")?;
-            let ids = stmt.query_map(rusqlite::params![like_pat], |row| row.get(0))?
-                .collect::<rusqlite::Result<_>>()?;
-            ids
-        };
         let tx = conn.unchecked_transaction()?;
-        for fid in file_ids {
-            tx.execute(
-                "INSERT INTO pending_chunk_removes (archive_name, chunk_name)
-                 SELECT DISTINCT chunk_archive, chunk_name
-                 FROM lines
-                 WHERE file_id = ?1 AND chunk_archive IS NOT NULL",
-                rusqlite::params![fid],
-            )?;
-        }
         tx.execute("DELETE FROM files WHERE path LIKE ?1", rusqlite::params![like_pat])?;
         tx.commit()?;
     }
@@ -135,17 +120,6 @@ pub(super) fn process_file_phase1_fallback(
     // Single transaction for the whole file.
     let t_fts = std::time::Instant::now();
     let tx = conn.transaction()?;
-
-    // Queue old chunk refs for removal (before we overwrite the file record).
-    if let Some(fid) = existing_id {
-        tx.execute(
-            "INSERT INTO pending_chunk_removes (archive_name, chunk_name)
-             SELECT DISTINCT chunk_archive, chunk_name
-             FROM lines
-             WHERE file_id = ?1 AND chunk_archive IS NOT NULL",
-            rusqlite::params![fid],
-        )?;
-    }
 
     // Upsert the file record and get the stable file_id.
     let file_id: i64 = tx.query_row(

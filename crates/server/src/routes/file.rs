@@ -58,15 +58,41 @@ pub async fn get_file(
             )
             .unwrap_or_else(|_| ("text".into(), None, None));
 
-        let lines = db::get_file_lines(&conn, &archive_mgr, &full_path)?;
-        let total_lines = lines.len();
+        let (all_lines, content_unavailable) = db::get_file_lines(&conn, &archive_mgr, &full_path)?;
+
+        let metadata: Vec<String> = all_lines.iter()
+            .filter(|l| l.line_number == 0)
+            .map(|l| l.content.clone())
+            .collect();
+
+        let content_lines: Vec<_> = all_lines.into_iter()
+            .filter(|l| l.line_number > 0)
+            .collect();
+
+        let total_lines = content_lines.len();
+
+        // Only emit line_offsets when lines aren't a contiguous 1-based sequence.
+        let is_sequential = content_lines.iter().enumerate()
+            .all(|(i, l)| l.line_number == i + 1);
+        let line_offsets: Vec<usize> = if is_sequential {
+            vec![]
+        } else {
+            content_lines.iter().map(|l| l.line_number).collect()
+        };
+
+        let lines: Vec<String> = content_lines.into_iter().map(|l| l.content).collect();
+
         // For archive members (path contains "::"), fall back to the outer archive's
         // error if no per-member error was recorded.
         let indexing_error = db::get_indexing_error(&conn, &full_path)?.or_else(|| {
             let (outer, _) = split_composite(&full_path)?;
             db::get_indexing_error(&conn, outer).ok().flatten()
         });
-        Ok(Json(FileResponse { lines, file_kind: kind, total_lines, mtime, size, indexing_error }))
+        Ok(Json(FileResponse {
+            lines, line_offsets, metadata,
+            file_kind: kind, total_lines, mtime, size,
+            indexing_error, content_unavailable,
+        }))
     }).await
 }
 

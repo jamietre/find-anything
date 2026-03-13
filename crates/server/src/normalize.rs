@@ -35,13 +35,6 @@ pub fn normalize_lines(
 
     let ext = extension_of(name);
 
-    // Skip normalization entirely for markdown — semantically meaningful lines.
-    if ext == "md" || ext == "markdown" {
-        let mut all = zero_lines;
-        all.extend(content_lines);
-        return all;
-    }
-
     let full_text: String = content_lines.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
 
     // Step 1: built-in pretty-printers.
@@ -246,15 +239,37 @@ fn apply_word_wrap(text: &str, max_len: usize) -> Vec<String> {
 }
 
 /// Split `s` at word boundaries into chunks of at most `max_len` characters.
-/// A single word longer than `max_len` chars is kept whole (no hard break mid-word).
+/// Words longer than `max_len` are hard-split at the character boundary.
 fn wrap_at_words(s: &str, max_len: usize) -> Vec<String> {
     let mut result = Vec::new();
     let mut current = String::new();
     let mut current_len: usize = 0;
 
     for word in s.split_whitespace() {
-        let word_len = word.chars().count();
-        if current_len == 0 {
+        let word_chars: Vec<char> = word.chars().collect();
+        let word_len = word_chars.len();
+
+        if word_len > max_len {
+            // Flush current line before hard-splitting.
+            if !current.is_empty() {
+                result.push(std::mem::take(&mut current));
+                current_len = 0;
+            }
+            // Hard-split into max_len chunks; keep the last chunk in `current`
+            // so subsequent words can be appended to it.
+            let mut pos = 0;
+            while pos < word_len {
+                let end = (pos + max_len).min(word_len);
+                let chunk: String = word_chars[pos..end].iter().collect();
+                if end == word_len {
+                    current_len = end - pos;
+                    current = chunk;
+                } else {
+                    result.push(chunk);
+                }
+                pos = end;
+            }
+        } else if current_len == 0 {
             current.push_str(word);
             current_len = word_len;
         } else if current_len + 1 + word_len <= max_len {
@@ -362,14 +377,30 @@ mod tests {
     }
 
     #[test]
-    fn markdown_is_not_wrapped() {
+    fn markdown_is_wrapped() {
         let long = "word ".repeat(50).trim_end().to_string();
         let lines = make_lines(&[&long]);
         let result = normalize_lines(lines, "readme.md", &cfg(120));
-        // Markdown should pass through unchanged
         let content_lines: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
-        assert_eq!(content_lines.len(), 1);
-        assert_eq!(content_lines[0].content, long);
+        assert!(content_lines.len() > 1, "long markdown line should be wrapped");
+        for cl in &content_lines {
+            assert!(cl.content.chars().count() <= 120, "line too long: {}", cl.content);
+        }
+    }
+
+    #[test]
+    fn long_word_is_hard_split() {
+        let long_word = "a".repeat(300);
+        let lines = make_lines(&[&long_word]);
+        let result = normalize_lines(lines, "file.txt", &cfg(120));
+        let content_lines: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        assert!(content_lines.len() > 1, "long word should be split");
+        for cl in &content_lines {
+            assert!(cl.content.chars().count() <= 120, "chunk too long: {}", cl.content);
+        }
+        // Reassembled content should equal the original word.
+        let reassembled: String = content_lines.iter().map(|l| l.content.as_str()).collect();
+        assert_eq!(reassembled, long_word);
     }
 
     #[test]

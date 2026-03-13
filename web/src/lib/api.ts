@@ -34,12 +34,19 @@ export interface SearchResponse {
 }
 
 export interface FileResponse {
-	lines: ContextLine[];
+	/** Content lines in order; display line number = index + 1 unless line_offsets is present. */
+	lines: string[];
+	/** Actual line numbers when not a contiguous 1-based sequence (e.g. sparse PDFs). */
+	line_offsets?: number[];
+	/** Line-number-0 entries: file path, metadata strings, dedup-alias paths. */
+	metadata: string[];
 	file_kind: string;
 	total_lines: number;
 	mtime: number | null;
 	size: number | null;
 	indexing_error?: string;
+	/** True when content is indexed but not yet written to the archive by the background worker. */
+	content_unavailable?: boolean;
 }
 
 export interface ContextResponse {

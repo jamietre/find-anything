@@ -884,16 +884,22 @@ fn resolve_file_id(conn: &Connection, path: &str) -> rusqlite::Result<Option<i64
     .optional()
 }
 
-/// Returns every indexed line for a file, ordered by line number.
+/// Returns every indexed line for a file, ordered by line number, plus a flag
+/// indicating whether content is pending archive processing.
+///
+/// `content_unavailable` is `true` when the file has content lines with NULL
+/// chunk refs and no inline content entry — i.e. it was indexed (phase 1) but
+/// the archive worker has not yet written the content to a ZIP.
+///
 /// `path` may be a composite path ("archive.zip::member.txt") or a plain path.
 /// Follows canonical_file_id so dedup aliases show the same content as the canonical.
 pub fn get_file_lines(
     conn: &Connection,
     archive_mgr: &ArchiveManager,
     path: &str,
-) -> Result<Vec<ContextLine>> {
+) -> Result<(Vec<ContextLine>, bool)> {
     let Some(file_id) = resolve_file_id(conn, path)? else {
-        return Ok(vec![]);
+        return Ok((vec![], false));
     };
 
     let mut stmt = conn.prepare(
@@ -913,6 +919,15 @@ pub fn get_file_lines(
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // Detect pending-archive state: content lines with NULL chunk refs and no
+    // inline entry means phase 1 is done but the archive worker hasn't run yet.
+    let has_pending = rows.iter().any(|(ln, ca, cn, _)| *ln > 0 && ca.is_none() && cn.is_none());
+    let content_unavailable = has_pending && conn.query_row(
+        "SELECT COUNT(*) FROM file_content WHERE file_id = ?1",
+        params![file_id],
+        |r| r.get::<_, i64>(0),
+    ).unwrap_or(0) == 0;
 
     let mut lines = resolve_content(conn, archive_mgr, file_id, rows);
 
@@ -961,7 +976,7 @@ pub fn get_file_lines(
         lines.push(ContextLine { line_number: 0, content: alias_path });
     }
 
-    Ok(lines)
+    Ok((lines, content_unavailable))
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────

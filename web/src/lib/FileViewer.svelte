@@ -33,6 +33,7 @@
 
 	let loading = true;
 	let error: string | null = null;
+	let contentUnavailable = false;
 	let highlightedCode = '';
 	/** Maps 0-based render index → line_number */
 	let lineOffsets: number[] = [];
@@ -150,42 +151,45 @@
 		return date.toLocaleString();
 	}
 
+	function applyFileData(data: import('$lib/api').FileResponse, isInitial: boolean) {
+		contentUnavailable = data.content_unavailable ?? false;
+		if (contentUnavailable) return;
+		error = null;
+
+		// Separate metadata into: current path (skip), metadata strings, duplicate paths.
+		// Metadata strings start with '['. Other strings are file paths (dedup aliases).
+		const compositePath = archivePath ? `${path}::${archivePath}` : path;
+		metaLines = [];
+		duplicatePaths = [];
+		for (const s of data.metadata) {
+			if (s === compositePath) continue;
+			if (s.startsWith('[')) {
+				metaLines.push({ content: s });
+			} else {
+				duplicatePaths.push(s);
+			}
+		}
+
+		lineOffsets = data.line_offsets && data.line_offsets.length > 0
+			? data.line_offsets
+			: data.lines.map((_, i) => i + 1);
+		rawContent = data.lines.join('\n');
+		highlightedCode = highlightFile(data.lines, path);
+		mtime = data.mtime;
+		size = data.size;
+		fileKind = data.file_kind ?? null;
+		indexingError = data.indexing_error ?? null;
+		isEncrypted = fileKind === 'pdf' && data.lines.length === 1 && data.lines[0] === 'Content encrypted';
+		if (isInitial) {
+			showOriginal = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
+			imageFullWidth = false;
+		}
+	}
+
 	onMount(async () => {
 		try {
 			const data = await getFile(source, path, archivePath ?? undefined);
-
-			// Separate line_number=0 entries into: current path (skip), metadata, duplicate paths.
-			// Metadata lines always start with '['. Path lines are bare file paths.
-			// A path line that doesn't match the current file is a duplicate (dedup alias).
-			const compositePath = archivePath ? `${path}::${archivePath}` : path;
-			const zeroLines = data.lines.filter((l) => l.line_number === 0);
-			const contentLines = data.lines.filter((l) => l.line_number > 0);
-
-			metaLines = [];
-			duplicatePaths = [];
-			for (const l of zeroLines) {
-				if (l.content === compositePath) continue; // current file's own path
-				if (l.content.startsWith('[')) {
-					metaLines.push({ content: l.content });
-				} else {
-					duplicatePaths.push(l.content);
-				}
-			}
-
-			const contents = contentLines.map((l) => l.content);
-			lineOffsets = contentLines.map((l) => l.line_number);
-			rawContent = contents.join('\n');
-			highlightedCode = highlightFile(contents, path);
-			mtime = data.mtime;
-			size = data.size;
-			fileKind = data.file_kind ?? null;
-			indexingError = data.indexing_error ?? null;
-			isEncrypted = fileKind === 'pdf' && contentLines.length === 1 && contentLines[0].content === 'Content encrypted';
-			// Default: images always show original; PDFs show original when opened from tree/dir
-			// (preferOriginal=true). Search-result opens pass preferOriginal=false to show
-			// extracted text context.
-			showOriginal = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
-			imageFullWidth = false;
+			applyFileData(data, true);
 		} catch (e) {
 			error = String(e);
 		} finally {
@@ -214,7 +218,7 @@
 	$: codeLines = highlightedCode ? highlightedCode.split('\n') : [];
 
 	// Live update state
-	type FileState = 'normal' | 'deleted' | 'renamed';
+	type FileState = 'normal' | 'deleted' | 'renamed' | 'modified';
 	let fileState: FileState = 'normal';
 	let renamedTo: string | null = null;
 
@@ -227,7 +231,7 @@
 		if (ev.action === 'deleted') {
 			fileState = 'deleted';
 		} else if (ev.action === 'modified') {
-			if (fileState !== 'deleted') reload();
+			if (fileState !== 'deleted') fileState = 'modified';
 		} else if (ev.action === 'renamed') {
 			fileState = 'renamed';
 			renamedTo = ev.new_path ?? null;
@@ -238,31 +242,9 @@
 		fileState = 'normal';
 		renamedTo = null;
 		loading = true;
-		error = null;
 		try {
 			const data = await getFile(source, path, archivePath ?? undefined);
-			const compositePath = archivePath ? `${path}::${archivePath}` : path;
-			const zeroLines = data.lines.filter((l) => l.line_number === 0);
-			const contentLines = data.lines.filter((l) => l.line_number > 0);
-			metaLines = [];
-			duplicatePaths = [];
-			for (const l of zeroLines) {
-				if (l.content === compositePath) continue;
-				if (l.content.startsWith('[')) {
-					metaLines.push({ content: l.content });
-				} else {
-					duplicatePaths.push(l.content);
-				}
-			}
-			const contents = contentLines.map((l) => l.content);
-			lineOffsets = contentLines.map((l) => l.line_number);
-			rawContent = contents.join('\n');
-			highlightedCode = highlightFile(contents, path);
-			mtime = data.mtime;
-			size = data.size;
-			fileKind = data.file_kind ?? null;
-			indexingError = data.indexing_error ?? null;
-			isEncrypted = fileKind === 'pdf' && contentLines.length === 1 && contentLines[0].content === 'Content encrypted';
+			applyFileData(data, false);
 		} catch (e) {
 			error = String(e);
 		} finally {
@@ -274,6 +256,8 @@
 <div class="file-viewer">
 	{#if loading}
 		<div class="status">Loading…</div>
+	{:else if contentUnavailable}
+		<div class="status">Content not yet available. <button class="inline-link" on:click={reload}>Reload</button></div>
 	{:else if error}
 		<div class="status error">{error}</div>
 	{:else}
@@ -285,6 +269,12 @@
 			<div class="file-status-banner renamed-banner">
 				Renamed to
 				<button class="banner-btn" on:click={() => dispatch('navigate', { path: renamedTo ?? '' })}>{renamedTo}</button>
+				<button class="banner-dismiss" on:click={() => fileState = 'normal'} aria-label="Dismiss">✕</button>
+			</div>
+		{:else if fileState === 'modified'}
+			<div class="file-status-banner modified-banner">
+				<span>Content has changed.</span>
+				<button class="banner-btn" on:click={reload}>Reload</button>
 				<button class="banner-dismiss" on:click={() => fileState = 'normal'} aria-label="Dismiss">✕</button>
 			</div>
 		{/if}
@@ -434,6 +424,16 @@
 
 	.status.error {
 		color: #f85149;
+	}
+
+	.inline-link {
+		background: none;
+		border: none;
+		padding: 0;
+		font: inherit;
+		color: var(--accent, #58a6ff);
+		cursor: pointer;
+		text-decoration: underline;
 	}
 
 	.code-container {
@@ -599,6 +599,12 @@
 		background: rgba(248, 81, 73, 0.12);
 		border-color: rgba(248, 81, 73, 0.3);
 		color: #f85149;
+	}
+
+	.modified-banner {
+		background: rgba(230, 162, 60, 0.1);
+		border-color: rgba(230, 162, 60, 0.25);
+		color: #e6a23c;
 	}
 
 	.renamed-banner {

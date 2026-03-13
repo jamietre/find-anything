@@ -150,7 +150,18 @@ pub struct ContextResponse {
 /// GET /api/v1/file response.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct FileResponse {
-    pub lines: Vec<ContextLine>,
+    /// Content lines in line-number order (line_number > 0). Plain strings;
+    /// the display line number is `index + 1` when lines are sequential after
+    /// normalisation, or the corresponding entry in `line_offsets` when present.
+    pub lines: Vec<String>,
+    /// Actual 1-based line numbers for each entry in `lines`, only present
+    /// when lines are not a contiguous 1-based sequence (e.g. sparse PDFs).
+    /// Clients should fall back to `index + 1` when this field is absent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_offsets: Vec<usize>,
+    /// Line-number-0 entries: the file's own path, EXIF/audio metadata strings,
+    /// and dedup-alias paths. Clients filter these to determine what to display.
+    pub metadata: Vec<String>,
     pub file_kind: String,
     pub total_lines: usize,
     pub mtime: Option<i64>,
@@ -158,6 +169,11 @@ pub struct FileResponse {
     /// Extraction error message for this file, if one was recorded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indexing_error: Option<String>,
+    /// True when the file has been indexed (metadata available) but its content
+    /// has not yet been written to the ZIP archive by the background worker.
+    /// Clients should show "content not yet available" rather than empty lines.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub content_unavailable: bool,
 }
 
 /// GET /api/v1/files response entry (for deletion detection / Ctrl+P).
