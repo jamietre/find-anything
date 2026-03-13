@@ -41,15 +41,15 @@ fts_candidate_limit = 2000
 # Markdown files are excluded (line structure is semantically meaningful).
 
 [normalization]
-# max_line_length = 120   # Wrap lines longer than this (0 = disable)
+max_line_length = 120 # Wrap lines longer than this (0 = disable)
 
 # Biome — fast Rust-based formatter for JS/TS/CSS/JSON (no Node required).
-# https://biomejs.dev/installation/
+# https://biomejs.dev/guides/manual-installation/
 #
-# [[normalization.formatters]]
-# path       = "/usr/local/bin/biome"
-# extensions = ["js", "ts", "jsx", "tsx", "css", "graphql", "json", "jsonc"]
-# args       = ["format", "--stdin-file-path", "{name}", "-"]
+[[normalization.formatters]]
+path = "/usr/local/bin/biome"
+extensions = ["js", "ts", "jsx", "tsx", "css", "graphql", "json", "jsonc"]
+args = ["format", "--stdin-file-path", "{name}", "-"]
 
 # rustfmt — Rust formatter, bundled with rustup.
 # rustup component add rustfmt
@@ -78,7 +78,7 @@ fts_candidate_limit = 2000
 # Prettier — covers HTML, Vue, Svelte, YAML, SCSS, and more.
 # https://prettier.io/docs/en/install.html
 #
-# [[normalization.formatters]]
-# path       = "/usr/local/bin/prettier"
-# extensions = ["html", "vue", "svelte", "scss", "less", "yaml", "yml"]
-# args       = ["--stdin-filepath", "{name}"]
+[[normalization.formatters]]
+path = "/home/jamiet/.local/share/pnpm/prettier"
+extensions = ["html", "vue", "svelte", "scss", "less", "yaml", "yml"]
+args = ["--stdin-filepath", "{name}"]

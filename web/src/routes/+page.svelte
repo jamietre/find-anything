@@ -30,6 +30,7 @@
 
 	/** Non-null when the file/directory viewer is open. */
 	let fileView: FileViewState | null = null;
+	let searchView: SearchView;
 	let query = '';
 	let mode = 'fuzzy';
 
@@ -280,6 +281,8 @@
 		}
 		// Auto-fill viewport if the first page doesn't reach the scroll threshold.
 		await tick();
+		// Restore focus to the search box when transitioning from file view back to results.
+		if (push && fileView === null) searchView?.focus();
 		if (isNearBottom()) triggerLoad();
 	}
 
@@ -458,6 +461,7 @@
 			/>
 		{:else}
 			<SearchView
+				bind:this={searchView}
 				{query}
 				{mode}
 				{searching}

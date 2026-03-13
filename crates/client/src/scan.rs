@@ -180,17 +180,19 @@ pub async fn run_scan(
 
     let mut indexed: usize = 0;
     let mut skipped: usize = 0;
+    let mut excluded: usize = 0;    // went through process_file but excluded by filter/missing extractor
     let mut new_files: usize = 0;   // in local but absent from server DB
     let mut modified: usize = 0;    // mtime changed since last scan
     let mut upgraded: usize = 0;    // mtime unchanged but scanner_version outdated
 
     // Build the "N unchanged[, M new][, P modified][, Q upgraded]" summary,
     // omitting new/modified/upgraded when they are zero.
-    let fmt_changes = |skipped: usize, new_files: usize, modified: usize, upgraded: usize| -> String {
+    let fmt_changes = |skipped: usize, new_files: usize, modified: usize, upgraded: usize, excluded: usize| -> String {
         let mut parts = vec![format!("{skipped} unchanged")];
         if new_files > 0 { parts.push(format!("{new_files} new")); }
         if modified  > 0 { parts.push(format!("{modified} modified")); }
         if upgraded  > 0 { parts.push(format!("{upgraded} upgraded")); }
+        if excluded  > 0 { parts.push(format!("{excluded} excluded")); }
         parts.join(", ")
     };
     let log_interval = std::time::Duration::from_secs(5);
@@ -206,39 +208,43 @@ pub async fn run_scan(
         // Check mtime before any further work so unchanged files are skipped cheaply.
         let mtime = mtime_of(abs_path).unwrap_or(0);
         let mut is_new = false; // set inside the !subdir_rescan block when server_entry is known
+        let mut is_upgraded_file = false;
         if !subdir_rescan {
             let server_entry = server_files.get(rel_path.as_str()).copied();
             let (should_index, file_is_new) = needs_reindex(server_entry, mtime, opts.upgrade);
-            if file_is_new      { new_files += 1; }
-            else if should_index {
-                if server_entry.is_some_and(|(_, sv)| opts.upgrade && sv < SCANNER_VERSION) {
-                    upgraded += 1;
-                } else {
-                    modified += 1;
-                }
-            } else {
-                skipped += 1;
-            }
             if !should_index {
+                skipped += 1;
                 if last_log.elapsed() >= log_interval {
                     let total = indexed + skipped;
-                    info!("processed {total} files ({}) so far...", fmt_changes(skipped, new_files, modified, upgraded));
+                    info!("processed {total} files ({}) so far...", fmt_changes(skipped, new_files, modified, upgraded, excluded));
                     last_log = std::time::Instant::now();
                 }
                 continue;
             }
             is_new = file_is_new;
+            is_upgraded_file = !file_is_new && server_entry.is_some_and(|(_, sv)| opts.upgrade && sv < SCANNER_VERSION);
         }
 
-        indexed += 1;
         if !opts.dry_run {
-            process_file(&mut ctx, rel_path, abs_path, mtime, is_new).await?;
+            if process_file(&mut ctx, rel_path, abs_path, mtime, is_new).await? {
+                indexed += 1;
+                if is_new { new_files += 1; }
+                else if is_upgraded_file { upgraded += 1; }
+                else if !subdir_rescan { modified += 1; }
+            } else {
+                excluded += 1;
+            }
+        } else {
+            indexed += 1;
+            if is_new { new_files += 1; }
+            else if is_upgraded_file { upgraded += 1; }
+            else if !subdir_rescan { modified += 1; }
         }
         if last_log.elapsed() >= log_interval {
             let total = indexed + skipped;
             info!(
                 "processed {total} files ({}) so far, {} in current batch...",
-                fmt_changes(skipped, new_files, modified, upgraded),
+                fmt_changes(skipped, new_files, modified, upgraded, excluded),
                 ctx.batch.len(),
             );
             last_log = std::time::Instant::now();
@@ -269,7 +275,8 @@ pub async fn run_scan(
     // Final batch: flush any remaining indexed files.
     ctx.submit(vec![]).await?;
 
-    info!("scan complete — {indexed} indexed ({new_files} new, {modified} modified, {upgraded} upgraded), {skipped} unchanged, {deleted} deleted");
+    let excluded_msg = if excluded > 0 { format!(", {excluded} excluded by filter") } else { String::new() };
+    info!("scan complete — {indexed} indexed ({new_files} new, {modified} modified, {upgraded} upgraded), {skipped} unchanged, {deleted} deleted{excluded_msg}");
     Ok(())
 }
 
@@ -356,7 +363,9 @@ impl<'a> ScanContext<'a> {
 /// Process one file: resolve its effective config, extract content via
 /// subprocess, handle OOM server-fallback, and accumulate the result in the
 /// batch. Called from both the `run_scan` loop and `scan_single_file`.
-async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path, mtime: i64, is_new: bool) -> Result<()> {
+/// Returns `true` if the file was actually submitted to the server, `false` if
+/// it was excluded by a filter or skipped due to a missing extractor.
+async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path, mtime: i64, is_new: bool) -> Result<bool> {
     // Resolve effective config for this file's directory (cached).
     let eff_scan = resolve_effective_scan(abs_path, ctx.paths, &ctx.scan_arc, &mut ctx.dir_scan_cache);
 
@@ -384,7 +393,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                 .map(|p| normalise_path_sep(&p.to_string_lossy()))
                 .unwrap_or_default();
             if !dir_includes.is_match(&*rel_to_dir) {
-                return Ok(());
+                return Ok(false);
             }
         }
     }
@@ -535,7 +544,8 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
             subprocess::SubprocessOutcome::BinaryMissing => {
                 // Extractor binary not installed — skip this file entirely so it
                 // is re-indexed (with content) once the binary is deployed.
-                return Ok(());
+                warn!("skipping {rel_path}: extractor binary not found (file will be retried once the binary is installed)");
+                return Ok(false);
             }
             subprocess::SubprocessOutcome::Failed => {
                 if eff_scan.server_fallback {
@@ -544,7 +554,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                         // Fall through: index filename-only so file appears in search.
                     } else {
                         // Server will index it; skip local filename-only entry.
-                        return Ok(());
+                        return Ok(true);
                     }
                 }
                 // Index filename-only so the file is at least findable by name.
@@ -601,7 +611,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
         ctx.submit(vec![]).await?;
     }
 
-    Ok(())
+    Ok(true)
 }
 
 /// Scan a single file and submit it to the server. The file must belong to one

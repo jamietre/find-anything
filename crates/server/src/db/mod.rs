@@ -37,6 +37,9 @@ pub fn open(db_path: &Path) -> Result<Connection> {
     // SQLITE_BUSY.  Multiple workers share one DB per source, so brief
     // contention is normal and should not be treated as an error.
     conn.busy_timeout(std::time::Duration::from_secs(30))?;
+    // foreign_keys must be re-enabled on every connection; PRAGMA in schema SQL
+    // only runs once at creation time and does not persist across connections.
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     register_scalar_functions(&conn)?;
 
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
@@ -976,9 +979,38 @@ pub fn get_file_lines(
 
     let mut lines = resolve_content(conn, archive_mgr, file_id, rows);
 
+    // Fix stale path entry after a rename: ZIP chunk 0 stores the path at
+    // indexing time and is not updated when `rename_files` runs.
+    // Strategy: only touch the `line_number=0` entry that *is* the path.
+    // Metadata entries (EXIF, audio tags, etc.) also use line_number=0 but
+    // always start with '['; plain file paths never do.  If no entry already
+    // matches the authoritative `files.path`, find the non-'[' entry and fix it.
+    let canonical_path: Option<String> = conn.query_row(
+        "SELECT path FROM files WHERE id = ?1",
+        params![file_id],
+        |r| r.get(0),
+    ).optional()?;
+    if let Some(ref cp) = canonical_path {
+        let already_correct = lines.iter().any(|l| l.line_number == 0 && &l.content == cp);
+        if !already_correct {
+            if let Some(path_entry) = lines.iter_mut()
+                .find(|l| l.line_number == 0 && !l.content.starts_with('['))
+            {
+                path_entry.content = cp.clone();
+            }
+        }
+    }
+
+    // Deduplicate line_number=0 entries (guards against accumulated duplicates
+    // caused by missing foreign_key cascade on historical data).
+    {
+        let mut seen = std::collections::HashSet::new();
+        lines.retain(|l| l.line_number != 0 || seen.insert(l.content.clone()));
+    }
+
     // Inject synthetic line_number=0 entries for all alias paths of this
     // canonical file.  The existing line_number=0 entry (the canonical's own
-    // path, stored in the ZIP) is already in `lines`.  Adding the alias paths
+    // path) is already in `lines`.  Adding the alias paths
     // here means both the canonical view and any alias view show the full set
     // of duplicate paths — the UI filters out whichever one matches the
     // currently-viewed file and labels the rest as "DUPLICATE".
@@ -1049,7 +1081,29 @@ fn get_metadata_context(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    Ok(resolve_content(conn, archive_mgr, file_id, rows))
+    let mut lines = resolve_content(conn, archive_mgr, file_id, rows);
+    // Fix stale path entry after rename (same logic as get_file_lines).
+    let canonical_path: Option<String> = conn.query_row(
+        "SELECT path FROM files WHERE id = ?1",
+        params![file_id],
+        |r| r.get(0),
+    ).optional()?;
+    if let Some(ref cp) = canonical_path {
+        let already_correct = lines.iter().any(|l| l.line_number == 0 && &l.content == cp);
+        if !already_correct {
+            if let Some(path_entry) = lines.iter_mut()
+                .find(|l| l.line_number == 0 && !l.content.starts_with('['))
+            {
+                path_entry.content = cp.clone();
+            }
+        }
+    }
+    // Deduplicate line_number=0 entries (same guard as get_file_lines).
+    {
+        let mut seen = std::collections::HashSet::new();
+        lines.retain(|l| l.line_number != 0 || seen.insert(l.content.clone()));
+    }
+    Ok(lines)
 }
 
 fn get_line_context(

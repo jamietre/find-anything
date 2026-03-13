@@ -34,6 +34,9 @@
 		treeToggle: void;
 	}>();
 
+	let searchBox: SearchBox;
+	export function focus() { searchBox?.focus(); }
+
 	let isTyping = false;
 	$: isSearchActive = isTyping || searching;
 
@@ -66,6 +69,7 @@
 	>◫</button>
 	<div class="search-wrap">
 		<SearchBox
+			bind:this={searchBox}
 			{query}
 			{mode}
 			searching={isSearchActive}

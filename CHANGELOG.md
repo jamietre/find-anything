@@ -9,6 +9,19 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scan progress counters** — `new`, `modified`, and `upgraded` counts in progress log lines now only reflect files that were actually indexed; previously they were pre-incremented before `process_file` ran, so files later excluded by a filter or missing extractor were incorrectly counted as "new" in intermediate logs
+- **`excluded` shown in progress logs** — excluded file count is now included in the periodic progress line (`N unchanged, M excluded`) so it's visible during a scan, not just in the final summary
+- **`foreign_keys = ON` per connection** — `PRAGMA foreign_keys` is now re-enabled on every SQLite connection open; previously it was only set once at schema creation time and had no effect on subsequent connections
+- **Stale path entry after rename** — `get_file_lines` and `get_metadata_context` now fix the `line_number=0` path entry inline when it doesn't match `files.path` (caused by a rename without re-indexing); guards against accumulated `line_number=0` duplicates from historical data missing the FK cascade
+
+### Changed
+
+- **`mise dev` creates `web/build/` if missing** — `mkdir -p web/build` runs before `cargo-watch` starts so the `#[derive(RustEmbed)]` folder check doesn't abort the build when the web UI hasn't been built yet
+- **`mise dev` enables debug logging** — server started with `RUST_LOG=debug` in the dev task
+- **Normalization formatter paths use shims** — local `config/server.toml` updated to use `~/.local/bin/biome` and the pnpm global `prettier` shim instead of version-pinned mise install paths
+
 ---
 
 ## [0.6.2] - 2026-03-11

@@ -147,7 +147,9 @@
 	}
 
 	.cp-panel {
-		width: min(640px, 90vw);
+		width: fit-content;
+		min-width: min(640px, 90vw);
+		max-width: 90vw;
 		background: var(--bg-secondary);
 		border: 1px solid var(--border);
 		border-radius: 8px;
@@ -191,6 +193,7 @@
 	.cp-results {
 		max-height: 360px;
 		overflow-y: auto;
+		overflow-x: hidden;
 	}
 
 	.cp-status {
@@ -204,7 +207,8 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		width: 100%;
+		width: max-content;
+		min-width: min(640px, 90vw);
 		background: none;
 		border: none;
 		text-align: left;
