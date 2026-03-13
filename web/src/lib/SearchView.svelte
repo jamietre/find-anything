@@ -25,6 +25,8 @@
 	export let nlpDateLabel: string | undefined = undefined;
 	export let nlpDetectedPhrase: string | undefined = undefined;
 	export let nlpConflict = false;
+	export let resultsStale = false;
+	export let deletedPaths: Set<string> = new Set();
 
 	const dispatch = createEventDispatcher<{
 		search: { query: string; mode: string };
@@ -32,6 +34,8 @@
 		clearNlpDate: void;
 		open: SearchResult;
 		treeToggle: void;
+		refreshResults: void;
+		dismissStale: void;
 	}>();
 
 	let searchBox: SearchBox;
@@ -118,10 +122,19 @@
 				{totalResults.toLocaleString()} result{totalResults !== 1 ? 's' : ''}{resultDateSuffix}
 			</div>
 		{/if}
+		{#if resultsStale}
+			<div class="stale-banner">
+				Index updated —
+				<button class="stale-refresh" on:click={() => dispatch('refreshResults')}>refresh results</button>
+				<button class="stale-dismiss" on:click={() => dispatch('dismissStale')} aria-label="Dismiss">✕</button>
+			</div>
+		{/if}
 		{#key searchId}
 			<ResultList
 				{results}
 				searching={isSearchActive}
+				{deletedPaths}
+				{query}
 				on:open={(e) => dispatch('open', e.detail)}
 			/>
 		{/key}
@@ -269,5 +282,43 @@
 		font-weight: 700;
 		cursor: help;
 		flex-shrink: 0;
+	}
+
+	.stale-banner {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 16px;
+		background: rgba(230, 162, 60, 0.1);
+		border-bottom: 1px solid rgba(230, 162, 60, 0.25);
+		color: #e6a23c;
+		font-size: 12px;
+		flex-shrink: 0;
+	}
+
+	.stale-refresh {
+		background: none;
+		border: none;
+		padding: 0;
+		font: inherit;
+		font-size: 12px;
+		color: inherit;
+		cursor: pointer;
+		text-decoration: underline;
+	}
+
+	.stale-dismiss {
+		background: none;
+		border: none;
+		padding: 0;
+		font-size: 12px;
+		color: inherit;
+		opacity: 0.6;
+		cursor: pointer;
+		margin-left: auto;
+	}
+
+	.stale-dismiss:hover {
+		opacity: 1;
 	}
 </style>

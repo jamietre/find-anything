@@ -7,6 +7,8 @@
 
 	/** All hits for this file, ordered by relevance (first hit is primary). */
 	export let hits: SearchResult[];
+	/** Current search query — used to highlight matches in the filename for path-only results. */
+	export let query = '';
 
 	$: result = hits[activeHitIndex] ?? hits[0];
 
@@ -112,6 +114,30 @@
 		return r.archive_path ? `${r.path}::${r.archive_path}` : r.path;
 	}
 
+	function escapeHtml(s: string): string {
+		return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+	}
+
+	/** Return HTML with query terms wrapped in <mark> for filename-only results. */
+	function highlightPath(path: string, q: string): string {
+		const terms = q.trim().split(/\s+/).filter(Boolean);
+		if (terms.length === 0) return escapeHtml(path);
+		const pattern = new RegExp(
+			terms.map(t => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'),
+			'gi'
+		);
+		let out = '';
+		let last = 0;
+		let m: RegExpExecArray | null;
+		while ((m = pattern.exec(path)) !== null) {
+			out += escapeHtml(path.slice(last, m.index));
+			out += `<mark class="path-match">${escapeHtml(m[0])}</mark>`;
+			last = m.index + m[0].length;
+		}
+		out += escapeHtml(path.slice(last));
+		return out;
+	}
+
 	let aliasesExpanded = false;
 </script>
 
@@ -126,7 +152,13 @@
 		title={result.line_number > 0 ? `Open file at line ${result.line_number}` : 'Open file'}
 	>
 		<span class="badge">{result.source}</span>
-		<span class="file-path" title={displayPath(result)}>{displayPath(result)}</span>
+		<span class="file-path" title={displayPath(result)}>
+			{#if result.line_number === 0 && !result.snippet.startsWith('[')}
+				{@html highlightPath(displayPath(result), query)}
+			{:else}
+				{displayPath(result)}
+			{/if}
+		</span>
 		{#if hits.length === 1 && hits[0].line_number > 0}
 			<span class="line-ref">:{hits[0].line_number}</span>
 		{:else if hits.length > 1}
@@ -253,6 +285,13 @@
 		white-space: nowrap;
 		flex: 1;
 		min-width: 0;
+	}
+
+	.file-path :global(.path-match) {
+		background: var(--match-line-bg, rgba(255, 200, 0, 0.2));
+		color: var(--match-text, #e3b341);
+		border-radius: 2px;
+		font-style: normal;
 	}
 
 	.line-ref {

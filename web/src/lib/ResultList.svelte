@@ -5,6 +5,8 @@
 
 	export let results: SearchResult[] = [];
 	export let searching = false;
+	export let deletedPaths: Set<string> = new Set();
+	export let query = '';
 
 	const dispatch = createEventDispatcher<{ open: SearchResult }>();
 
@@ -31,8 +33,9 @@
 		<p class="empty">No results.</p>
 	{:else}
 		{#each groups as group (group.key)}
-			<div class="result-pad">
-				<SearchResultItem hits={group.hits} on:open={(e) => dispatch('open', e.detail)} />
+			{@const isDeleted = deletedPaths.has(`${group.hits[0].source}:${group.hits[0].path}`)}
+			<div class="result-pad" class:deleted={isDeleted}>
+				<SearchResultItem hits={group.hits} {query} on:open={(e) => dispatch('open', e.detail)} />
 			</div>
 		{/each}
 	{/if}
@@ -55,6 +58,14 @@
 
 	.result-pad:last-child {
 		padding-bottom: 6px;
+	}
+
+	.result-pad.deleted {
+		opacity: 0.45;
+	}
+
+	.result-pad.deleted :global(.file-path) {
+		text-decoration: line-through;
 	}
 
 	.empty {

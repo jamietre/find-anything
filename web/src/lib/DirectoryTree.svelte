@@ -3,6 +3,7 @@
 	import { listDir } from '$lib/api';
 	import type { DirEntry } from '$lib/api';
 	import TreeRow from '$lib/TreeRow.svelte';
+	import { liveEvent } from '$lib/liveUpdates';
 
 	export let source: string;
 	/** Currently open file path — highlighted in the tree. */
@@ -22,6 +23,30 @@
 			loading = false;
 		}
 	});
+
+	// Refresh roots when a file at the root level is added, removed, or renamed.
+	$: if ($liveEvent && $liveEvent.source === source && !loading) {
+		const ev = $liveEvent;
+		const parentDir = dirOf(ev.path);
+		const newParentDir = ev.new_path ? dirOf(ev.new_path) : null;
+		if (parentDir === '' || newParentDir === '') {
+			refreshRoots();
+		}
+	}
+
+	async function refreshRoots() {
+		try {
+			const resp = await listDir(source, '');
+			roots = resp.entries;
+		} catch {
+			// leave existing roots on error
+		}
+	}
+
+	function dirOf(p: string): string {
+		const i = p.lastIndexOf('/');
+		return i >= 0 ? p.slice(0, i + 1) : '';
+	}
 </script>
 
 <div class="tree">

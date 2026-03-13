@@ -3,6 +3,7 @@
 	import { createEventDispatcher } from 'svelte';
 	import { listDir } from '$lib/api';
 	import type { DirEntry } from '$lib/api';
+	import { liveEvent } from '$lib/liveUpdates';
 
 	export let source: string;
 	export let prefix: string; // "" for root, "foo/bar/" for subdirectory
@@ -33,6 +34,21 @@
 
 	// Reload when prefix changes.
 	$: load(source, prefix);
+
+	// Reload when a live event affects the current directory.
+	$: if ($liveEvent && $liveEvent.source === source) {
+		const ev = $liveEvent;
+		const parentDir = dirOf(ev.path);
+		const newParentDir = ev.new_path ? dirOf(ev.new_path) : null;
+		if (parentDir === prefix || newParentDir === prefix) {
+			load(source, prefix);
+		}
+	}
+
+	function dirOf(p: string): string {
+		const i = p.lastIndexOf('/');
+		return i >= 0 ? p.slice(0, i + 1) : '';
+	}
 
 	async function load(_source: string, _prefix: string) {
 		loading = true;

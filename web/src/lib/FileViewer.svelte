@@ -14,6 +14,7 @@
 	import { parseImageDimensions } from '$lib/imageMeta';
 	import { marked } from 'marked';
 	import { maxMarkdownRenderKb } from '$lib/settingsStore';
+	import { liveEvent } from '$lib/liveUpdates';
 
 	export let source: string;
 	export let path: string;
@@ -27,6 +28,7 @@
 		lineselect: { selection: LineSelection };
 		open: { source: string; path: string; kind: string; archivePath?: string };
 		navigateDir: { prefix: string };
+		navigate: { path: string };
 	}>();
 
 	let loading = true;
@@ -210,6 +212,63 @@
 	}
 
 	$: codeLines = highlightedCode ? highlightedCode.split('\n') : [];
+
+	// Live update state
+	type FileState = 'normal' | 'deleted' | 'renamed';
+	let fileState: FileState = 'normal';
+	let renamedTo: string | null = null;
+
+	// The outer path to watch for live events. For archive members, events fire
+	// for the outer archive file, not the inner member.
+	$: watchPath = path;
+
+	$: if ($liveEvent && !loading && $liveEvent.source === source && $liveEvent.path === watchPath) {
+		const ev = $liveEvent;
+		if (ev.action === 'deleted') {
+			fileState = 'deleted';
+		} else if (ev.action === 'modified') {
+			if (fileState !== 'deleted') reload();
+		} else if (ev.action === 'renamed') {
+			fileState = 'renamed';
+			renamedTo = ev.new_path ?? null;
+		}
+	}
+
+	async function reload() {
+		fileState = 'normal';
+		renamedTo = null;
+		loading = true;
+		error = null;
+		try {
+			const data = await getFile(source, path, archivePath ?? undefined);
+			const compositePath = archivePath ? `${path}::${archivePath}` : path;
+			const zeroLines = data.lines.filter((l) => l.line_number === 0);
+			const contentLines = data.lines.filter((l) => l.line_number > 0);
+			metaLines = [];
+			duplicatePaths = [];
+			for (const l of zeroLines) {
+				if (l.content === compositePath) continue;
+				if (l.content.startsWith('[')) {
+					metaLines.push({ content: l.content });
+				} else {
+					duplicatePaths.push(l.content);
+				}
+			}
+			const contents = contentLines.map((l) => l.content);
+			lineOffsets = contentLines.map((l) => l.line_number);
+			rawContent = contents.join('\n');
+			highlightedCode = highlightFile(contents, path);
+			mtime = data.mtime;
+			size = data.size;
+			fileKind = data.file_kind ?? null;
+			indexingError = data.indexing_error ?? null;
+			isEncrypted = fileKind === 'pdf' && contentLines.length === 1 && contentLines[0].content === 'Content encrypted';
+		} catch (e) {
+			error = String(e);
+		} finally {
+			loading = false;
+		}
+	}
 </script>
 
 <div class="file-viewer">
@@ -218,6 +277,17 @@
 	{:else if error}
 		<div class="status error">{error}</div>
 	{:else}
+		{#if fileState === 'deleted'}
+			<div class="file-status-banner deleted-banner">
+				<span>This file has been deleted from the index.</span>
+			</div>
+		{:else if fileState === 'renamed' && renamedTo}
+			<div class="file-status-banner renamed-banner">
+				Renamed to
+				<button class="banner-btn" on:click={() => dispatch('navigate', { path: renamedTo ?? '' })}>{renamedTo}</button>
+				<button class="banner-dismiss" on:click={() => fileState = 'normal'} aria-label="Dismiss">✕</button>
+			</div>
+		{/if}
 		{#if indexingError}
 			<div class="indexing-error-banner">
 				⚠ Indexing error: <span class="error-text">{indexingError}</span>
@@ -513,6 +583,54 @@
 
 	@keyframes spin {
 		to { transform: rotate(360deg); }
+	}
+
+	.file-status-banner {
+		padding: 8px 16px;
+		font-size: 12px;
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		flex-shrink: 0;
+		border-bottom: 1px solid;
+	}
+
+	.deleted-banner {
+		background: rgba(248, 81, 73, 0.12);
+		border-color: rgba(248, 81, 73, 0.3);
+		color: #f85149;
+	}
+
+	.renamed-banner {
+		background: rgba(88, 166, 255, 0.1);
+		border-color: rgba(88, 166, 255, 0.25);
+		color: var(--accent, #58a6ff);
+	}
+
+	.banner-btn {
+		background: none;
+		border: none;
+		padding: 0;
+		font: inherit;
+		font-size: 12px;
+		color: inherit;
+		cursor: pointer;
+		text-decoration: underline;
+	}
+
+	.banner-dismiss {
+		background: none;
+		border: none;
+		padding: 0 0 0 4px;
+		font-size: 12px;
+		color: inherit;
+		opacity: 0.6;
+		cursor: pointer;
+		margin-left: auto;
+	}
+
+	.banner-dismiss:hover {
+		opacity: 1;
 	}
 
 	.indexing-error-banner {

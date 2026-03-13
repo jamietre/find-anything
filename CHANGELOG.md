@@ -21,11 +21,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **`excluded` shown in progress logs** — excluded file count is now included in the periodic progress line (`N unchanged, M excluded`) so it's visible during a scan, not just in the final summary
 - **`foreign_keys = ON` per connection** — `PRAGMA foreign_keys` is now re-enabled on every SQLite connection open; previously it was only set once at schema creation time and had no effect on subsequent connections
 - **Stale path entry after rename** — `get_file_lines` and `get_metadata_context` now fix the `line_number=0` path entry inline when it doesn't match `files.path` (caused by a rename without re-indexing); guards against accumulated `line_number=0` duplicates from historical data missing the FK cascade
+- **"Refresh results" banner not dismissing** — clicking "refresh results" re-triggered the `$liveEvent` reactive block (Svelte tracks `deletedPaths` as a dependency when `doSearch` resets it with `new Set()`), immediately re-setting `resultsStale = true`; fixed by tracking the last handled event by object reference and skipping re-processing of already-handled events
 
 ### Added
 
 - **Automatic daily compaction** — the server now runs a wasted-space scan 30 s after startup and then daily at `compaction.start_time` (default `02:00` local time); compaction rewrites ZIP archives to remove orphaned chunks (content no longer referenced by any `lines` row); compaction only runs when orphaned bytes ≥ `compaction.threshold_pct` percent of total archive bytes (default 10 %); scan elapsed time and orphaned/total counts are logged at INFO
 - **`[compaction]` config section** — new `server.toml` section with `threshold_pct` (f64, default `10.0`) and `start_time` (HH:MM string, default `"02:00"`); shown in `examples/server.toml` with commented-out defaults
+
+### Added
+
+- **Reactive UI via SSE** — the web UI now connects to `GET /api/v1/recent/stream` on load and reacts to index changes in real time: expanded tree directories silently re-fetch when a file beneath them is added, removed, or renamed; the file detail view auto-reloads on modify, shows a "DELETED" banner on delete, and offers a "Renamed to …" navigation link on rename; search results show a dismissible "Index updated — refresh results" banner on add/modify, and deleted-file result cards are greyed out with strikethrough; uses `fetch()` streaming (not `EventSource`) to support bearer-token auth, with exponential back-off reconnection
+- **Filename match highlighting** — path-only search results (files matched by name rather than content) now highlight the matched query terms in the file path using the same `<mark>` style as line-content matches; applies only to filename matches (`line_number = 0`, non-metadata snippets)
 
 ### Changed
 

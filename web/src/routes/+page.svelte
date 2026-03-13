@@ -10,6 +10,7 @@
 	import { search, listSources, getSettings, activateSession, AuthError } from '$lib/api';
 	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { getToken, setToken } from '$lib/token';
+	import { startLiveUpdates, liveEvent } from '$lib/liveUpdates';
 	import { contextWindow, maxMarkdownRenderKb } from '$lib/settingsStore';
 	import { formatHash } from '$lib/lineSelection';
 	import type { LineSelection } from '$lib/lineSelection';
@@ -60,6 +61,27 @@
 
 	let showTree = true;
 	let showPalette = false;
+
+	// Live index update state
+	let resultsStale = false;
+	let deletedPaths = new Set<string>();
+	// Tracks the last $liveEvent object we acted on. Prevents re-processing the
+	// same event when doSearch resets deletedPaths (which would otherwise
+	// re-trigger this reactive block and immediately re-set resultsStale = true).
+	let lastHandledEvent: typeof $liveEvent = null;
+
+	$: if ($liveEvent && $liveEvent !== lastHandledEvent) {
+		lastHandledEvent = $liveEvent;
+		const ev = $liveEvent;
+		const sourceMatches = selectedSources.length === 0 || selectedSources.includes(ev.source);
+		if (sourceMatches && query.trim().length >= 3) {
+			if (ev.action === 'deleted') {
+				deletedPaths = new Set([...deletedPaths, `${ev.source}:${ev.path}`]);
+			} else {
+				resultsStale = true;
+			}
+		}
+	}
 
 	let sidebarWidth: number = $profile.sidebarWidth ?? 240;
 
@@ -147,6 +169,8 @@
 	});
 
 	onMount(() => {
+		const stopLive = startLiveUpdates();
+
 		(async () => {
 			checkToken();
 			if (!showTokenSetup) {
@@ -176,6 +200,7 @@
 		// and the user scrolls near the sentinel, load more results.
 		mainContent.addEventListener('scroll', checkScroll, { passive: true });
 		return () => {
+			stopLive();
 			window.removeEventListener('keydown', handleKeydown, { capture: true });
 			mainContent.removeEventListener('scroll', checkScroll);
 		};
@@ -241,6 +266,8 @@
 	// ── Search ──────────────────────────────────────────────────────────────────
 
 	async function doSearch(q: string, m: string, srcs: string[], push = true) {
+		resultsStale = false;
+		deletedPaths = new Set();
 		if (q.trim().length < 3) {
 			results = []; totalResults = 0; noMoreResults = false; loadOffset = 0; searchError = null;
 			return;
@@ -486,6 +513,10 @@
 				on:clearNlpDate={handleClearNlpDate}
 				on:open={openFile}
 				on:treeToggle={handleTreeToggle}
+				{resultsStale}
+				{deletedPaths}
+				on:refreshResults={() => { doSearch(query, mode, selectedSources); }}
+				on:dismissStale={() => { resultsStale = false; }}
 			/>
 			<div bind:this={sentinel}></div>
 			{#if loadingMore}

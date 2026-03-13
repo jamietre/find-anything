@@ -3,6 +3,7 @@
 	import { listDir, listArchiveMembers } from '$lib/api';
 	import type { DirEntry } from '$lib/api';
 	import { splitEntryPath, shouldExpandEntry } from '$lib/filePath';
+	import { liveEvent } from '$lib/liveUpdates';
 
 	export let source: string;
 	export let entry: DirEntry;
@@ -31,6 +32,35 @@
 		if (shouldExpandEntry(entry, activePath) && !expanded) {
 			expandDir();
 		}
+	}
+
+	// Compute the prefix this directory row is responsible for.
+	// entry.path for directories already has a trailing slash (e.g. "docs/plans/").
+	$: myPrefix = entry.entry_type === 'dir' ? entry.path : null;
+
+	// React to live index events: silently refresh children when this expanded
+	// directory is the immediate parent of a changed file.
+	$: if ($liveEvent && myPrefix && expanded && $liveEvent.source === source) {
+		const ev = $liveEvent;
+		const parentDir = dirOf(ev.path);
+		const newParentDir = ev.new_path ? dirOf(ev.new_path) : null;
+		if (parentDir === myPrefix || newParentDir === myPrefix) {
+			silentRefresh();
+		}
+	}
+
+	async function silentRefresh() {
+		try {
+			const resp = await listDir(source, entry.path);
+			children = resp.entries;
+		} catch {
+			// leave existing children on error
+		}
+	}
+
+	function dirOf(p: string): string {
+		const i = p.lastIndexOf('/');
+		return i >= 0 ? p.slice(0, i + 1) : '';
 	}
 
 	async function expandDir() {

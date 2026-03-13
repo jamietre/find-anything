@@ -101,6 +101,7 @@
 				on:lineselect={(e) => dispatch('lineselect', e.detail)}
 				on:open={(e) => dispatch('openDirFile', e.detail)}
 				on:navigateDir={(e) => dispatch('openDir', e.detail)}
+				on:navigate={(e) => dispatch('openFileFromTree', { source: fileView.source, path: e.detail.path, kind: 'unknown' })}
 			/>
 		{/key}
 	{/if}
