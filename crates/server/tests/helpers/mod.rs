@@ -1,0 +1,146 @@
+#![allow(dead_code)]
+
+use std::time::{Duration, Instant};
+
+use axum::serve;
+use find_common::api::{BulkRequest, IndexFile, IndexLine, StatsResponse, SCANNER_VERSION};
+use find_common::config::parse_server_config;
+use find_server::{build_router, create_app_state};
+use flate2::{write::GzEncoder, Compression};
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use std::io::Write;
+use tokio::net::TcpListener;
+
+pub const TEST_TOKEN: &str = "integration-test-token";
+
+pub struct TestServer {
+    pub base_url: String,
+    pub client: reqwest::Client,
+    _data_dir: tempfile::TempDir,
+}
+
+impl TestServer {
+    pub async fn spawn() -> Self {
+        let data_dir = tempfile::TempDir::new().expect("tempdir");
+        let data_path = data_dir.path().to_str().unwrap().to_string();
+
+        let config_toml = format!(
+            "[server]\ndata_dir = \"{data_path}\"\ntoken = \"{TEST_TOKEN}\"\n"
+        );
+        let (config, _) = parse_server_config(&config_toml).expect("parse config");
+
+        let state = create_app_state(config).await.expect("create_app_state");
+        let app = build_router(state);
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+
+        tokio::spawn(async move {
+            serve(listener, app).await.expect("serve");
+        });
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {TEST_TOKEN}")).unwrap(),
+        );
+        let client = reqwest::Client::builder()
+            .default_headers(headers)
+            .build()
+            .expect("reqwest client");
+
+        TestServer {
+            base_url: format!("http://{addr}"),
+            client,
+            _data_dir: data_dir,
+        }
+    }
+
+    /// Returns a URL for the given path.
+    pub fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base_url)
+    }
+
+    /// Poll GET /api/v1/stats until both inbox_pending and archive_queue are 0.
+    /// Panics after 10 seconds.
+    pub async fn wait_for_idle(&self) {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let resp: StatsResponse = self
+                .client
+                .get(self.url("/api/v1/stats"))
+                .send()
+                .await
+                .expect("stats request")
+                .json()
+                .await
+                .expect("stats json");
+
+            if resp.inbox_pending == 0 && resp.archive_queue == 0 {
+                return;
+            }
+            if Instant::now() >= deadline {
+                panic!("worker did not become idle within 10s (inbox_pending={}, archive_queue={})",
+                    resp.inbox_pending, resp.archive_queue);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    }
+
+    /// gzip-encode a BulkRequest and POST to /api/v1/bulk; asserts 202.
+    pub async fn post_bulk(&self, req: &BulkRequest) {
+        let json = serde_json::to_vec(req).expect("serialize bulk");
+        let mut enc = GzEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&json).expect("gzip write");
+        let gz = enc.finish().expect("gzip finish");
+
+        let status = self
+            .client
+            .post(self.url("/api/v1/bulk"))
+            .header("Content-Encoding", "gzip")
+            .header("Content-Type", "application/json")
+            .body(gz)
+            .send()
+            .await
+            .expect("bulk request")
+            .status();
+
+        assert_eq!(status.as_u16(), 202, "expected 202 from /api/v1/bulk");
+    }
+}
+
+/// Build a BulkRequest that indexes a single plain-text file.
+/// line_number=0 is the filename; content lines start at 1.
+pub fn make_text_bulk(source: &str, path: &str, content: &str) -> BulkRequest {
+    let mut lines = vec![IndexLine {
+        archive_path: None,
+        line_number: 0,
+        content: path.to_string(),
+    }];
+    for (i, line) in content.lines().enumerate() {
+        lines.push(IndexLine {
+            archive_path: None,
+            line_number: i + 1,
+            content: line.to_string(),
+        });
+    }
+
+    BulkRequest {
+        source: source.to_string(),
+        files: vec![IndexFile {
+            path: path.to_string(),
+            mtime: 1_700_000_000,
+            size: Some(content.len() as i64),
+            kind: "text".to_string(),
+            lines,
+            extract_ms: None,
+            content_hash: None,
+            scanner_version: SCANNER_VERSION,
+            is_new: true,
+        }],
+        delete_paths: vec![],
+        scan_timestamp: Some(1_700_000_000),
+        indexing_failures: vec![],
+        rename_paths: vec![],
+    }
+}

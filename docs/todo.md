@@ -3,7 +3,9 @@
 Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
-
+[ ] CHORE: Integration tests
+[ ] CHORE: Code quality analysis on file scanning/walking/filtering pipeline
+[ ] BUG: When files added/removed, tree view does not update. (websockets?)
 [ ] FEAT: metrics - log start/end time of critical proceses to an external service - Grafana LGTM?
 [ ] FEAT: With [sources.nas-data] path = "/mnt/nas-data" missing from server, need to handle inline displaye better
 [ ] FEAT: In image detail split view, should be able to move divider/resize window
@@ -56,6 +58,7 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ### Completed Items
 
+[x] CHORE: find-scan and find-watch should follow all the same rules and configuration during their walk of the tree. The only thing they do differenltly is register a watcher, or call the indexer. Can we reuse this code, and have each client pass in an callback that gets called for each file that is accepted by the walk, and can then either register a watch or do the indexing?
 [x] BUG: Create a file, then rename it, it has a duplicate pointing to original
 [x] BUG: Don't emit this like a log, this should be user-facing: ❯ find-admin status > 2026-03-12T20:32:11.451925Z  WARN find_common::config: unknown config key: sources.0.base_url
 [x] BUG: Duplicate shows many copies : pictures/2020/takeout-20200507T101645Z-001.zip::Takeout/Google Photos/Naomi_s iPhone 4s/IMG_0576.JPG

@@ -7,6 +7,10 @@ edition = "2021"
 name = "find-server"
 path = "src/main.rs"
 
+[lib]
+name = "find_server"
+path = "src/lib.rs"
+
 [dependencies]
 find-common   = { path = "../common" }
 anyhow        = { workspace = true }

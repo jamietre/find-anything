@@ -115,6 +115,10 @@ GIT_DIRTY = "{{exec(command='git status --porcelain 2>/dev/null | head -1')}}"
 
 # ── Checks ────────────────────────────────────────────────────────────────────
 
+[tasks.test]
+description = "Run all Rust tests (unit + integration)"
+run = "cargo test --workspace"
+
 [tasks.check]
 description = "Type-check all Rust crates and the web UI"
 run = ["cargo check --workspace", "pnpm --dir web check"]
