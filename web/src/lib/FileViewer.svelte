@@ -6,6 +6,8 @@
 	import ImageViewer from './ImageViewer.svelte';
 	import MarkdownViewer from './MarkdownViewer.svelte';
 	import CodeViewer from './CodeViewer.svelte';
+	import PdfViewer from './PdfViewer.svelte';
+	import FileStatusBanner from './FileStatusBanner.svelte';
 	import {
 		type LineSelection,
 		firstLine,
@@ -61,9 +63,6 @@
 	}
 	// For images: false = split view (image + metadata side-by-side), true = full-width image
 	let imageFullWidth = false;
-	// PDF load state — reset whenever the source URL changes
-	let pdfLoaded = false;
-	$: { rawInlineUrl; pdfLoaded = false; }
 
 	// Parsed image dimensions for the aspect-ratio loading placeholder.
 	$: imgDims = parseImageDimensions(metaLines);
@@ -261,28 +260,14 @@
 	{:else if error}
 		<div class="status error">{error}</div>
 	{:else}
-		{#if fileState === 'deleted'}
-			<div class="file-status-banner deleted-banner">
-				<span>This file has been deleted from the index.</span>
-			</div>
-		{:else if fileState === 'renamed' && renamedTo}
-			<div class="file-status-banner renamed-banner">
-				Renamed to
-				<button class="banner-btn" on:click={() => dispatch('navigate', { path: renamedTo ?? '' })}>{renamedTo}</button>
-				<button class="banner-dismiss" on:click={() => fileState = 'normal'} aria-label="Dismiss">✕</button>
-			</div>
-		{:else if fileState === 'modified'}
-			<div class="file-status-banner modified-banner">
-				<span>Content has changed.</span>
-				<button class="banner-btn" on:click={reload}>Reload</button>
-				<button class="banner-dismiss" on:click={() => fileState = 'normal'} aria-label="Dismiss">✕</button>
-			</div>
-		{/if}
-		{#if indexingError}
-			<div class="indexing-error-banner">
-				⚠ Indexing error: <span class="error-text">{indexingError}</span>
-			</div>
-		{/if}
+		<FileStatusBanner
+			{fileState}
+			{renamedTo}
+			{indexingError}
+			on:navigate={(e) => dispatch('navigate', e.detail)}
+			on:dismiss={() => fileState = 'normal'}
+			on:reload={reload}
+		/>
 		<div class="toolbar">
 			<button class="toolbar-btn" on:click={toggleWordWrap} title="Toggle word wrap">
 				{wordWrap ? '⊟' : '⊞'} Wrap
@@ -338,12 +323,7 @@
 				/>
 			{:else}
 				<!-- PDF / other inline kind -->
-				<div class="original-panel">
-					{#if !pdfLoaded}<div class="pdf-loading"><div class="pdf-spinner"></div></div>{/if}
-					<iframe src={rawInlineUrl} title="Original file" class="original-iframe"
-						class:iframe-hidden={!pdfLoaded}
-						on:load={() => pdfLoaded = true}></iframe>
-				</div>
+				<PdfViewer src={rawInlineUrl} />
 			{/if}
 		{:else}
 			<!-- Extracted text / code view -->
@@ -545,121 +525,9 @@
 		text-decoration: underline;
 	}
 
-	.original-panel {
-		flex: 1;
-		overflow: auto;
-		display: flex;
-		flex-direction: column;
-		background: var(--bg);
-	}
-
-	.original-iframe {
-		flex: 1;
-		width: 100%;
-		height: 100%;
-		border: none;
-		min-height: 400px;
-	}
-
-	.iframe-hidden {
-		display: none;
-	}
-
-	.pdf-loading {
-		flex: 1;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-	}
-
-	.pdf-spinner {
-		width: 32px;
-		height: 32px;
-		border: 3px solid rgba(255, 255, 255, 0.08);
-		border-top-color: var(--accent, #58a6ff);
-		border-radius: 50%;
-		animation: spin 0.8s linear infinite;
-	}
-
-	@keyframes spin {
-		to { transform: rotate(360deg); }
-	}
-
-	.file-status-banner {
-		padding: 8px 16px;
-		font-size: 12px;
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		flex-shrink: 0;
-		border-bottom: 1px solid;
-	}
-
-	.deleted-banner {
-		background: rgba(248, 81, 73, 0.12);
-		border-color: rgba(248, 81, 73, 0.3);
-		color: #f85149;
-	}
-
-	.modified-banner {
-		background: rgba(230, 162, 60, 0.1);
-		border-color: rgba(230, 162, 60, 0.25);
-		color: #e6a23c;
-	}
-
-	.renamed-banner {
-		background: rgba(88, 166, 255, 0.1);
-		border-color: rgba(88, 166, 255, 0.25);
-		color: var(--accent, #58a6ff);
-	}
-
-	.banner-btn {
-		background: none;
-		border: none;
-		padding: 0;
-		font: inherit;
-		font-size: 12px;
-		color: inherit;
-		cursor: pointer;
-		text-decoration: underline;
-	}
-
-	.banner-dismiss {
-		background: none;
-		border: none;
-		padding: 0 0 0 4px;
-		font-size: 12px;
-		color: inherit;
-		opacity: 0.6;
-		cursor: pointer;
-		margin-left: auto;
-	}
-
-	.banner-dismiss:hover {
-		opacity: 1;
-	}
-
-	.indexing-error-banner {
-		padding: 8px 16px;
-		background: rgba(230, 162, 60, 0.12);
-		border-bottom: 1px solid rgba(230, 162, 60, 0.3);
-		color: #e6a23c;
-		font-size: 12px;
-		display: flex;
-		align-items: baseline;
-		gap: 6px;
-		flex-shrink: 0;
-	}
-
 	.encrypted-notice {
 		padding: 24px 16px;
 		color: var(--text-muted);
 		font-size: 13px;
-	}
-
-	.error-text {
-		color: var(--text-muted);
-		font-family: var(--font-mono);
-		word-break: break-all;
 	}
 </style>
