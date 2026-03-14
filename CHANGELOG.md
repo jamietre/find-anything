@@ -36,6 +36,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **Archive extractor integration tests** — `crates/extractors/archive/tests/extract.rs` with 16 tests covering all supported inner formats (tar, tgz, tar.bz2, tar.xz, zip, 7z), deeply nested paths, 200-char filenames, unicode filenames, depth limiting, and exclude-pattern filtering; `fixtures.zip` (outer ZIP for streaming tests) and `fixtures.tgz` (node `tar` test suite fixture with PAX headers, hardlinks, and extreme paths) added as test fixtures
+
 - **Keyboard navigation in file tree** — Arrow Up/Down moves the cursor through all tree items (sources, directories, files) without opening files; Enter opens the focused item; the cursor is highlighted via a Svelte store (`keyboardCursorPath`) so keyboard and mouse selection are visually distinct; focus is restored to the tree after a file opens so navigation can continue immediately with arrow keys
 
 - **Reactive UI via SSE** — the web UI now connects to `GET /api/v1/recent/stream` on load and reacts to index changes in real time: expanded tree directories silently re-fetch when a file beneath them is added, removed, or renamed; the file detail view auto-reloads on modify, shows a "DELETED" banner on delete, and offers a "Renamed to …" navigation link on rename; search results show a dismissible "Index updated — refresh results" banner on add/modify, and deleted-file result cards are greyed out with strikethrough; uses `fetch()` streaming (not `EventSource`) to support bearer-token auth, with exponential back-off reconnection

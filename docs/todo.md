@@ -4,7 +4,7 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
 
-[ ] CHORE: Look at archive/costar-code.zip::code/lm/listing-manager-bff/node_modules/npm/node_modules/tar/test/fixtures.tgz::fixtures/c.tar::r/e/a/l/l/y/-/d/e/e/p/-/f/o/l/d/e/r/-/p/a/t/h/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc -- this a great stress test. Create a repo with junk data, but same basic structure for this one deep inner node, and make a test around it
+[ ] CHORE: Look at archive/costar-code.zip::code/lm/listing-manager-bff/node_modules/npm/node_modules/tar/test/fixtures.tgz::fixtures/c.tar::r/e/a/l/l/y/-/d/e/e/p/-/f/o/l/d/e/r/-/p/a/t/h/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc -- this a great stress test. Copy fixtures.tgz
 
 [ ] CHORE: Code quality analysis on file scanning/walking/filtering pipeline
 
