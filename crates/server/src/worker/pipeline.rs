@@ -123,12 +123,13 @@ pub(super) fn process_file_phase1_fallback(
 
     // Upsert the file record and get the stable file_id.
     let file_id: i64 = tx.query_row(
-        "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, canonical_file_id)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)
+        "INSERT INTO files (path, mtime, size, kind, scanner_version, indexed_at, extract_ms, content_hash, canonical_file_id)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, NULL)
          ON CONFLICT(path) DO UPDATE SET
            mtime             = excluded.mtime,
            size              = excluded.size,
            kind              = excluded.kind,
+           scanner_version   = excluded.scanner_version,
            indexed_at        = excluded.indexed_at,
            extract_ms        = excluded.extract_ms,
            content_hash      = excluded.content_hash,
@@ -136,6 +137,7 @@ pub(super) fn process_file_phase1_fallback(
          RETURNING id",
         rusqlite::params![
             file.path, file.mtime, file.size, file.kind,
+            file.scanner_version,
             now_secs,
             file.extract_ms.map(|ms| ms as i64),
             file.content_hash.as_deref(),

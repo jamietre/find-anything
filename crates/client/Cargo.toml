@@ -51,7 +51,16 @@ colored     = "3"
 flate2      = "1"
 tempfile    = "3"
 
+[lib]
+name = "find_client"
+path = "src/lib.rs"
+
 [dev-dependencies]
+find-server = { path = "../server" }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+axum = "0.8"
+filetime = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 find-windows-service = { path = "../windows/service" }

@@ -11,6 +11,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **Client integration test suite (`crates/client/tests/`)** — 11 `find-scan` integration tests (S1–S11) and 5 `find-watch` tests (W1–W5, `#[ignore]` by default) that drive the full round-trip: real files on disk → extraction → bulk submission → server indexing → search verification; covers basic indexing, mtime-based skip, force/upgrade modes, delete detection, exclude patterns, ZIP archive members, and external extractors in both stdout and tempdir modes; a new `[lib]` target exposes client modules so tests can call `run_scan` / `run_watch` directly without spawning subprocesses
+
+### Fixed
+
+- **`scanner_version` never persisted to database** — `pipeline.rs`'s file upsert omitted `scanner_version` from both the `INSERT` column list and the `ON CONFLICT DO UPDATE SET` clause, so every indexed file retained `scanner_version = 0` regardless of what the client submitted; `find-scan --upgrade` consequently re-indexed all files on every run since `0 < SCANNER_VERSION` always; the column is now included in the upsert so upgrade runs correctly converge
+
 - **External pluggable extractors (`[scan.extractors]`)** — users can now wire in system tools for file formats the built-in extractors don't support; configure an extension with `mode = "stdout"` (capture tool stdout as file content) or `mode = "tempdir"` (extract to temp dir and walk members, stored as composite `outer::member` paths identical to built-in archives); the `{file}`, `{name}`, and `{dir}` placeholders are substituted in args; a `"builtin"` sentinel preserves existing behaviour for any extension; example: `rar = { mode = "tempdir", bin = "unrar", args = ["e", "-y", "{file}", "{dir}"] }` adds RAR support on platforms where the built-in `unrar_sys` crate won't compile
 
 ### Fixed

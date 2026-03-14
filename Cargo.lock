@@ -1294,16 +1294,19 @@ name = "find-client"
 version = "0.6.2"
 dependencies = [
  "anyhow",
+ "axum",
  "blake3",
  "chrono",
  "clap",
  "colored",
+ "filetime",
  "find-common",
  "find-extract-archive",
  "find-extract-dispatch",
  "find-extract-media",
  "find-extract-pdf",
  "find-extract-pe",
+ "find-server",
  "find-windows-service",
  "flate2",
  "globset",
@@ -1318,6 +1321,7 @@ dependencies = [
  "tracing-subscriber",
  "walkdir",
  "windows-service",
+ "zip 2.4.2",
 ]
 
 [[package]]
