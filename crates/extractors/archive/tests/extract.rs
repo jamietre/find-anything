@@ -71,7 +71,7 @@ fn any_path_contains(lines: &[find_extract_types::IndexLine], sub: &str) -> bool
 #[test]
 fn outer_zip_lists_all_inner_archives() {
     let lines = extract(&fixtures_zip(), &default_cfg()).unwrap();
-    for name in &["inner.tar", "inner.tgz", "inner.tar.bz2", "inner.tar.xz", "inner.zip", "inner.7z", "inner.rar", "fixtures.tgz"] {
+    for name in &["inner.tar", "inner.tgz", "inner.tar.bz2", "inner.tar.xz", "inner.zip", "inner.7z", "fixtures.tgz"] {
         assert!(
             has_path(&lines, name),
             "{name} not found as a top-level member"
@@ -119,19 +119,6 @@ fn inner_zip_members_extracted() {
     assert!(has_path(&lines, "inner.zip::subdir/greet.txt"));
 }
 
-#[test]
-fn inner_rar_members_extracted() {
-    let lines = extract(&fixtures_zip(), &default_cfg()).unwrap();
-    assert!(any_path_contains(&lines, "inner.rar::"), "no inner.rar members found");
-    assert!(
-        lines.iter().any(|l| {
-            l.archive_path.as_deref()
-                .map(|p| p.starts_with("inner.rar::") && p.ends_with("hello.txt"))
-                .unwrap_or(false)
-        }),
-        "inner.rar::hello.txt not found"
-    );
-}
 
 #[test]
 fn inner_7z_members_extracted() {
@@ -144,6 +131,19 @@ fn inner_7z_members_extracted() {
                 .unwrap_or(false)
         })
     }, "inner.7z::hello.txt not found");
+}
+
+#[test]
+fn inner_rar_indexed_by_filename_only() {
+    // RAR extraction is not supported (unrar_sys fails to cross-compile for ARM).
+    // inner.rar should appear as a top-level member of the outer ZIP but must
+    // NOT be traversed — no composite paths like "inner.rar::..." should exist.
+    let lines = extract(&fixtures_zip(), &default_cfg()).unwrap();
+    assert!(has_path(&lines, "inner.rar"), "inner.rar not found as a top-level member");
+    assert!(
+        !any_path_contains(&lines, "inner.rar::"),
+        "inner.rar was unexpectedly traversed; found composite paths"
+    );
 }
 
 // ============================================================================

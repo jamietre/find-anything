@@ -80,7 +80,7 @@ pub fn accepts(path: &Path) -> bool {
 pub fn is_archive_ext(ext: &str) -> bool {
     matches!(
         ext.to_lowercase().as_str(),
-        "zip" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "tbz2" | "txz" | "7z" | "rar"
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "tbz2" | "txz" | "7z"
     )
 }
 
@@ -99,7 +99,6 @@ enum ArchiveKind {
     Bz2,      // single-file bzip2
     Xz,       // single-file xz
     SevenZip,
-    Rar,
 }
 
 fn detect_kind_from_name(name: &str) -> Option<ArchiveKind> {
@@ -114,7 +113,6 @@ fn detect_kind_from_name(name: &str) -> Option<ArchiveKind> {
     if n.ends_with(".bz2")                              { return Some(ArchiveKind::Bz2);     }
     if n.ends_with(".xz")                               { return Some(ArchiveKind::Xz);      }
     if n.ends_with(".7z")                               { return Some(ArchiveKind::SevenZip);}
-    if n.ends_with(".rar")                              { return Some(ArchiveKind::Rar);     }
     None
 }
 
@@ -139,7 +137,6 @@ fn dispatch_streaming(path: &Path, kind: &ArchiveKind, cfg: &ExtractorConfig, ca
         ArchiveKind::Bz2      => { callback(single_compressed(BzDecoder::new(File::open(path)?), path, cfg)?); Ok(()) }
         ArchiveKind::Xz       => { callback(single_compressed(XzDecoder::new(File::open(path)?), path, cfg)?); Ok(()) }
         ArchiveKind::SevenZip => sevenz_streaming(path, path.to_str().unwrap_or(""), cfg, callback),
-        ArchiveKind::Rar      => rar_streaming(path, path.to_str().unwrap_or(""), cfg, callback),
     }
 }
 
@@ -174,37 +171,6 @@ fn sanitize_archive_mtime(ts: i64) -> Option<i64> {
     }
 }
 
-/// Convert a DOS-format datetime (u32, as stored in RAR and ZIP headers) to a
-/// Unix timestamp.  Returns `None` for zero/invalid values.
-///
-/// DOS datetime layout: bits 31-25 = year-1980, 24-21 = month, 20-16 = day,
-/// 15-11 = hour, 10-5 = minute, 4-0 = second/2.
-fn dos_datetime_to_unix(dos: u32) -> Option<i64> {
-    if dos == 0 {
-        return None;
-    }
-    let sec  = (dos & 0x1F) * 2;
-    let min  = (dos >>  5) & 0x3F;
-    let hour = (dos >> 11) & 0x1F;
-    let day  = (dos >> 16) & 0x1F;
-    let mon  = (dos >> 21) & 0x0F;
-    let year = ((dos >> 25) & 0x7F) + 1980;
-    if mon == 0 || mon > 12 || day == 0 || day > 31 || hour > 23 || min > 59 || sec > 59 {
-        return None;
-    }
-    // Days from 1970-01-01 to start of `year`, counting leap years.
-    let y = year as i64;
-    let days_to_year = (y - 1970) * 365
-        + (y - 1969).div_euclid(4)
-        - (y - 1901).div_euclid(100)
-        + (y - 1601).div_euclid(400);
-    // Days from start of year to start of month.
-    const MONTH_DAYS: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-    let is_leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
-    let leap_day = if is_leap && mon > 2 { 1i64 } else { 0 };
-    let days = days_to_year + MONTH_DAYS[(mon - 1) as usize] + leap_day + day as i64 - 1;
-    Some(days * 86400 + hour as i64 * 3600 + min as i64 * 60 + sec as i64)
-}
 
 /// Parse the UNIX extended timestamp from a ZIP extra data block (tag 0x5455).
 /// The local-file version has up to three timestamps; only mtime (flags bit 0) is used.
@@ -759,9 +725,6 @@ fn handle_nested_archive(
         // ── 7z: requires a seekable file path — always use temp file ─────
         ArchiveKind::SevenZip => nested_sevenz(reader, outer_name, &inner_cfg, &mut prefixed),
 
-        // ── RAR: requires a seekable file path — always use temp file ────
-        ArchiveKind::Rar => nested_rar(reader, outer_name, &inner_cfg, &mut prefixed),
-
         // Single-file compressed types are not passed to handle_nested_archive.
         _ => return,
     };
@@ -853,149 +816,8 @@ fn nested_sevenz(mut reader: &mut dyn Read, outer_name: &str, cfg: &ExtractorCon
 }
 
 // ============================================================================
-// RAR EXTRACTION
+// MEMBER EXTRACTION (handles bytes from any non-archive format)
 // ============================================================================
-
-/// Extract a RAR archive (RAR4 and RAR5), emitting one `MemberBatch` per member.
-///
-/// Uses the `unrar` crate (bindings to unrar 7.0.9 C++ library) which requires a
-/// file path — not a reader.  Nested RARs are written to a temp file via
-/// `nested_rar` before recursing.
-fn rar_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
-    let size_limit = cfg.max_content_kb * 1024;
-    let excludes = build_globset(&cfg.exclude_patterns).unwrap_or_default();
-
-    let mut archive = unrar::Archive::new(path)
-        .open_for_processing()
-        .map_err(|e| anyhow::anyhow!("rar: failed to open '{}': {e}", path.display()))?;
-
-    loop {
-        let header = match archive.read_header() {
-            Ok(Some(h)) => h,
-            Ok(None) => break,
-            Err(e) => {
-                warn!("rar: header read error in '{}': {e}", path.display());
-                break;
-            }
-        };
-
-        let entry = header.entry();
-        // Normalize Windows-style backslash paths
-        let name = entry.filename.to_string_lossy().replace('\\', "/");
-
-        if entry.is_directory() {
-            archive = match header.skip() {
-                Ok(a) => a,
-                Err(e) => { warn!("rar: skip error in '{}': {e}", path.display()); break; }
-            };
-            continue;
-        }
-
-        if !cfg.include_hidden && has_hidden_component(&name) {
-            archive = match header.skip() {
-                Ok(a) => a,
-                Err(e) => { warn!("rar: skip error in '{}': {e}", path.display()); break; }
-            };
-            continue;
-        }
-
-        if excludes.is_match(&*name) {
-            archive = match header.skip() {
-                Ok(a) => a,
-                Err(e) => { warn!("rar: skip error in '{}': {e}", path.display()); break; }
-            };
-            continue;
-        }
-
-        // Skip entries that would exceed the size limit (unpacked_size is u64).
-        // We still emit a filename-only batch so the member is discoverable.
-        let unpacked = entry.unpacked_size as usize;
-        if unpacked > size_limit {
-            callback(MemberBatch {
-                lines: make_filename_line(&name),
-                content_hash: None,
-                skip_reason: Some(format!(
-                    "entry too large ({} KB > {} KB limit)",
-                    unpacked / 1024, size_limit / 1024
-                )),
-                mtime: None,
-            });
-            archive = match header.skip() {
-                Ok(a) => a,
-                Err(e) => { warn!("rar: skip error in '{}': {e}", path.display()); break; }
-            };
-            continue;
-        }
-
-        // Nested multi-file archive: read bytes, buffer as cursor, recurse.
-        if let Some(kind) = detect_kind_from_name(&name) {
-            if is_multifile_archive(&kind) {
-                let (data, next) = match header.read() {
-                    Ok(r) => r,
-                    Err(e) => { warn!("rar: failed to read nested archive '{}': {e}", name); break; }
-                };
-                archive = next;
-                let mut cursor = Cursor::new(data);
-                handle_nested_archive(&mut cursor, &name, &kind, cfg, callback);
-                continue;
-            }
-        }
-
-        let mtime = dos_datetime_to_unix(entry.file_time).and_then(sanitize_archive_mtime);
-
-        let (data, next) = match header.read() {
-            Ok(r) => r,
-            Err(e) => {
-                warn!("rar: failed to read '{}' in '{}': {e}", name, path.display());
-                break;
-            }
-        };
-        archive = next;
-
-        let content_hash = if data.is_empty() { None } else {
-            Some(blake3::hash(&data).to_hex().to_string())
-        };
-        callback(MemberBatch {
-            lines: extract_member_bytes(data, &name, display_prefix, cfg),
-            content_hash,
-            skip_reason: None,
-            mtime,
-        });
-    }
-
-    Ok(())
-}
-
-/// Extract a nested RAR from a reader by writing to a temp file, then calling
-/// `rar_streaming`.  RAR extraction requires a seekable file path.
-fn nested_rar(mut reader: &mut dyn Read, outer_name: &str, cfg: &ExtractorConfig, callback: CB<'_>) -> Result<()> {
-    let max_bytes = (cfg.max_temp_file_mb * 1024 * 1024) as u64;
-
-    let mut tmp = tempfile::Builder::new()
-        .suffix(".rar")
-        .tempfile()?;
-
-    let written = {
-        let mut limited = (&mut reader).take(max_bytes + 1);
-        std::io::copy(&mut limited, &mut tmp)?
-    };
-
-    if written > max_bytes {
-        warn!(
-            "nested rar '{}' exceeds {} MB; indexing filename only",
-            outer_name, cfg.max_temp_file_mb
-        );
-        let _ = std::io::copy(&mut reader, &mut std::io::sink());
-        return Ok(());
-    }
-
-    {
-        use std::io::{Seek, Write};
-        tmp.flush()?;
-        tmp.seek(std::io::SeekFrom::Start(0))?;
-    }
-    rar_streaming(tmp.path(), outer_name, cfg, callback)
-}
 
 // ============================================================================
 // MEMBER EXTRACTION (handles bytes from any non-archive format)

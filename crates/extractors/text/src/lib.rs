@@ -178,7 +178,7 @@ fn is_binary_ext(ext: &str) -> bool {
         "jpg" | "jpeg" | "png" | "gif" | "bmp" | "ico" | "webp" | "heic"
         | "mp3" | "mp4" | "avi" | "mov" | "mkv" | "flac" | "wav" | "ogg"
         | "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-        | "zip" | "tar" | "gz" | "bz2" | "xz" | "7z" | "rar"
+        | "zip" | "tar" | "gz" | "bz2" | "xz" | "7z"
         | "exe" | "dll" | "so" | "dylib" | "sys" | "scr" | "efi"
         | "class" | "jar" | "pyc" | "pyd"
         | "o" | "a" | "lib" | "obj" | "wasm"
