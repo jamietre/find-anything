@@ -317,7 +317,7 @@ pub fn recent_activity(
 
 pub fn list_files(conn: &Connection) -> Result<Vec<FileRecord>> {
     let mut stmt = conn.prepare(
-        "SELECT path, mtime, kind, scanner_version FROM files ORDER BY path"
+        "SELECT path, mtime, kind, scanner_version, indexed_at FROM files ORDER BY path"
     )?;
     let rows = stmt
         .query_map([], |row| {
@@ -326,6 +326,7 @@ pub fn list_files(conn: &Connection) -> Result<Vec<FileRecord>> {
                 mtime: row.get(1)?,
                 kind: row.get(2)?,
                 scanner_version: row.get::<_, u32>(3).unwrap_or(0),
+                indexed_at: row.get(4)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

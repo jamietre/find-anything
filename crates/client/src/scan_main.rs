@@ -31,6 +31,15 @@ struct Args {
     #[arg(long)]
     upgrade: bool,
 
+    /// Force re-index of all files regardless of mtime or scanner version.
+    /// Useful after changing normalizer/formatter config.
+    /// Optionally supply the epoch (Unix seconds) printed at the start of a
+    /// prior interrupted run to resume it; files with indexed_at >= EPOCH are
+    /// skipped. If omitted, uses the current time and prints the epoch so you
+    /// can resume if the run is interrupted.
+    #[arg(long, value_name = "EPOCH", num_args = 0..=1, default_missing_value = "now")]
+    force: Option<String>,
+
     /// Suppress per-file processing logs (only log warnings, errors, and summary)
     #[arg(long)]
     quiet: bool,
@@ -79,10 +88,29 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let force_since: Option<i64> = match args.force.as_deref() {
+        None => None,
+        Some("now") => {
+            let epoch = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64;
+            eprintln!("Force re-index started (epoch {epoch}).");
+            eprintln!("If interrupted, resume with: find-scan --force {epoch}");
+            Some(epoch)
+        }
+        Some(s) => {
+            let epoch: i64 = s.parse().context("--force value must be a Unix timestamp in seconds")?;
+            eprintln!("Resuming force re-index from epoch {epoch}.");
+            Some(epoch)
+        }
+    };
+
     let opts = ScanOptions {
         upgrade: args.upgrade,
         quiet: args.quiet,
         dry_run: args.dry_run,
+        force_since,
     };
 
     // Single-file mode: scan one specific file and exit.

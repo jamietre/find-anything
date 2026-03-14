@@ -186,6 +186,11 @@ pub struct FileRecord {
     /// `find-scan --upgrade` to detect entries that need re-extraction.
     #[serde(default)]
     pub scanner_version: u32,
+    /// Unix timestamp (seconds) when the server last processed this file.
+    /// Used by `find-scan --force` to skip files already re-indexed in a
+    /// prior interrupted run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub indexed_at: Option<i64>,
 }
 
 /// One entry in a directory listing.

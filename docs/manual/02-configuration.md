@@ -233,7 +233,7 @@ For each indexed text file the server attempts the following steps in order, sto
 
 **Markdown files are excluded** — line structure is semantically meaningful in markdown (a wrapped paragraph would break rendering). Markdown is never modified regardless of line length.
 
-**Existing content is not retroactively normalized.** Normalization applies only when a file is indexed for the first time or re-indexed. To normalize already-indexed files, run `find-scan --reindex`.
+**Existing content is not retroactively normalized.** Normalization applies only when a file is indexed for the first time or re-indexed. To normalize already-indexed files, run `find-scan --force`.
 
 ### `max_line_length`
 
