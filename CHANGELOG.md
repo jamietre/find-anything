@@ -36,7 +36,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
-- **Archive extractor integration tests** — `crates/extractors/archive/tests/extract.rs` with 16 tests covering all supported inner formats (tar, tgz, tar.bz2, tar.xz, zip, 7z), deeply nested paths, 200-char filenames, unicode filenames, depth limiting, and exclude-pattern filtering; `fixtures.zip` (outer ZIP for streaming tests) and `fixtures.tgz` (node `tar` test suite fixture with PAX headers, hardlinks, and extreme paths) added as test fixtures
+- **RAR archive extraction** — `.rar` files (RAR4 and RAR5) are now indexed by `find-extract-archive` via the `unrar` crate (bindings to unrar 7.0.9); supports all compression methods, nested archives written to temp files before recursion, exclude patterns, hidden-file filtering, mtime from DOS datetime; adds +336 KB to `find-extract-archive` only (tracked in `docs/binary-sizes.md`)
+- **Archive extractor integration tests** — `crates/extractors/archive/tests/extract.rs` with 17 tests covering all supported inner formats (tar, tgz, tar.bz2, tar.xz, zip, 7z, rar), deeply nested paths, 200-char filenames, unicode filenames, depth limiting, and exclude-pattern filtering; `fixtures.zip` (outer ZIP for streaming tests) and `fixtures.tgz` (node `tar` test suite fixture with PAX headers, hardlinks, and extreme paths) added as test fixtures; fixture generation script at `docs/misc/make_fixtures.py`
+- **Binary size tracking** — `docs/binary-sizes.md` records unstripped release binary sizes per version to catch regressions on space-constrained systems
 
 - **Keyboard navigation in file tree** — Arrow Up/Down moves the cursor through all tree items (sources, directories, files) without opening files; Enter opens the focused item; the cursor is highlighted via a Svelte store (`keyboardCursorPath`) so keyboard and mouse selection are visually distinct; focus is restored to the tree after a file opens so navigation can continue immediately with arrow keys
 

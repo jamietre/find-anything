@@ -362,7 +362,7 @@ pub fn extractor_binary_for(path: &Path, extractor_dir: &Option<String>) -> Stri
         .to_lowercase();
 
     let name = match ext.as_str() {
-        "zip" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "tbz2" | "txz" | "7z" => {
+        "zip" | "tar" | "gz" | "bz2" | "xz" | "tgz" | "tbz2" | "txz" | "7z" | "rar" => {
             "find-extract-archive"
         }
         "pdf" => "find-extract-pdf",

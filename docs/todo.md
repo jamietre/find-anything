@@ -4,10 +4,9 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
 
-[ ] CHORE: Look at archive/costar-code.zip::code/lm/listing-manager-bff/node_modules/npm/node_modules/tar/test/fixtures.tgz::fixtures/c.tar::r/e/a/l/l/y/-/d/e/e/p/-/f/o/l/d/e/r/-/p/a/t/h/cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc -- this a great stress test. Copy fixtures.tgz
-
+[ ] FEAT: allow adding extra tools (similar to formatters) for archive extraction. Extract hardcoded into default config
+[ ] FEAT: allow adding file extension -> content type mappers. Extract all hardcoded into config
 [ ] CHORE: Code quality analysis on file scanning/walking/filtering pipeline
-
 [ ] FEAT: metrics - log start/end time of critical proceses to an external service - Grafana LGTM?
 [ ] FEAT: With [sources.nas-data] path = "/mnt/nas-data" missing from server, need to handle inline displaye better
 [ ] FEAT: In image detail split view, should be able to move divider/resize window
@@ -52,6 +51,7 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ### Completed Items
 
+[x] CHORE: Look at node-tar:fixtures.tgz -- this a great stress test. Copy fixtures.tgz
 [x] FEAT: add -f/--follow to find-recent/ /btw
 [x] BUG: "WARN find_server::routes::search: search source error: fts5: syntax error near ".": Error code 1: SQL logic error"
 [x] BUG: Hand pointer shows when hovering over :line in search results page when there are no "next/prev" line arrows
