@@ -358,6 +358,311 @@ fn process_request_phase1(
     Ok(())
 }
 
+// ── Tests ──────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use find_common::api::{BulkRequest, IndexFile, IndexLine, PathRename};
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    fn make_worker_config() -> WorkerConfig {
+        WorkerConfig {
+            request_timeout: std::time::Duration::from_secs(30),
+            inline_threshold_bytes: 0,
+            archive_batch_size: 100,
+            activity_log_max_entries: 1000,
+            normalization: find_common::config::NormalizationSettings::default(),
+        }
+    }
+
+    fn make_status() -> StatusHandle {
+        Arc::new(Mutex::new(find_common::api::WorkerStatus::Idle))
+    }
+
+    fn make_index_file(path: &str, kind: &str) -> IndexFile {
+        IndexFile {
+            path: path.to_string(),
+            mtime: 1_000_000,
+            size: Some(42),
+            kind: kind.to_string(),
+            scanner_version: 1,
+            lines: vec![IndexLine {
+                archive_path: None,
+                line_number: 0,
+                content: path.to_string(),
+            }],
+            extract_ms: None,
+            content_hash: None,
+            is_new: true,
+        }
+    }
+
+    fn write_bulk_request_gz(path: &std::path::Path, req: &BulkRequest) {
+        use flate2::write::GzEncoder;
+        let json = serde_json::to_vec(req).unwrap();
+        let file = std::fs::File::create(path).unwrap();
+        let mut enc = GzEncoder::new(file, flate2::Compression::default());
+        enc.write_all(&json).unwrap();
+        enc.finish().unwrap();
+    }
+
+    fn setup_dirs() -> (TempDir, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+        let tmp = TempDir::new().unwrap();
+        let data_dir = tmp.path().to_path_buf();
+        std::fs::create_dir_all(data_dir.join("sources/content")).unwrap();
+        let to_archive_dir = tmp.path().join("to-archive");
+        std::fs::create_dir_all(&to_archive_dir).unwrap();
+        let inbox_dir = tmp.path().join("inbox");
+        std::fs::create_dir_all(&inbox_dir).unwrap();
+        (tmp, data_dir, to_archive_dir, inbox_dir)
+    }
+
+    #[test]
+    fn upsert_writes_db_record_and_archive_gz() {
+        let (_tmp, data_dir, to_archive_dir, inbox_dir) = setup_dirs();
+        let shared = crate::archive::SharedArchiveState::new(data_dir.clone()).unwrap();
+        let (recent_tx, _rx) = tokio::sync::broadcast::channel::<RecentFile>(16);
+
+        let req = BulkRequest {
+            source: "testsource".to_string(),
+            files: vec![make_index_file("docs/readme.txt", "text")],
+            delete_paths: vec![],
+            rename_paths: vec![],
+            scan_timestamp: Some(1_000_000),
+            indexing_failures: vec![],
+        };
+
+        let request_path = inbox_dir.join("req001.gz");
+        write_bulk_request_gz(&request_path, &req);
+
+        process_request_phase1(
+            &data_dir,
+            &request_path,
+            &to_archive_dir,
+            &make_status(),
+            make_worker_config(),
+            &shared,
+            &recent_tx,
+        )
+        .unwrap();
+
+        // A .gz should have been written to to_archive_dir.
+        let gz_files: Vec<_> = std::fs::read_dir(&to_archive_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("gz"))
+            .collect();
+        assert_eq!(gz_files.len(), 1, "expected one .gz in to_archive_dir");
+
+        // The DB should have the file record.
+        let db_path = data_dir.join("sources").join("testsource.db");
+        let conn = crate::db::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files WHERE path = 'docs/readme.txt'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "expected file record in DB");
+    }
+
+    #[test]
+    fn delete_removes_db_record() {
+        let (_tmp, data_dir, to_archive_dir, inbox_dir) = setup_dirs();
+        let shared = crate::archive::SharedArchiveState::new(data_dir.clone()).unwrap();
+        let (recent_tx, _rx) = tokio::sync::broadcast::channel::<RecentFile>(16);
+
+        // First, index the file.
+        let upsert_req = BulkRequest {
+            source: "testsource".to_string(),
+            files: vec![make_index_file("notes/todo.txt", "text")],
+            delete_paths: vec![],
+            rename_paths: vec![],
+            scan_timestamp: Some(1_000_000),
+            indexing_failures: vec![],
+        };
+        let req_path1 = inbox_dir.join("req001.gz");
+        write_bulk_request_gz(&req_path1, &upsert_req);
+        process_request_phase1(
+            &data_dir,
+            &req_path1,
+            &to_archive_dir,
+            &make_status(),
+            make_worker_config(),
+            &shared,
+            &recent_tx,
+        )
+        .unwrap();
+
+        // Confirm it's in the DB.
+        let db_path = data_dir.join("sources").join("testsource.db");
+        {
+            let conn = crate::db::open(&db_path).unwrap();
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM files WHERE path = 'notes/todo.txt'", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(count, 1, "file should be present before delete");
+        }
+
+        // Now delete it.
+        let delete_req = BulkRequest {
+            source: "testsource".to_string(),
+            files: vec![],
+            delete_paths: vec!["notes/todo.txt".to_string()],
+            rename_paths: vec![],
+            scan_timestamp: Some(1_000_001),
+            indexing_failures: vec![],
+        };
+        let req_path2 = inbox_dir.join("req002.gz");
+        write_bulk_request_gz(&req_path2, &delete_req);
+
+        // Clear to_archive_dir so we can check the new write.
+        for entry in std::fs::read_dir(&to_archive_dir).unwrap().flatten() {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+
+        process_request_phase1(
+            &data_dir,
+            &req_path2,
+            &to_archive_dir,
+            &make_status(),
+            make_worker_config(),
+            &shared,
+            &recent_tx,
+        )
+        .unwrap();
+
+        // File should be removed from DB.
+        let conn = crate::db::open(&db_path).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files WHERE path = 'notes/todo.txt'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 0, "file should be absent after delete");
+
+        // A .gz should have been written (delete_paths alone does not skip archive phase
+        // because rename_paths is empty but we still write even for deletes — see code:
+        // normalized_files.is_empty() && rename_paths.is_empty() skips only when both are empty).
+        // With no files and no renames the archive phase IS skipped, so to_archive_dir
+        // should be empty here.
+        let gz_files: Vec<_> = std::fs::read_dir(&to_archive_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("gz"))
+            .collect();
+        assert_eq!(
+            gz_files.len(),
+            0,
+            "delete-only request should NOT write a .gz to to_archive_dir"
+        );
+    }
+
+    #[test]
+    fn rename_updates_path_in_db() {
+        let (_tmp, data_dir, to_archive_dir, inbox_dir) = setup_dirs();
+        let shared = crate::archive::SharedArchiveState::new(data_dir.clone()).unwrap();
+        let (recent_tx, _rx) = tokio::sync::broadcast::channel::<RecentFile>(16);
+
+        // Index file at original path.
+        let upsert_req = BulkRequest {
+            source: "testsource".to_string(),
+            files: vec![make_index_file("src/old_name.rs", "text")],
+            delete_paths: vec![],
+            rename_paths: vec![],
+            scan_timestamp: Some(1_000_000),
+            indexing_failures: vec![],
+        };
+        let req_path1 = inbox_dir.join("req001.gz");
+        write_bulk_request_gz(&req_path1, &upsert_req);
+        process_request_phase1(
+            &data_dir,
+            &req_path1,
+            &to_archive_dir,
+            &make_status(),
+            make_worker_config(),
+            &shared,
+            &recent_tx,
+        )
+        .unwrap();
+
+        // Rename file.
+        let rename_req = BulkRequest {
+            source: "testsource".to_string(),
+            files: vec![],
+            delete_paths: vec![],
+            rename_paths: vec![PathRename {
+                old_path: "src/old_name.rs".to_string(),
+                new_path: "src/new_name.rs".to_string(),
+            }],
+            scan_timestamp: Some(1_000_001),
+            indexing_failures: vec![],
+        };
+        let req_path2 = inbox_dir.join("req002.gz");
+        write_bulk_request_gz(&req_path2, &rename_req);
+        process_request_phase1(
+            &data_dir,
+            &req_path2,
+            &to_archive_dir,
+            &make_status(),
+            make_worker_config(),
+            &shared,
+            &recent_tx,
+        )
+        .unwrap();
+
+        let db_path = data_dir.join("sources").join("testsource.db");
+        let conn = crate::db::open(&db_path).unwrap();
+
+        let old_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files WHERE path = 'src/old_name.rs'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(old_count, 0, "old path should be gone after rename");
+
+        let new_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM files WHERE path = 'src/new_name.rs'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(new_count, 1, "new path should exist after rename");
+    }
+
+    #[test]
+    fn empty_files_no_archive_gz_written() {
+        let (_tmp, data_dir, to_archive_dir, inbox_dir) = setup_dirs();
+        let shared = crate::archive::SharedArchiveState::new(data_dir.clone()).unwrap();
+        let (recent_tx, _rx) = tokio::sync::broadcast::channel::<RecentFile>(16);
+
+        let req = BulkRequest {
+            source: "testsource".to_string(),
+            files: vec![],
+            delete_paths: vec![],
+            rename_paths: vec![],
+            scan_timestamp: None,
+            indexing_failures: vec![],
+        };
+        let request_path = inbox_dir.join("req001.gz");
+        write_bulk_request_gz(&request_path, &req);
+
+        process_request_phase1(
+            &data_dir,
+            &request_path,
+            &to_archive_dir,
+            &make_status(),
+            make_worker_config(),
+            &shared,
+            &recent_tx,
+        )
+        .unwrap();
+
+        let gz_files: Vec<_> = std::fs::read_dir(&to_archive_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("gz"))
+            .collect();
+        assert_eq!(
+            gz_files.len(),
+            0,
+            "empty request should not write any .gz to to_archive_dir"
+        );
+    }
+}
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 pub(super) fn is_db_locked(error: &anyhow::Error) -> bool {
