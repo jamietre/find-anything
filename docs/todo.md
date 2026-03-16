@@ -27,10 +27,10 @@ Stream of consciousness for bugfixes and features approaching V1
 [ ] CHORE: Unit test for handling of retrieveal duplicated items in index
 [ ] CHORE: refactor front end to split svg assets out into files, etc
 [ ] CHORE: Server install should also be able to chain client install
-[ ] FEAT: Add providing uname/password for share to config for each source
 [ ] CHORE: Inline extraction of safe file types instread of making subporocesses
 [ ] CHORE: Code quality: avoid optional typescript parameters; default values should be set at as high a level as possible and propagated conclusively. Add to claude.md
 [ ] FEAT: Custom protocol handler (chrome) to allow exploring the file location. Requires client config for roots.
+[ ] FEAT (planned): Add providing uname/password for share to config for each source
 [ ] FEAT (PLANNED) metrics - log start/end time of critical proceses to an external service - Grafana LGTM?
 [ ] FEAT (PLANNED): allow adding file extension -> content type mappers. Extract all hardcoded into config
 

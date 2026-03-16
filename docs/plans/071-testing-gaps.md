@@ -5,7 +5,7 @@
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 1 | ✅ Complete | CI vitest, archive write-path, `process_file_phase1`, `fts_candidates`/`fts_count` SQL tests |
-| Phase 2 | ⬜ Not started | Route handler test harness (`axum-test`) |
+| Phase 2 | ⬜ Not started | Route handler test harness (extend existing `TestServer` in `tests/helpers/`) |
 | Phase 3 | ⬜ Not started | Worker pipeline (`request.rs`, `pipeline.rs`, `archive_batch.rs`) |
 | Phase 4 | ⬜ Not started | TypeScript/component layer (`ResultList` dedup, `FuzzyScorer`) |
 | Phase 5 | ⬜ Not started | Upload TUS, PDF panic-path, external formatter, compaction |
@@ -89,17 +89,17 @@ Highest-risk routes, in order:
 | `routes/recent.rs` | SSE stream. |
 | `routes/settings.rs`, `routes/stats.rs`, `routes/raw.rs` | Lower risk but still dark. |
 
-**Approach:** Axum provides an `axum::test` helper (or use `axum-test` crate)
-that lets handlers be exercised in-process with a real `AppState` and an
-in-memory test server. This avoids spawning a separate process while still
-testing the full handler stack: routing, auth middleware, query/body
-deserialization, DB calls, response serialization.
+**Approach:** The codebase already has a `TestServer` helper in
+`crates/server/tests/helpers/mod.rs` that binds a real `TcpListener` on port 0,
+spawns the full server with a `TempDir`-backed `AppState`, and wraps a
+`reqwest` client with auth headers. It includes `wait_for_idle()` (polls until
+the inbox worker drains) and `post_bulk()` (gzip-encodes and POSTs a
+`BulkRequest`). No new dependencies or in-process test harness needed.
 
-A shared `TestServer` fixture should:
-- Start with a `TempDir` for `data_dir`
-- Create a test `AppState` with the in-memory sources
-- Seed the index by submitting a `BulkRequest` through the bulk endpoint
-  (testing both the write path and seeding state for subsequent read tests)
+Phase 2 extends this existing infrastructure:
+- Add an unauthenticated `reqwest::Client` variant to `TestServer` for 401 tests
+- Add source-seeding helpers as needed
+- Write new test files in `crates/server/tests/` alongside the existing ones
 
 #### P1-B: Indexing worker pipeline — completely untested
 
@@ -262,8 +262,9 @@ formatter that hangs could block the indexing pipeline indefinitely.
 
 ### Phase 2 — Route handler test harness
 
-5. **Build a `TestServer` fixture** using `axum-test` or `axum::Server` bound
-   to a random port with a `TempDir`-backed `AppState`. Write smoke tests for:
+5. **Extend the existing `TestServer`** in `crates/server/tests/helpers/mod.rs`
+   (already uses port-0 `TcpListener`, `reqwest`, `wait_for_idle`, `post_bulk`).
+   Add an unauthenticated client variant. Write smoke tests for:
    - Auth rejection (invalid token → 401)
    - `GET /api/v1/settings` round-trip
    - `POST /api/v1/bulk` → `GET /api/v1/search` round-trip (the most valuable
@@ -337,10 +338,10 @@ formatter that hangs could block the indexing pipeline indefinitely.
 - **No mocks for storage.** Use real `TempDir`-backed files and in-memory SQLite
   throughout. The codebase's existing test philosophy avoids mocks for data
   storage, and the integration test suite has validated this approach.
-- **Axum route tests in-process.** Prefer `axum-test` or a bound
-  `TcpListener` on port 0 over spawning a subprocess; this avoids the
-  startup/teardown cost of the existing client integration test pattern and
-  keeps tests fast.
+- **Route tests use the existing `TestServer` helper** (`tests/helpers/mod.rs`),
+  which already binds a port-0 `TcpListener` and wraps a `reqwest` client.
+  No new dependencies needed. New test files go in `crates/server/tests/`
+  alongside the existing ones.
 - **Worker pipeline tests drive real functions, not spawned workers.** Call
   `process_inbox_file(path, &state)` directly rather than spinning up the
   background polling loop.
