@@ -2,7 +2,6 @@
 
 use std::time::{Duration, Instant};
 
-use axum::serve;
 use find_common::api::{BulkRequest, IndexFile, IndexLine, StatsResponse, SCANNER_VERSION};
 use find_common::config::parse_server_config;
 use find_server::{build_router, create_app_state};
@@ -36,7 +35,12 @@ impl TestServer {
         let addr = listener.local_addr().expect("local_addr");
 
         tokio::spawn(async move {
-            serve(listener, app).await.expect("serve");
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+            )
+            .await
+            .expect("serve");
         });
 
         let mut headers = HeaderMap::new();
@@ -115,7 +119,7 @@ pub fn make_text_bulk(source: &str, path: &str, content: &str) -> BulkRequest {
     let mut lines = vec![IndexLine {
         archive_path: None,
         line_number: 0,
-        content: path.to_string(),
+        content: format!("[PATH] {path}"),
     }];
     for (i, line) in content.lines().enumerate() {
         lines.push(IndexLine {
