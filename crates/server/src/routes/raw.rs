@@ -15,7 +15,7 @@ use find_common::path::split_composite;
 
 use crate::AppState;
 
-use super::check_auth;
+use super::{check_auth, check_link_code_auth};
 
 #[derive(Deserialize)]
 pub struct RawParams {
@@ -25,18 +25,37 @@ pub struct RawParams {
     /// and re-encodes it as PNG. Useful for formats browsers cannot display
     /// natively (e.g. TIFF).
     convert: Option<String>,
+    /// Optional share link code as an alternative to bearer authentication.
+    link_code: Option<String>,
+    /// When `download=1`, set Content-Disposition to `attachment` instead of `inline`.
+    download: Option<String>,
 }
 
-/// GET /api/v1/raw?source=<name>&path=<relative_path>[&convert=png]
+/// GET /api/v1/raw?source=<name>&path=<relative_path>[&convert=png][&link_code=C][&download=1]
 ///
 /// Streams the original file from the source's configured filesystem root.
 /// Requires the source to have a `path` configured in `[sources.<name>]`.
+/// Auth: bearer/cookie, or a valid `link_code` that matches source+path.
 pub async fn get_raw(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Query(params): Query<RawParams>,
 ) -> Response {
-    if let Err(s) = check_auth(&state, &headers) {
+    if let Some(code) = &params.link_code {
+        // Authenticate via link code (blocking DB lookup).
+        let data_dir = state.data_dir.clone();
+        let code = code.clone();
+        let source = params.source.clone();
+        let path = params.path.clone();
+        let auth = tokio::task::spawn_blocking(move || {
+            check_link_code_auth(&data_dir, &code, &source, &path)
+        })
+        .await
+        .unwrap_or(Err(StatusCode::INTERNAL_SERVER_ERROR));
+        if let Err(s) = auth {
+            return s.into_response();
+        }
+    } else if let Err(s) = check_auth(&state, &headers) {
         return s.into_response();
     }
 
@@ -117,8 +136,9 @@ pub async fn get_raw(
     // Sanitize: strip any double-quotes to avoid breaking the header value.
     let safe_name = display_filename.replace('"', "");
     let safe_png_name = png_filename.replace('"', "");
-    let disposition = format!("inline; filename=\"{safe_name}\"");
-    let png_disposition = format!("inline; filename=\"{safe_png_name}\"");
+    let disp_kind = if params.download.as_deref() == Some("1") { "attachment" } else { "inline" };
+    let disposition = format!("{disp_kind}; filename=\"{safe_name}\"");
+    let png_disposition = format!("{disp_kind}; filename=\"{safe_png_name}\"");
 
     if params.convert.as_deref() == Some("png") {
         let bytes = match tokio::fs::read(&canonical_full).await {

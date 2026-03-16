@@ -83,6 +83,8 @@ pub struct AppState {
     pub under_systemd: bool,
     pub update_cache: tokio::sync::RwLock<Option<CachedUpdateCheck>>,
     pub recent_tx: tokio::sync::broadcast::Sender<RecentFile>,
+    /// In-memory rate limiter for `GET /api/v1/links/:code`: maps IP → (count, window_start).
+    pub link_rate_limiter: std::sync::Mutex<std::collections::HashMap<std::net::IpAddr, (u32, std::time::Instant)>>,
 }
 
 // ── Server initialisation ──────────────────────────────────────────────────────
@@ -109,6 +111,11 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
     let compaction_stats = Arc::new(std::sync::RwLock::new(initial_compaction_stats));
     let (recent_tx, _) = tokio::sync::broadcast::channel::<RecentFile>(256);
 
+    // Open links.db (creates table on first use).
+    if let Err(e) = db::links::open_links_db(&data_dir) {
+        tracing::warn!("Failed to open links.db (share links will be unavailable): {e:#}");
+    }
+
     let state = Arc::new(AppState {
         config,
         data_dir: data_dir.clone(),
@@ -119,6 +126,7 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
         under_systemd,
         update_cache: tokio::sync::RwLock::new(None),
         recent_tx,
+        link_rate_limiter: std::sync::Mutex::new(std::collections::HashMap::new()),
     });
 
     if let Err(e) = worker::recover_stranded_requests(&data_dir).await {
@@ -159,6 +167,24 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
         state.config.compaction.clone(),
     );
 
+    // Hourly task to remove expired share links from links.db.
+    let sweep_data_dir = data_dir.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            let dir = sweep_data_dir.clone();
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                let conn = db::links::open_links_db(&dir)?;
+                let n = db::links::sweep_expired(&conn)?;
+                if n > 0 { tracing::info!("Swept {n} expired share links"); }
+                Ok::<_, anyhow::Error>(())
+            }).await {
+                tracing::warn!("Link expiry sweep failed: {e:#}");
+            }
+        }
+    });
+
     Ok(state)
 }
 
@@ -186,6 +212,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/recent/stream",  get(routes::stream_recent))
         .route("/api/v1/tree",           get(routes::list_dir))
         .route("/api/v1/raw",            get(routes::get_raw))
+        .route("/api/v1/links",          post(routes::post_link))
+        .route("/api/v1/links/{code}",   get(routes::get_link))
         .route("/api/v1/auth/session",   post(routes::create_session).delete(routes::delete_session))
         .route("/api/v1/admin/compact",        post(routes::compact))
         .route("/api/v1/admin/source",         delete(routes::delete_source))

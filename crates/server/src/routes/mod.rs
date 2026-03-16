@@ -3,6 +3,7 @@ mod bulk;
 mod context;
 mod errors;
 mod file;
+mod links;
 mod raw;
 mod recent;
 mod search;
@@ -17,6 +18,7 @@ pub use bulk::bulk;
 pub use context::{context_batch, get_context};
 pub use errors::get_errors;
 pub use file::{get_file, list_files};
+pub use links::{get_link, post_link};
 pub use raw::get_raw;
 pub use recent::{get_recent, stream_recent};
 pub use search::search;
@@ -89,6 +91,44 @@ pub(super) fn check_auth(state: &AppState, headers: &HeaderMap) -> Result<(), St
         }
     }
     Err(StatusCode::UNAUTHORIZED)
+}
+
+/// Validate a `link_code` as an alternative credential for read-only file access.
+///
+/// Checks that the code exists in links.db, is not expired, and the
+/// `source` + reconstructed composite path match the stored row.
+/// Returns `Ok(())` on success; an appropriate `StatusCode` on failure.
+/// Intended to be called from inside a `run_blocking` closure or from
+/// `tokio::task::spawn_blocking`.
+pub(super) fn check_link_code_auth(
+    data_dir: &std::path::Path,
+    code: &str,
+    source: &str,
+    // `full_path`: composite path as it appears in `params.path` (may contain `::`).
+    full_path: &str,
+) -> Result<(), StatusCode> {
+    use crate::db::links::{resolve_link, ResolveResult};
+    let db_path = data_dir.join("links.db");
+    if !db_path.exists() {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let conn = rusqlite::Connection::open(&db_path).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    match resolve_link(&conn, code) {
+        Ok(ResolveResult::Found(row)) => {
+            let link_path = match &row.archive_path {
+                Some(ap) => format!("{}::{}", row.path, ap),
+                None => row.path.clone(),
+            };
+            if row.source == source && link_path == full_path {
+                Ok(())
+            } else {
+                Err(StatusCode::FORBIDDEN)
+            }
+        }
+        Ok(ResolveResult::Expired) => Err(StatusCode::GONE),
+        Ok(ResolveResult::NotFound) => Err(StatusCode::NOT_FOUND),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
+    }
 }
 
 pub(super) fn source_db_path(state: &AppState, source: &str) -> Result<std::path::PathBuf, StatusCode> {

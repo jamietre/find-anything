@@ -11,6 +11,7 @@ use find_common::path::{composite_like_prefix, is_composite};
 
 use crate::archive::{ArchiveManager, ChunkRef};
 
+pub mod links;
 pub mod search;
 pub mod stats;
 pub mod tree;

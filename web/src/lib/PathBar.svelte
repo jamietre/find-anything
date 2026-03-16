@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
+	import { createLink } from './api';
 
 	export let source: string;
 	export let path: string;
@@ -83,6 +84,28 @@
 		copied = true;
 		setTimeout(() => (copied = false), 2000);
 	}
+
+	let linkCopied = false;
+	let linkBusy = false;
+	async function shareLink() {
+		if (linkBusy) return;
+		linkBusy = true;
+		try {
+			const resp = await createLink(source, path, archivePath);
+			const url = window.location.origin + resp.url;
+			if (navigator.clipboard) {
+				await navigator.clipboard.writeText(url).catch(() => fallbackCopy(url));
+			} else {
+				fallbackCopy(url);
+			}
+			linkCopied = true;
+			setTimeout(() => (linkCopied = false), 2000);
+		} catch {
+			// silently ignore
+		} finally {
+			linkBusy = false;
+		}
+	}
 </script>
 
 <div class="path-bar">
@@ -107,6 +130,21 @@
 				<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
 					<rect x="4" y="1" width="8" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
 					<path d="M2 4H1.5A1.5 1.5 0 0 0 0 5.5v6A1.5 1.5 0 0 0 1.5 13H8A1.5 1.5 0 0 0 9.5 11.5V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+				</svg>
+			{/if}
+		</button>
+		<button class="copy-btn" class:copied={linkCopied} on:click={shareLink} title={linkCopied ? '' : 'Copy share link'} disabled={linkBusy}>
+			{#if linkCopied}
+				<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+					<polyline points="2,7 5,10 11,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+				</svg>
+				<span class="copied-label">Copied</span>
+			{:else}
+				<!-- chain/link icon -->
+				<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
+					<path d="M5 8.5L8 5.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+					<path d="M7.5 3.5L9 2a2.121 2.121 0 0 1 3 3L10.5 6.5a2.121 2.121 0 0 1-3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+					<path d="M5.5 9.5L4 11a2.121 2.121 0 0 1-3-3L2.5 6.5a2.121 2.121 0 0 1 3 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
 				</svg>
 			{/if}
 		</button>

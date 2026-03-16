@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     extract::{Query, State},
     http::HeaderMap,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     Json,
 };
 use serde::Deserialize;
@@ -13,12 +13,13 @@ use find_common::path::split_composite;
 
 use crate::{archive::ArchiveManager, db, AppState};
 
-use super::{check_auth, composite_path, run_blocking, source_db_path};
+use super::{check_auth, check_link_code_auth, composite_path, run_blocking, source_db_path};
 
-// ── GET /api/v1/file?source=X&path=Y[&archive_path=Z] ────────────────────────
+// ── GET /api/v1/file?source=X&path=Y[&archive_path=Z][&link_code=C] ──────────
 //
 // `path` may be a composite path ("archive.zip::member.txt") or, for backward
 // compatibility, a plain path with `archive_path` supplied separately.
+// `link_code` is an alternative credential (no bearer auth required when set).
 
 #[derive(Deserialize)]
 pub struct FileParams {
@@ -26,6 +27,8 @@ pub struct FileParams {
     pub path: String,
     /// Legacy: combine with `path` into a composite path if provided.
     pub archive_path: Option<String>,
+    /// Optional share link code as an alternative to bearer authentication.
+    pub link_code: Option<String>,
 }
 
 pub async fn get_file(
@@ -33,8 +36,10 @@ pub async fn get_file(
     headers: HeaderMap,
     Query(params): Query<FileParams>,
 ) -> impl IntoResponse {
-    if let Err(s) = check_auth(&state, &headers) {
-        return (s, Json(serde_json::Value::Null)).into_response();
+    if params.link_code.is_none() {
+        if let Err(s) = check_auth(&state, &headers) {
+            return (s, Json(serde_json::Value::Null)).into_response();
+        }
     }
 
     let db_path = match source_db_path(&state, &params.source) {
@@ -45,8 +50,17 @@ pub async fn get_file(
     // Build composite path from path + optional archive_path (backward compat).
     let full_path = composite_path(&params.path, params.archive_path.as_deref());
     let data_dir = state.data_dir.clone();
+    let link_code = params.link_code.clone();
+    let source = params.source.clone();
 
-    run_blocking("get_file", move || {
+    run_blocking("get_file", move || -> anyhow::Result<Response> {
+        // Validate link code if provided (alternative to bearer auth).
+        if let Some(code) = &link_code {
+            if let Err(s) = check_link_code_auth(&data_dir, code, &source, &full_path) {
+                return Ok((s, Json(serde_json::Value::Null)).into_response());
+            }
+        }
+
         let conn = db::open(&db_path)?;
         let archive_mgr = ArchiveManager::new_for_reading(data_dir);
 
@@ -92,9 +106,10 @@ pub async fn get_file(
             lines, line_offsets, metadata,
             file_kind: kind, total_lines, mtime, size,
             indexing_error, content_unavailable,
-        }))
+        }).into_response())
     }).await
 }
+
 
 // ── GET /api/v1/files?source=<name> ──────────────────────────────────────────
 

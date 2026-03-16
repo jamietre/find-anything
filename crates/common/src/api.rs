@@ -533,6 +533,45 @@ pub struct RecentResponse {
     pub files: Vec<RecentFile>,
 }
 
+// ── Link sharing types ────────────────────────────────────────────────────────
+
+/// `POST /api/v1/links` request body.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateLinkRequest {
+    pub source: String,
+    pub path: String,
+    pub archive_path: Option<String>,
+}
+
+/// `POST /api/v1/links` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateLinkResponse {
+    /// 6-character URL-safe code.
+    pub code: String,
+    /// Relative URL for the direct view page, e.g. `/v/aB3mZx`.
+    pub url: String,
+    /// Unix timestamp (seconds) when this link expires.
+    pub expires_at: i64,
+}
+
+/// `GET /api/v1/links/:code` response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResolveLinkResponse {
+    pub source: String,
+    /// Outer file path (no `::` suffix).
+    pub path: String,
+    /// Inner archive member path, if this is a composite path.
+    pub archive_path: Option<String>,
+    /// File kind (e.g. `"image"`, `"pdf"`, `"video"`, `"text"`).
+    pub kind: String,
+    /// Basename of the file (last path component).
+    pub filename: String,
+    /// Unix timestamp (seconds) of last modification.
+    pub mtime: i64,
+    /// Unix timestamp (seconds) when this link expires.
+    pub expires_at: i64,
+}
+
 // ── Upload API types ───────────────────────────────────────────────────────────
 
 /// `POST /api/v1/upload` request body — initiates a resumable file upload.

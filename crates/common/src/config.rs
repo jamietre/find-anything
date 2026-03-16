@@ -518,10 +518,64 @@ pub struct ServerAppConfig {
     #[serde(default)]
     pub compaction: CompactionConfig,
     #[serde(default)]
+    pub links: LinksConfig,
+    #[serde(default)]
     pub log: LogConfig,
     /// Per-source server configuration (e.g. filesystem root for raw file serving).
     #[serde(default)]
     pub sources: std::collections::HashMap<String, ServerSourceConfig>,
+}
+
+/// Configuration for share link generation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LinksConfig {
+    /// How long generated links stay valid, in seconds.
+    /// Configured as a duration string like `"30d"`, `"7d"`, `"24h"`.
+    /// Default: 30 days (2592000 seconds).
+    #[serde(default = "default_links_ttl_secs", deserialize_with = "deserialize_links_ttl")]
+    pub ttl_secs: u64,
+}
+
+impl Default for LinksConfig {
+    fn default() -> Self {
+        Self { ttl_secs: default_links_ttl_secs() }
+    }
+}
+
+fn default_links_ttl_secs() -> u64 { 30 * 24 * 3600 }
+
+fn deserialize_links_ttl<'de, D>(de: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct TtlVisitor;
+    impl<'de> serde::de::Visitor<'de> for TtlVisitor {
+        type Value = u64;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, r#"a duration string like "30d" or "24h", or an integer of seconds"#)
+        }
+        fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<u64, E> { Ok(v) }
+        fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<u64, E> {
+            u64::try_from(v).map_err(|_| E::custom("TTL must be non-negative"))
+        }
+        fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<u64, E> {
+            parse_ttl(v).map_err(E::custom)
+        }
+    }
+    de.deserialize_any(TtlVisitor)
+}
+
+/// Parse a TTL string like `"30d"`, `"7d"`, `"24h"`, `"1h"` into seconds.
+pub fn parse_ttl(s: &str) -> Result<u64, String> {
+    if let Some(days) = s.strip_suffix('d') {
+        let d: u64 = days.parse().map_err(|_| format!("invalid TTL: {s:?}"))?;
+        return Ok(d * 24 * 3600);
+    }
+    if let Some(hours) = s.strip_suffix('h') {
+        let h: u64 = hours.parse().map_err(|_| format!("invalid TTL: {s:?}"))?;
+        return Ok(h * 3600);
+    }
+    Err(format!("invalid TTL {s:?}: expected suffix 'd' (days) or 'h' (hours)"))
 }
 
 /// Configuration for automatic archive compaction.

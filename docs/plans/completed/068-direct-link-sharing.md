@@ -1,10 +1,10 @@
-# 068 — Direct Link Sharing (`/v/:code`)
+# 068 — Direct Link Sharing (`/v/:code`) ✓ Implemented
 
 ## Overview
 
 Add a "share" button to the file detail view that generates a short, capability-based URL
 (`/v/xxxxxx`) pointing to a distraction-free viewer for a file. The viewer shows images
-(with zoom/pan), PDFs (browser native), or extracted text — without the full search UI,
+(with zoom/pan), PDFs (browser native), videos (HTML5 player), or extracted text — without the full search UI,
 metadata panels, or tree sidebar. Links work without authentication and expire after a
 configurable period.
 
@@ -124,19 +124,22 @@ or PhotoSwipe later if multi-touch or tile-based zoom is needed.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ find-anything   filename.ext            [⬇ Download] [⧉ Open] │  ← fixed header
+│ find-anything   filename.ext   2024-11-03   [⬇ Download] [⧉ Open] │  ← fixed header
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
-│               image / pdf / text viewer                      │
+│         image / pdf / video / text viewer                    │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-- **Header**: "find-anything" (links to `/`), filename, Download button
-  (`/api/v1/raw?link_code=:code` with `download` attribute), "Open in app" link
+- **Header**: "find-anything" (links to `/`), filename, file date (mtime, date only —
+  e.g. `2024-11-03`), Download button (`/api/v1/raw?link_code=:code` with `download`
+  attribute), "Open in app" link
 - **No**: source badge, file path, metadata panel, tree sidebar, search box
 - Header is minimal/fixed; viewer fills remaining height
 - Expired link → header replaced by a centred "This link has expired" message
+- The `mtime` field must be included in the `GET /api/v1/links/:code` response so the
+  direct view page can display it without an additional API call
 
 ### "Open in app" URL
 
@@ -189,9 +192,15 @@ apply if absent.
   "archive_path": null,
   "kind": "image",
   "filename": "sunset.jpg",
+  "mtime": 1730592000,
   "expires_at": 1752345600
 }
 ```
+
+`mtime` is the file's last-modified Unix timestamp (seconds). The direct view renders it
+as a date-only string (e.g. `2024-11-03`) using the viewer's locale. The server fetches
+it from `SELECT mtime FROM files WHERE path = ?` in the source DB when creating the
+resolve response.
 
 **Response `410 Gone`:** code exists but has expired — UI shows "This link has expired".
 
@@ -260,8 +269,9 @@ Same scoping as above, for text file content.
    - "Open in app": `/?source=...&path=...`
 
 4. **Viewer dispatch in `+page.svelte`**:
-   - `image` → `<DirectImageViewer>`
+   - `image` → `<DirectImageViewer>` (pan/zoom)
    - `pdf` → `<iframe src="/api/v1/raw?link_code=...">` (browser native PDF)
+   - `video` → `<video controls src="/api/v1/raw?link_code=...">` (HTML5 player)
    - anything else → call `GET /api/v1/file?link_code=...` and render text in `<pre>`
      with highlight.js
 
@@ -299,7 +309,8 @@ Same scoping as above, for text file content.
 - Integration: `POST /api/v1/links` requires auth; `GET /api/v1/links/:code` does not
 - Integration: `GET /api/v1/raw?link_code=...` works without bearer; wrong source/path → 403
 - Integration: expired code returns 410 from resolve and from raw/file endpoints
-- Manual: create link for image / PDF / text — verify all three viewers render correctly
+- Manual: create link for image / PDF / video / text — verify all four viewers render correctly
+- Manual: header shows the correct date-only mtime (e.g. `2024-11-03`) for each file type
 - Manual: zoom/pan on image viewer (wheel, drag, double-click reset, fit-on-load)
 - Manual: copy-to-clipboard on the link button shows "Copied!" confirmation
 - Manual: expired link shows "This link has expired" page

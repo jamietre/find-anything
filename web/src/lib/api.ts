@@ -348,6 +348,52 @@ export async function getErrors(
 	return resp.json();
 }
 
+// ── Share links ───────────────────────────────────────────────────────────────
+
+export interface CreateLinkResponse {
+	code: string;
+	/** Relative URL for the direct view page, e.g. `/v/aB3mZx`. */
+	url: string;
+	/** Unix timestamp (seconds) when this link expires. */
+	expires_at: number;
+}
+
+export interface ResolveLinkResponse {
+	source: string;
+	path: string;
+	archive_path: string | null;
+	kind: string;
+	filename: string;
+	mtime: number;
+	expires_at: number;
+}
+
+/** Create a share link for a file. Requires authentication. */
+export async function createLink(
+	source: string,
+	path: string,
+	archivePath?: string | null
+): Promise<CreateLinkResponse> {
+	const resp = await apiFetch('/api/v1/links', {
+		method: 'POST',
+		headers: { 'content-type': 'application/json' },
+		body: JSON.stringify({ source, path, archive_path: archivePath ?? null })
+	});
+	if (!resp.ok) throw new Error(`createLink: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}
+
+/** Resolve a share link code. No authentication required. Returns null if not found, 'expired' if expired. */
+export async function resolveLink(
+	code: string
+): Promise<ResolveLinkResponse | 'expired' | null> {
+	const resp = await fetch(`/api/v1/links/${encodeURIComponent(code)}`);
+	if (resp.status === 404) return null;
+	if (resp.status === 410) return 'expired';
+	if (!resp.ok) throw new Error(`resolveLink: ${resp.status} ${resp.statusText}`);
+	return resp.json();
+}
+
 // ── Admin inbox ───────────────────────────────────────────────────────────────
 
 export interface InboxItem {

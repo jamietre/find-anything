@@ -47,7 +47,12 @@ async fn main() -> Result<()> {
         .with_context(|| format!("binding to {bind}"))?;
 
     tracing::info!("listening on {bind}");
-    axum::serve(listener, app).await.context("server error")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .context("server error")?;
 
     Ok(())
 }
