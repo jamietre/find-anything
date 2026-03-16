@@ -310,6 +310,19 @@ mod tests {
     use find_common::api::{BulkRequest, IndexFile, IndexLine};
     use find_common::config::NormalizationSettings;
 
+    fn setup_data_dir(data_dir: &Path) {
+        std::fs::create_dir_all(data_dir.join("sources").join("content")).unwrap();
+    }
+
+    fn read_line_refs(conn: &rusqlite::Connection, file_id: i64) -> Vec<(Option<String>, Option<String>)> {
+        let mut stmt = conn.prepare(
+            "SELECT chunk_archive, chunk_name FROM lines WHERE file_id = ?1 ORDER BY line_number"
+        ).unwrap();
+        stmt.query_map(rusqlite::params![file_id], |row| {
+            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+        }).unwrap().map(|r| r.unwrap()).collect()
+    }
+
     fn write_bulk_gz(path: &Path, req: &BulkRequest) {
         let json = serde_json::to_vec(req).unwrap();
         let file = std::fs::File::create(path).unwrap();
@@ -402,7 +415,7 @@ mod tests {
         let to_archive_dir = to_archive_tmp.path();
 
         // Create required directories.
-        std::fs::create_dir_all(data_dir.join("sources").join("content")).unwrap();
+        setup_data_dir(data_dir);
 
         let source = "test_source";
         let path = "docs/readme.txt";
@@ -436,7 +449,7 @@ mod tests {
                 |r| r.get(0),
             )
             .unwrap();
-        assert!(archived_count > 0, "line refs should be set after archive_batch");
+        assert_eq!(archived_count, 2, "both lines should have chunk refs set");
 
         // Assert: at least one ZIP archive created.
         let content_dir = data_dir.join("sources").join("content");
@@ -457,9 +470,8 @@ mod tests {
         let data_dir = data_tmp.path();
         let to_archive_dir = to_archive_tmp.path();
 
-        std::fs::create_dir_all(data_dir.join("sources").join("content")).unwrap();
-        // Create the sources dir but no DB — file_id lookup will find nothing.
-        std::fs::create_dir_all(data_dir.join("sources")).unwrap();
+        setup_data_dir(data_dir);
+        // No DB — file_id lookup will find nothing.
 
         let source = "ghost_source";
         let path = "nonexistent/file.txt";
@@ -487,7 +499,7 @@ mod tests {
         let data_dir = data_tmp.path();
         let to_archive_dir = to_archive_tmp.path();
 
-        std::fs::create_dir_all(data_dir.join("sources").join("content")).unwrap();
+        setup_data_dir(data_dir);
 
         let source = "test_source";
         let path = "docs/readme.txt";
@@ -504,19 +516,7 @@ mod tests {
         run_archive_batch(data_dir, to_archive_dir, cfg.clone(), &shared).unwrap();
 
         // Capture line refs after first run.
-        let refs_after_first: Vec<(Option<String>, Option<String>)> = {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT chunk_archive, chunk_name FROM lines WHERE file_id = ?1 ORDER BY line_number",
-                )
-                .unwrap();
-            stmt.query_map(rusqlite::params![file_id], |r| {
-                Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?))
-            })
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect()
-        };
+        let refs_after_first = read_line_refs(&conn, file_id);
         assert!(
             refs_after_first.iter().any(|(a, _)| a.is_some()),
             "line refs should be set after first run"
@@ -528,19 +528,7 @@ mod tests {
         run_archive_batch(data_dir, to_archive_dir, cfg, &shared).unwrap();
 
         // Line refs should be identical to after-first-run state.
-        let refs_after_second: Vec<(Option<String>, Option<String>)> = {
-            let mut stmt = conn
-                .prepare(
-                    "SELECT chunk_archive, chunk_name FROM lines WHERE file_id = ?1 ORDER BY line_number",
-                )
-                .unwrap();
-            stmt.query_map(rusqlite::params![file_id], |r| {
-                Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?))
-            })
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect()
-        };
+        let refs_after_second = read_line_refs(&conn, file_id);
         assert_eq!(
             refs_after_first, refs_after_second,
             "line refs should not change on second run"
