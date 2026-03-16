@@ -7,6 +7,7 @@
 	import MarkdownViewer from './MarkdownViewer.svelte';
 	import CodeViewer from './CodeViewer.svelte';
 	import PdfViewer from './PdfViewer.svelte';
+	import VideoViewer from './VideoViewer.svelte';
 	import FileStatusBanner from './FileStatusBanner.svelte';
 	import {
 		type LineSelection,
@@ -58,7 +59,7 @@
 	$: if (preferOriginal !== _prevPreferOriginal) {
 		_prevPreferOriginal = preferOriginal;
 		if (fileKind !== null) {
-			showOriginal = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
+			showOriginal = fileKind === 'image' || fileKind === 'video' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
 		}
 	}
 	// For images: false = split view (image + metadata side-by-side), true = full-width image
@@ -81,9 +82,9 @@
 	// For inline image display, use the composite path for archive members so the
 	// server extracts the member from the outer ZIP.
 	$: rawInlinePath = archivePath ? `${path}::${archivePath}` : path;
-	// Both images and PDFs can be shown inline, including archive members.
+	// Images, PDFs, and videos can be shown inline, including archive members.
 	// The server extracts archive members from the outer ZIP via composite paths.
-	$: canViewInline = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted);
+	$: canViewInline = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted) || fileKind === 'video';
 	// For images the browser can't render natively, request server-side PNG conversion.
 	// Check the member's own extension for archive members.
 	const BROWSER_IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','svg','svgz','avif','bmp','ico']);
@@ -180,7 +181,7 @@
 		indexingError = data.indexing_error ?? null;
 		isEncrypted = fileKind === 'pdf' && data.lines.length === 1 && data.lines[0] === 'Content encrypted';
 		if (isInitial) {
-			showOriginal = fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
+			showOriginal = fileKind === 'image' || fileKind === 'video' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
 			imageFullWidth = false;
 		}
 	}
@@ -225,7 +226,14 @@
 	// for the outer archive file, not the inner member.
 	$: watchPath = path;
 
-	$: if ($liveEvent && !loading && $liveEvent.source === source && $liveEvent.path === watchPath) {
+	// Track the last handled event by reference so that clicking Reload doesn't
+	// immediately re-show the banner: after reload completes loading=false
+	// re-triggers this block, but the event hasn't changed so we skip it.
+	let lastHandledLiveEvent: typeof $liveEvent | null = null;
+
+	$: if ($liveEvent && !loading && $liveEvent !== lastHandledLiveEvent &&
+	       $liveEvent.source === source && $liveEvent.path === watchPath) {
+		lastHandledLiveEvent = $liveEvent;
 		const ev = $liveEvent;
 		if (ev.action === 'deleted') {
 			fileState = 'deleted';
@@ -277,7 +285,7 @@
 					{markdownFormat ? 'Plain' : 'Formatted'}
 				</button>
 			{/if}
-			{#if canViewInline && (fileKind === 'image' || fileKind === 'pdf')}
+			{#if canViewInline && (fileKind === 'image' || fileKind === 'pdf' || fileKind === 'video')}
 				{#if fileKind === 'image'}
 					{#if imageFullWidth}
 						<button class="toolbar-btn" on:click={() => imageFullWidth = false}>View Split</button>
@@ -321,6 +329,8 @@
 					{duplicatePaths}
 					on:openDuplicate={(e) => openDuplicate(e.detail.path)}
 				/>
+			{:else if fileKind === 'video'}
+				<VideoViewer src={rawInlineUrl} />
 			{:else}
 				<!-- PDF / other inline kind -->
 				<PdfViewer src={rawInlineUrl} />

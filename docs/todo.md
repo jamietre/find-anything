@@ -3,12 +3,10 @@
 Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
+ 
 
-
+[ ] BUG: back arrow browser navigation doesn't work at all
 [ ] CHORE: frontent ux tests
-[ ] BUG: "Content has changed. Reload" on a detail page doesn't clear when you hit reload, only hard refresh
-[ ] BUG: Dynamic width of ctrl+p is an issue - it should stay fixed size. Maybe we should get rid of this and have 
-    file:fox theater (look at sourcegraph)
 [ ] CHORE: Code quality analysis on file scanning/walking/filtering pipeline
 [ ] FEAT: With [sources.nas-data] path = "/mnt/nas-data" missing from server, need to handle inline displaye better
 [ ] FEAT: In image detail split view, should be able to move divider/resize window
@@ -53,6 +51,9 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ### Completed Items
 
+[x] BUG: "Content has changed. Reload" on a detail page doesn't clear when you hit reload, only hard refresh
+[x] BUG: Dynamic width of ctrl+p is an issue - it should stay fixed size. Maybe we should get rid of this and have 
+    file:fox theater (look at sourcegraph)
 [x] Look at debug logs during e.g. a simple delete - seems to do a lot of stuff it doesn't need to, e.g. passing off to archving. We should pre-filter the gz file - if only delete/small adds, no need to go to archiving. Check szie of text content, file types. (Note: we no longer delete from archives, it's garbage collected now)
 [x] FEAT: find-reindex -- can this only operate against previously-not-reindexed content?
 [x] CHORE: Look at node-tar:fixtures.tgz -- this a great stress test. Copy fixtures.tgz

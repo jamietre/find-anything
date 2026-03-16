@@ -5,7 +5,8 @@
 Add a "share" button to the file detail view that generates a short, capability-based URL
 (`/v/xxxxxx`) pointing to a distraction-free viewer for a file. The viewer shows images
 (with zoom/pan), PDFs (browser native), or extracted text — without the full search UI,
-metadata panels, or tree sidebar.
+metadata panels, or tree sidebar. Links work without authentication and expire after a
+configurable period.
 
 ---
 
@@ -28,34 +29,58 @@ Safe alphabet (56 characters):
 - Uppercase: `ABCDEFGHJKLMNPQRSTUVWXYZ` (24)
 - Lowercase: `abcdefghijkmnpqrstuvwxyz` (24)
 
-6 characters → 56⁶ ≈ 30.8 billion combinations. Vastly more than enough for a single-user
-instance; no sequential enumeration risk with even minimal rate-limiting.
+6 characters → 56⁶ ≈ 30.8 billion combinations. No sequential enumeration risk with
+even minimal rate-limiting.
 
-### Auth model: capability-based (code IS the credential)
+### Auth model: capability-based — code is the credential
 
-The `/api/v1/links/:code` endpoint and the `/v/:code` page do **not** require the bearer
-token. Possession of the code is sufficient to view that file. This is the standard model
-for share links (Dropbox, Google Drive "anyone with link").
+The 6-char code grants unauthenticated read access to that specific file only. No bearer
+token is required to resolve a link or fetch the linked file's content. This enables true
+sharing: anyone with the URL can view the file.
 
-Implications:
-- Codes must be kept confidential; treat them like short-lived passwords
-- There is no revocation per code in v1 (add if needed)
-- The server should rate-limit `/api/v1/links/:code` GETs to prevent enumeration
-  (e.g. 60 req/min per IP)
+The code replaces bearer auth for three read-only operations scoped to the linked file:
+- `GET /api/v1/links/:code` — resolve metadata
+- `GET /api/v1/raw?link_code=:code` — fetch raw bytes (image, PDF)
+- `GET /api/v1/file?link_code=:code` — fetch extracted text lines
+
+The server validates the code, checks it hasn't expired, and confirms the `source`/`path`
+in the request matches the row. Creating a link still requires bearer auth.
+
+**Rate limiting:** `GET /api/v1/links/:code` is limited to ~60 req/min per IP to prevent
+brute-force enumeration of valid codes.
+
+### Link expiry
+
+Links have a TTL configured in `server.toml` under a new `[links]` section:
+
+```toml
+[links]
+# How long generated share links remain valid. Default: 30 days.
+# Accepts integer + unit: "30d", "7d", "24h", "1h".
+ttl = "30d"
+```
+
+The `expires_at` timestamp is stored in `links.db`. Expired links return `410 Gone`
+(not 404) so the UI can show a clear "This link has expired" message rather than a
+generic not-found page.
+
+A background task sweeps expired rows out of `links.db` once per hour.
 
 ### Storage
 
-A new `links` table in a dedicated `data_dir/links.db` (not per-source). This keeps
-link resolution fast and avoids coupling to source schema versions.
+A dedicated `data_dir/links.db` — not per-source. This keeps link resolution fast and
+independent of source schema versions.
 
 ```sql
 CREATE TABLE links (
-    code       TEXT PRIMARY KEY,
-    source     TEXT NOT NULL,
-    path       TEXT NOT NULL,
+    code        TEXT PRIMARY KEY,
+    source      TEXT NOT NULL,
+    path        TEXT NOT NULL,
     archive_path TEXT,
-    created_at INTEGER NOT NULL
+    created_at  INTEGER NOT NULL,  -- Unix seconds
+    expires_at  INTEGER NOT NULL   -- Unix seconds; NULL not allowed
 );
+CREATE INDEX links_expires ON links(expires_at);
 ```
 
 ### URL routing
@@ -66,73 +91,79 @@ back to `index.html` for unmatched paths, so no server-side route change is need
 The SvelteKit route `web/src/routes/v/[code]/+page.svelte` calls
 `GET /api/v1/links/:code` to resolve the file, then renders the appropriate viewer.
 
+### Raw content access via link code
+
+`/api/v1/raw` and `/api/v1/file` currently require bearer or session-cookie auth. To serve
+content to unauthenticated viewers, both endpoints accept an optional `?link_code=xxxxxx`
+query param as an alternative credential:
+
+1. Look up the code in `links.db`; reject if missing or expired
+2. Confirm the `source` + `path` (+ `archive_path`) in the request match the stored row
+3. Serve the content as normal
+
+This means the direct view page can use plain `<img src="/api/v1/raw?link_code=...">` and
+`<iframe src="/api/v1/raw?link_code=...">` without any session setup, and these URLs are
+safe to embed in HTML, share via email, etc.
+
 ### Image viewer: custom Svelte component
 
-Rather than adding a dependency, implement a lightweight pan/zoom viewer directly in
-Svelte using CSS transforms and pointer events. The requirement is minimal:
+Rather than adding a dependency, implement a lightweight pan/zoom viewer in Svelte using
+CSS transforms and pointer events:
 
-- Mouse wheel or pinch → zoom (clamped to, say, 0.1× – 10×)
-- Click-drag → pan (when zoomed in)
+- Mouse wheel or pinch → zoom (clamped 0.1× – 10×)
+- Click-drag → pan when zoomed in
 - Double-click → reset to fit
 - Toolbar buttons: Zoom in (+), Zoom out (−), Reset (⊙)
-- Shows at native resolution when image fits the viewport; scales down to fit otherwise
+- On load: if `naturalWidth < viewportWidth && naturalHeight < viewportHeight` → show at
+  native resolution (scale 1); otherwise → fit-to-viewport (`min(vw/nw, vh/nh)`)
 
-This is ~100 lines of Svelte and avoids pulling in a JS library. If more sophisticated
-behaviour is needed later (e.g. multi-touch on mobile, deep zoom tiles), replace with
-`panzoom` (3 KB, MIT) or `PhotoSwipe` at that point.
+~100 lines of Svelte, zero new runtime dependencies. Replace with `panzoom` (3 KB, MIT)
+or PhotoSwipe later if multi-touch or tile-based zoom is needed.
 
 ### Direct view layout
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ [find-anything]   filename.ext   [⬇ Download] [⧉ Open in app] │  ← minimal header
-├─────────────────────────────────────────────────────────────┤
-│                                                             │
-│              image / pdf / text viewer                      │
-│                                                             │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ find-anything   filename.ext            [⬇ Download] [⧉ Open] │  ← fixed header
+├──────────────────────────────────────────────────────────────┤
+│                                                              │
+│               image / pdf / text viewer                      │
+│                                                              │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-- **Header**: "find-anything" text (links to `/`), filename, Download button,
-  "Open in app" link (links to main app with file view pre-opened)
+- **Header**: "find-anything" (links to `/`), filename, Download button
+  (`/api/v1/raw?link_code=:code` with `download` attribute), "Open in app" link
 - **No**: source badge, file path, metadata panel, tree sidebar, search box
 - Header is minimal/fixed; viewer fills remaining height
+- Expired link → header replaced by a centred "This link has expired" message
 
 ### "Open in app" URL
 
-The main app serialises its state to URL params (`?source=X&path=Y&...`). The direct view
-can construct a similar URL:
 ```
 /?source={source}&path={outer_path}&archivePath={inner_path}
 ```
-This is best-effort; if the app is behind auth the user will need to log in first.
+Best-effort; the user will need to log in if the app requires auth.
 
-### PDF viewer
+---
 
-Use `<iframe src="/api/v1/raw?source=...&path=...">` — the same approach as the current
-detail view's "View Original" mode. The browser's native PDF viewer handles rendering.
-The raw endpoint is already auth-guarded; the direct view calls it via the cookie session
-set on the same origin, or (if capability auth is extended to raw) via a signed token.
+## Server config
 
-**Auth note for raw endpoint:** Currently `/api/v1/raw` requires bearer or session-cookie
-auth. For the direct view to embed a PDF in an `<iframe>`, the browser needs to be able
-to fetch it directly. Options:
-1. Use a session cookie established when the short-link page loads (simplest; works when
-   `find-anything` runs in a browser tab)
-2. Embed the content in the JSON response for the link resolution endpoint (only for small
-   text files; impractical for PDFs/images)
-3. Accept a `?link_code=xxxxxx` param on `/api/v1/raw` that bypasses bearer auth
+New section in `server.toml` (and `examples/server.toml`):
 
-Option 1 works when the user is already logged in. Option 3 is needed for truly unauthenticated
-sharing. Implement option 1 in v1; revisit option 3 when unauthenticated sharing is a priority.
+```toml
+[links]
+ttl = "30d"   # default; supports h/d suffixes
+```
+
+`ttl` is parsed into seconds server-side. The `[links]` section is optional; defaults
+apply if absent.
 
 ---
 
 ## API
 
-### `POST /api/v1/links`
-
-Requires bearer auth (only logged-in users create links).
+### `POST /api/v1/links` *(requires bearer auth)*
 
 **Request body:**
 ```json
@@ -141,12 +172,14 @@ Requires bearer auth (only logged-in users create links).
 
 **Response `201 Created`:**
 ```json
-{ "code": "aB3mZx", "url": "/v/aB3mZx" }
+{
+  "code": "aB3mZx",
+  "url": "/v/aB3mZx",
+  "expires_at": 1752345600
+}
 ```
 
-### `GET /api/v1/links/:code`
-
-No auth required (capability-based).
+### `GET /api/v1/links/:code` *(no auth required)*
 
 **Response `200 OK`:**
 ```json
@@ -155,11 +188,23 @@ No auth required (capability-based).
   "path": "photos/sunset.jpg",
   "archive_path": null,
   "kind": "image",
-  "filename": "sunset.jpg"
+  "filename": "sunset.jpg",
+  "expires_at": 1752345600
 }
 ```
 
-**Response `404 Not Found`:** code doesn't exist.
+**Response `410 Gone`:** code exists but has expired — UI shows "This link has expired".
+
+**Response `404 Not Found`:** code was never issued.
+
+### `GET /api/v1/raw?link_code=:code&source=...&path=...` *(no bearer auth)*
+
+Same as current `/api/v1/raw` but authenticates via the link code instead of bearer/cookie.
+The `source` and `path` params must match the stored row; returns `403` if they don't.
+
+### `GET /api/v1/file?link_code=:code&source=...&path=...` *(no bearer auth)*
+
+Same scoping as above, for text file content.
 
 ---
 
@@ -167,90 +212,104 @@ No auth required (capability-based).
 
 ### Phase 1 — Backend (Rust)
 
-1. **`data_dir/links.db`** — new SQLite database opened at startup; create `links` table
-   if it doesn't exist; expose `create_link` / `resolve_link` helpers in a new
-   `crates/server/src/db/links.rs` module
+1. **`[links]` config** — add `LinksConfig { ttl_secs: u64 }` to server config;
+   parse `ttl` string (`"30d"`, `"7d"`, `"24h"`) into seconds; default 30 days
 
-2. **`POST /api/v1/links`** — generate random 6-char code (retry on collision; statistically
-   never needed), insert row, return JSON
+2. **`data_dir/links.db`** — open at startup; create `links` table with `expires_at`;
+   expose `create_link(code, source, path, archive_path, expires_at)`,
+   `resolve_link(code) -> Option<LinkRow>` (returns None if expired OR missing;
+   returns `Expired` variant if code exists but past `expires_at`),
+   `sweep_expired()` in `crates/server/src/db/links.rs`
 
-3. **`GET /api/v1/links/:code`** — look up row, fetch `kind` from source DB (`SELECT kind FROM
-   files WHERE path = ?`), return JSON; rate-limit in the handler (simple per-IP counter with
-   `tokio::time`)
+3. **`POST /api/v1/links`** — requires bearer; compute `expires_at = now + ttl_secs`;
+   generate random 6-char code, retry on collision; insert; return JSON
 
-4. Wire both routes into `lib.rs` / `routes.rs`
+4. **`GET /api/v1/links/:code`** — no auth; look up; return 200/410/404; rate-limit
+   60 req/min per IP (simple `DashMap<IpAddr, (u32, Instant)>` in `AppState`)
+
+5. **`/api/v1/raw` and `/api/v1/file`** — accept optional `link_code` query param;
+   if present: look up code, verify not expired, verify `source`+`path` match row,
+   skip bearer check; otherwise auth as normal
+
+6. **Expiry sweep** — background `tokio::spawn` loop, runs `sweep_expired()` every hour
+
+7. Wire all routes into `lib.rs` / `routes.rs`
 
 ### Phase 2 — Web UI: link button in PathBar
 
-1. Add a link/chain icon button to `PathBar.svelte` next to the existing copy button
-2. On click: call `POST /api/v1/links` via `api.ts`, then copy the resulting URL to clipboard
-   and show a brief "Copied!" confirmation (same pattern as the path copy button)
-3. Add `createLink(source, path, archivePath?)` to `api.ts`
+1. Add a chain/link icon button to `PathBar.svelte` next to the copy button
+2. On click: `POST /api/v1/links`, copy the full absolute URL
+   (`window.location.origin + response.url`) to clipboard, show "Copied!" for 2 s
+3. Add `createLink(source, path, archivePath?)` returning `{ code, url, expires_at }`
+   to `api.ts`
 
 ### Phase 3 — Web UI: direct view route
 
-1. **`web/src/routes/v/[code]/+page.svelte`** — the direct view page:
-   - On mount: call `GET /api/v1/links/:code`
-   - Show loading / 404 states
-   - Render appropriate viewer based on `kind`
+1. **`web/src/routes/v/[code]/+page.svelte`**:
+   - On mount: `GET /api/v1/links/:code`
+   - States: loading → resolved (dispatch by kind) / expired (410) / not-found (404)
+   - Pass `link_code` to child viewers so they can construct unauthenticated URLs
 
-2. **`web/src/lib/DirectImageViewer.svelte`** — custom pan/zoom viewer:
-   - `<img>` inside a `<div class="viewport">` with `overflow: hidden`
-   - State: `scale = 1`, `translateX = 0`, `translateY = 0`
-   - Wheel event → `scale *= 1.1 ** (delta / 100)`, clamped to `[0.1, 10]`
-   - Pointerdown/move/up → pan when `scale > 1`
-   - On image load: if `naturalWidth < viewportWidth && naturalHeight < viewportHeight`
-     → `scale = 1` (native res); otherwise → `scale = min(w/nw, h/nh)` (fit)
-   - Reset button → restore initial fit scale + zero translation
-   - Zoom in / zoom out buttons → `scale *= 1.25`, clamped
+2. **`web/src/lib/DirectImageViewer.svelte`** — custom pan/zoom (see Design above);
+   src = `/api/v1/raw?link_code=:code&source=...&path=...`
 
-3. **`web/src/lib/DirectHeader.svelte`** — minimal fixed header:
-   - "find-anything" link → `/`
-   - Filename (from link resolution response)
-   - Download link → `/api/v1/raw?source=...&path=...` with `download` attribute
-   - "Open in app" link → `/?source=...&path=...`
+3. **`web/src/lib/DirectHeader.svelte`**:
+   - "find-anything" → `/`
+   - Filename
+   - Download: `<a href="/api/v1/raw?link_code=...&download=1">⬇ Download</a>`
+   - "Open in app": `/?source=...&path=...`
 
-4. **`web/src/routes/v/[code]/+page.svelte`** viewer dispatch:
-   - `kind === 'image'` → `<DirectImageViewer src="/api/v1/raw?..."/>`
-   - `kind === 'pdf'` → `<iframe src="/api/v1/raw?..." class="pdf-frame"/>`
-   - everything else → fetch `/api/v1/file` and render extracted text in a `<pre>` with
-     highlight.js (same path as the main `FileViewer`)
+4. **Viewer dispatch in `+page.svelte`**:
+   - `image` → `<DirectImageViewer>`
+   - `pdf` → `<iframe src="/api/v1/raw?link_code=...">` (browser native PDF)
+   - anything else → call `GET /api/v1/file?link_code=...` and render text in `<pre>`
+     with highlight.js
+
+5. **Expired / not-found states**: show the header with "find-anything" link, and a
+   centred message: "This link has expired" (410) or "Link not found" (404)
 
 ---
 
 ## Files Created
 
-- `crates/server/src/db/links.rs` — `open_links_db`, `create_link`, `resolve_link`
+- `crates/server/src/db/links.rs` — `open_links_db`, `create_link`, `resolve_link`, `sweep_expired`
 - `crates/server/src/routes/links.rs` — `POST /api/v1/links`, `GET /api/v1/links/:code`
 - `web/src/routes/v/[code]/+page.svelte` — direct view page
 - `web/src/lib/DirectImageViewer.svelte` — pan/zoom image viewer
-- `web/src/lib/DirectHeader.svelte` — minimal header with download + "open in app"
+- `web/src/lib/DirectHeader.svelte` — minimal header
 
 ## Files Modified
 
-- `crates/server/src/lib.rs` — open `links.db` at startup; wire new routes
-- `crates/server/src/routes.rs` — add link route imports
-- `web/src/lib/api.ts` — add `createLink` function
+- `crates/common/src/config.rs` — add `LinksConfig { ttl_secs: u64 }`; parse TTL string
+- `crates/server/src/lib.rs` — open `links.db`; spawn expiry sweep; wire routes
+- `crates/server/src/routes/links.rs` — new (see above)
+- `crates/server/src/routes/file.rs` — accept `link_code` param
+- `crates/server/src/routes/raw.rs` — accept `link_code` param
+- `web/src/lib/api.ts` — add `createLink`
 - `web/src/lib/PathBar.svelte` — add link icon button
+- `examples/server.toml` — add commented `[links]` section
 
 ---
 
 ## Testing
 
-- Unit test `create_link` / `resolve_link` with collision and not-found cases
-- Confirm `POST /api/v1/links` requires auth; `GET /api/v1/links/:code` does not
-- Manual: create link for image, PDF, text file — verify each viewer renders correctly
-- Manual: verify zoom/pan on image viewer (wheel, drag, reset, fit-to-viewport)
-- Manual: confirm header links work (home, download, open in app)
-- Manual: confirm 404 page shown for unknown/deleted code
+- Unit: `create_link` / `resolve_link` including expired-code path
+- Unit: `sweep_expired` deletes only expired rows
+- Unit: TTL string parsing (`"30d"` → 2592000, `"24h"` → 86400, unknown unit → error)
+- Integration: `POST /api/v1/links` requires auth; `GET /api/v1/links/:code` does not
+- Integration: `GET /api/v1/raw?link_code=...` works without bearer; wrong source/path → 403
+- Integration: expired code returns 410 from resolve and from raw/file endpoints
+- Manual: create link for image / PDF / text — verify all three viewers render correctly
+- Manual: zoom/pan on image viewer (wheel, drag, double-click reset, fit-on-load)
+- Manual: copy-to-clipboard on the link button shows "Copied!" confirmation
+- Manual: expired link shows "This link has expired" page
 
 ---
 
 ## Future / Out of Scope for v1
 
-- Code expiry / TTL (links are permanent in v1)
-- Per-code revocation
-- Unauthenticated raw serving for truly shareable links (requires option 3 auth above)
+- Per-code manual revocation
 - Analytics (view count per link)
-- Bulk link generation
+- Configurable per-link TTL override at creation time
 - QR code display alongside the short URL
+- Bulk link generation

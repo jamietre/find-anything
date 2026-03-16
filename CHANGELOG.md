@@ -16,6 +16,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **New server search modes** — `file-fuzzy`, `file-exact`, `file-regex` (filename-only search), `doc-exact`, `doc-regex` (document-level exact/regex); added `group_by_file` helper in `routes/search.rs` for document-family modes
 - **`[PATH]` prefix convention for `line_number=0` path entries (plan 067)** — all path lines in the index are now stored as `[PATH] relative/path` instead of bare strings; PE version-info keys reformatted as `[PE:Key]`; enables unambiguous SQL/Rust filtering of path lines vs. EXIF/audio/MIME/PE metadata at `line_number=0`; existing indexes must be rebuilt with `find-scan --force`
 - **`searchPrefixes.ts` unit tests** — 39 vitest tests covering all prefix combinations, compound tokens, kind filters, conflict resolution, safety fallback, case insensitivity, quoted strings, and chip-removal behaviour (`value` field on `PrefixToken`)
+- **Embedded video player (plan 069)** — video files (mp4, webm, mkv, avi, mov, wmv, m4v, flv) now open in an HTML5 `<video controls>` player in the detail view; the player is shown by default (same behaviour as images); a "View Extracted" button toggles to the metadata/text view; formats the browser cannot decode natively show the browser's built-in unsupported-format message
 
 ### Fixed
 
