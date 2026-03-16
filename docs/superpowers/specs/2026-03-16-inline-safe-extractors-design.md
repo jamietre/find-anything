@@ -44,6 +44,7 @@ pub enum ExtractorRoute {
     External(ExternalExtractorConfig),
 }
 
+#[derive(PartialEq)]
 pub enum InlineKind {
     Text,
     Html,
@@ -90,21 +91,34 @@ pub fn extract_inline(
     path: &Path,
     cfg: &ExtractorConfig,
 ) -> Vec<IndexLine> {
-    match kind {
-        InlineKind::Text   => find_extract_dispatch::extract(path, cfg),
+    let result = match kind {
+        InlineKind::Text   => find_extract_dispatch::dispatch_from_path(path, cfg),
         InlineKind::Html   => find_extract_html::extract(path, cfg),
         InlineKind::Media  => find_extract_media::extract(path, cfg),
         InlineKind::Office => find_extract_office::extract(path, cfg),
+    };
+    match result {
+        Ok(lines) => lines,
+        Err(e) => {
+            warn!("inline extraction failed for {}: {e:#}", path.display());
+            vec![]
+        }
     }
 }
 ```
 
-Text routes through `find_extract_dispatch` since it is the existing fallback
-for all text/code types and has no dedicated single-purpose library.
+All extractor library functions return `anyhow::Result<Vec<IndexLine>>`. On
+error, `extract_inline` logs a warning and returns an empty vec — matching the
+behaviour of a subprocess `Failed` outcome (file is indexed by filename only).
+
+Text routes through `find_extract_dispatch::dispatch_from_path` since dispatch
+is the existing fallback for all text/code types and has no dedicated
+single-purpose library. (`dispatch_from_bytes` is infallible but requires
+pre-read content; `dispatch_from_path` is the path-based API.)
 
 ### process_file() Dispatch (scan.rs)
 
-The existing three-way match becomes a clean four-way match on `ExtractorRoute`:
+The existing three-way match becomes a five-arm match on `ExtractorRoute`:
 
 - `External(stdout)` → `run_external_stdout()` (unchanged)
 - `External(tempdir)` → `run_external_tempdir()` (unchanged)
@@ -123,17 +137,14 @@ add the `Inline` arm calling `extract_inline()`. All other arms unchanged.
 `find-client/Cargo.toml` gains direct dependencies on the extractor libraries:
 
 ```toml
-find-extract-dispatch = { path = "../../crates/extractors/dispatch" }
-find-extract-html     = { path = "../../crates/extractors/html" }
-find-extract-media    = { path = "../../crates/extractors/media" }
-find-extract-office   = { path = "../../crates/extractors/office" }
+find-extract-html   = { path = "../../crates/extractors/html" }
+find-extract-office = { path = "../../crates/extractors/office" }
 ```
 
-All four are added to `find-client` (since find-scan and find-watch share the
-crate). The binary size difference between the two binaries is determined by
-which code paths are reachable, not separate dependency graphs. `find-extract-dispatch`
-was already imported (`use find_extract_dispatch::dispatch_from_bytes` in
-subprocess.rs), so only html, media, and office are truly new deps.
+`find-extract-dispatch` and `find-extract-media` are already direct dependencies
+of `find-client` (dispatch via `dispatch_from_bytes` in subprocess.rs; media
+for `detect_kind`). Only `find-extract-html` and `find-extract-office` are
+genuinely new entries in `Cargo.toml`.
 
 ## Files Changed
 
@@ -142,7 +153,7 @@ subprocess.rs), so only html, media, and office are truly new deps.
 | `crates/client/src/subprocess.rs` | Add `ExtractorRoute`, `InlineKind`, `extract_inline()`; extend `resolve_extractor`; delete `extractor_binary_for()` |
 | `crates/client/src/scan.rs` | Update `process_file()` to match on `ExtractorRoute`; pass `inline_set` to resolver |
 | `crates/client/src/watch.rs` | Update extraction dispatch; pass `inline_set = &[Text]` |
-| `crates/client/Cargo.toml` | Add find-extract-html, find-extract-media, find-extract-office deps |
+| `crates/client/Cargo.toml` | Add find-extract-html, find-extract-office deps (media and dispatch already present) |
 
 ## Testing
 
