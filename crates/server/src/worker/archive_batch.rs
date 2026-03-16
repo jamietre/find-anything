@@ -301,3 +301,249 @@ pub(super) fn parse_gz_request(gz_path: &Path) -> Result<BulkRequest> {
         .context("parsing bulk request JSON")?;
     Ok(request)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    use find_common::api::{BulkRequest, IndexFile, IndexLine};
+    use find_common::config::NormalizationSettings;
+
+    fn write_bulk_gz(path: &Path, req: &BulkRequest) {
+        let json = serde_json::to_vec(req).unwrap();
+        let file = std::fs::File::create(path).unwrap();
+        let mut enc = flate2::write::GzEncoder::new(file, flate2::Compression::default());
+        enc.write_all(&json).unwrap();
+        enc.finish().unwrap();
+    }
+
+    fn make_worker_config() -> WorkerConfig {
+        WorkerConfig {
+            request_timeout: std::time::Duration::from_secs(30),
+            inline_threshold_bytes: 0,
+            archive_batch_size: 10,
+            activity_log_max_entries: 100,
+            normalization: NormalizationSettings::default(),
+        }
+    }
+
+    fn make_bulk_request(source: &str, path: &str, content: &str) -> BulkRequest {
+        BulkRequest {
+            source: source.to_string(),
+            files: vec![IndexFile {
+                path: path.to_string(),
+                mtime: 1000,
+                size: Some(content.len() as i64),
+                kind: "text".to_string(),
+                scanner_version: 1,
+                lines: vec![
+                    IndexLine {
+                        archive_path: None,
+                        line_number: 0,
+                        content: path.to_string(),
+                    },
+                    IndexLine {
+                        archive_path: None,
+                        line_number: 1,
+                        content: content.to_string(),
+                    },
+                ],
+                extract_ms: None,
+                content_hash: None,
+                is_new: true,
+            }],
+            delete_paths: vec![],
+            rename_paths: vec![],
+            scan_timestamp: None,
+            indexing_failures: vec![],
+        }
+    }
+
+    fn seed_db(data_dir: &Path, source: &str, path: &str) -> (rusqlite::Connection, i64) {
+        let db_path = data_dir.join("sources").join(format!("{source}.db"));
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let conn = crate::db::open(&db_path).unwrap();
+
+        conn.execute(
+            "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, canonical_file_id)
+             VALUES (?1, 1000, 100, 'text', 0, NULL, NULL, NULL)",
+            rusqlite::params![path],
+        ).unwrap();
+        let file_id: i64 = conn.last_insert_rowid();
+
+        conn.execute(
+            "INSERT INTO lines (file_id, line_number, chunk_archive, chunk_name, line_offset_in_chunk)
+             VALUES (?1, 0, NULL, NULL, 0)",
+            rusqlite::params![file_id],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO lines_fts(rowid, content) VALUES (last_insert_rowid(), ?1)",
+            rusqlite::params![path],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO lines (file_id, line_number, chunk_archive, chunk_name, line_offset_in_chunk)
+             VALUES (?1, 1, NULL, NULL, 0)",
+            rusqlite::params![file_id],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO lines_fts(rowid, content) VALUES (last_insert_rowid(), ?1)",
+            rusqlite::params!["hello world"],
+        ).unwrap();
+
+        (conn, file_id)
+    }
+
+    #[test]
+    fn chunks_written_and_line_refs_updated() {
+        let data_tmp = tempfile::tempdir().unwrap();
+        let to_archive_tmp = tempfile::tempdir().unwrap();
+        let data_dir = data_tmp.path();
+        let to_archive_dir = to_archive_tmp.path();
+
+        // Create required directories.
+        std::fs::create_dir_all(data_dir.join("sources").join("content")).unwrap();
+
+        let source = "test_source";
+        let path = "docs/readme.txt";
+
+        // Seed DB with a file + NULL chunk refs.
+        let (conn, file_id) = seed_db(data_dir, source, path);
+
+        // Write a .gz BulkRequest to to_archive_dir.
+        let req = make_bulk_request(source, path, "hello world");
+        write_bulk_gz(&to_archive_dir.join("batch_001.gz"), &req);
+
+        let cfg = make_worker_config();
+        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
+
+        let processed = run_archive_batch(data_dir, to_archive_dir, cfg, &shared).unwrap();
+        assert_eq!(processed, 1, "should have processed 1 gz file");
+
+        // Assert: .gz was removed.
+        let gz_count = std::fs::read_dir(to_archive_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "gz"))
+            .count();
+        assert_eq!(gz_count, 0, "gz file should be removed after processing");
+
+        // Assert: line refs updated.
+        let archived_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM lines WHERE file_id = ?1 AND chunk_archive IS NOT NULL",
+                rusqlite::params![file_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(archived_count > 0, "line refs should be set after archive_batch");
+
+        // Assert: at least one ZIP archive created.
+        let content_dir = data_dir.join("sources").join("content");
+        let zip_count = std::fs::read_dir(&content_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().is_dir())
+            .flat_map(|subdir| std::fs::read_dir(subdir.path()).unwrap().flatten())
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "zip"))
+            .count();
+        assert!(zip_count > 0, "at least one ZIP archive should have been created");
+    }
+
+    #[test]
+    fn gz_file_removed_after_processing() {
+        let data_tmp = tempfile::tempdir().unwrap();
+        let to_archive_tmp = tempfile::tempdir().unwrap();
+        let data_dir = data_tmp.path();
+        let to_archive_dir = to_archive_tmp.path();
+
+        std::fs::create_dir_all(data_dir.join("sources").join("content")).unwrap();
+        // Create the sources dir but no DB — file_id lookup will find nothing.
+        std::fs::create_dir_all(data_dir.join("sources")).unwrap();
+
+        let source = "ghost_source";
+        let path = "nonexistent/file.txt";
+        let req = make_bulk_request(source, path, "some content");
+        write_bulk_gz(&to_archive_dir.join("ghost_001.gz"), &req);
+
+        let cfg = make_worker_config();
+        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
+
+        let processed = run_archive_batch(data_dir, to_archive_dir, cfg, &shared).unwrap();
+        assert_eq!(processed, 1, "should count 1 processed gz");
+
+        let gz_count = std::fs::read_dir(to_archive_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().map_or(false, |ext| ext == "gz"))
+            .count();
+        assert_eq!(gz_count, 0, "gz file should be removed even when file has no DB entry");
+    }
+
+    #[test]
+    fn already_archived_file_is_skipped() {
+        let data_tmp = tempfile::tempdir().unwrap();
+        let to_archive_tmp = tempfile::tempdir().unwrap();
+        let data_dir = data_tmp.path();
+        let to_archive_dir = to_archive_tmp.path();
+
+        std::fs::create_dir_all(data_dir.join("sources").join("content")).unwrap();
+
+        let source = "test_source";
+        let path = "docs/readme.txt";
+
+        // Seed DB with NULL chunk refs.
+        let (conn, file_id) = seed_db(data_dir, source, path);
+
+        let cfg = make_worker_config();
+        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
+
+        // First run — writes chunks and updates line refs.
+        let req = make_bulk_request(source, path, "hello world");
+        write_bulk_gz(&to_archive_dir.join("first_001.gz"), &req);
+        run_archive_batch(data_dir, to_archive_dir, cfg.clone(), &shared).unwrap();
+
+        // Capture line refs after first run.
+        let refs_after_first: Vec<(Option<String>, Option<String>)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT chunk_archive, chunk_name FROM lines WHERE file_id = ?1 ORDER BY line_number",
+                )
+                .unwrap();
+            stmt.query_map(rusqlite::params![file_id], |r| {
+                Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?))
+            })
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+        };
+        assert!(
+            refs_after_first.iter().any(|(a, _)| a.is_some()),
+            "line refs should be set after first run"
+        );
+
+        // Second run — same content, should skip (already archived).
+        let req2 = make_bulk_request(source, path, "hello world");
+        write_bulk_gz(&to_archive_dir.join("second_001.gz"), &req2);
+        run_archive_batch(data_dir, to_archive_dir, cfg, &shared).unwrap();
+
+        // Line refs should be identical to after-first-run state.
+        let refs_after_second: Vec<(Option<String>, Option<String>)> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT chunk_archive, chunk_name FROM lines WHERE file_id = ?1 ORDER BY line_number",
+                )
+                .unwrap();
+            stmt.query_map(rusqlite::params![file_id], |r| {
+                Ok((r.get::<_, Option<String>>(0)?, r.get::<_, Option<String>>(1)?))
+            })
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+        };
+        assert_eq!(
+            refs_after_first, refs_after_second,
+            "line refs should not change on second run"
+        );
+    }
+}
