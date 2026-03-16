@@ -4,3 +4,4 @@
 /test-data/
 /packaging/windows/Output/
 *.log
+/.worktrees/
