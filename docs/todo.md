@@ -4,7 +4,6 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
  
-[ ] CHORE: Analysis of testing gaps
 [ ] BUG: back arrow browser navigation doesn't work at all
 [ ] CHORE: frontent ux tests
 [ ] CHORE: Code quality analysis on file scanning/walking/filtering pipeline
@@ -14,7 +13,6 @@ Stream of consciousness for bugfixes and features approaching V1
 [ ] FEAT: Guard against low disk space
 [ ] BUG: Fetching existing file list seems to not be targeted to a particular tree (e.g. find-scan /path/to/dir)
 [ ] BUG: Monhegan Lighthouse DOry 2005.tif can't be shown
-[ ] FEAT: UX is bad when showing full context for large text documents. Use some kind of scroll pattern to not render the whole thing onscreen
 [ ] FEAT: make "find-admin inbox" have subcommands
 [ ] FEAT: Run compaction scan only once a day, or on demand
 [ ] BUG: App ID is not persisted, each rebuild makes it not show up in pinned taskbar items
@@ -24,10 +22,9 @@ Stream of consciousness for bugfixes and features approaching V1
 [ ] FEAT: Render SVG by default
 [ ] BUG: Searching on ".png" doesn't work is that improvable
 [ ] CHORE: Include **/AppData/**, **/bin/**, **/obj/**, **/\*.log by default, "**/pnpm/\*\*", vscode-remote-wsl
-[ ] CHORE: Unit test for handling of retrieveal duplicated items in index
+[ ] CHORE: Unit test for handling of retrieval of duplicated items in index
 [ ] CHORE: refactor front end to split svg assets out into files, etc
 [ ] CHORE: Server install should also be able to chain client install
-[ ] CHORE: Inline extraction of safe file types instread of making subporocesses
 [ ] CHORE: Code quality: avoid optional typescript parameters; default values should be set at as high a level as possible and propagated conclusively. Add to claude.md
 [ ] FEAT: Custom protocol handler (chrome) to allow exploring the file location. Requires client config for roots.
 [ ] FEAT (planned): Add providing uname/password for share to config for each source
@@ -43,9 +40,12 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ### Completed Items
 
+[x] CHORE: Analysis of testing gaps
+[x] CHORE: Inline extraction of safe file types instead of making subporocesses
 [x] FEAT: Add query syntax "type: image" with intellisense (note: we implemented this but not intellisense)
-[ ] FEAT: Add query syntax "path: /backups/" with intellisense (note: we implemented this but not intellisense)
+[x] FEAT: Add query syntax "path: /backups/" with intellisense (note: we implemented this but not intellisense)
 [x] FEAT: use video player for video files
+[x] FEAT: UX is bad when showing full context for large text documents. Use some kind of scroll pattern to not render the whole thing onscreen
 [x] FEAT: Create short URL to link
 [x] BUG: "Content has changed. Reload" on a detail page doesn't clear when you hit reload, only hard refresh
 [x] FEAT (PLANNED): allow adding extra tools (similar to formatters) for archive extraction. Extract hardcoded into default config
