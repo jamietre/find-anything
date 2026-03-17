@@ -377,55 +377,60 @@ impl<'a> ScanContext<'a> {
     }
 }
 
+/// Bundled parameters for `push_non_archive_files` — groups the per-file
+/// extraction results so the function signature stays under the argument limit.
+pub struct ExtractedFile {
+    pub rel_path:   String,
+    pub abs_path:   PathBuf,
+    pub mtime:      i64,
+    pub size:       i64,
+    pub kind:       FileKind,
+    pub lines:      Vec<IndexLine>,
+    pub extract_ms: u64,
+    pub is_new:     bool,
+}
+
 /// Shared post-processing for non-archive extraction (both builtin and external-stdout).
 ///
 /// Applies kind refinement from `[FILE:mime]` lines, computes the content hash,
 /// builds `IndexFile`s, and pushes them into the batch.
-#[allow(clippy::too_many_arguments)]
 async fn push_non_archive_files(
     ctx: &mut ScanContext<'_>,
-    rel_path: &str,
-    abs_path: &Path,
-    mtime: i64,
-    size: i64,
-    kind: FileKind,
-    lines: Vec<IndexLine>,
-    extract_ms: u64,
-    is_new: bool,
+    file: &ExtractedFile,
 ) -> Result<()> {
     // Refine Unknown or Text kind using extracted content:
     // - A [FILE:mime] line emitted by dispatch means binary → use mime_to_kind.
     // - Text content lines (line_number > 0) present → promote to Text.
     // - Neither → keep as-is.
-    let kind = if kind == FileKind::Text || kind == FileKind::Unknown {
-        if let Some(mime_line) = lines.iter().find(|l| l.line_number == 0 && l.content.starts_with("[FILE:mime] ")) {
+    let kind = if file.kind == FileKind::Text || file.kind == FileKind::Unknown {
+        if let Some(mime_line) = file.lines.iter().find(|l| l.line_number == 0 && l.content.starts_with("[FILE:mime] ")) {
             let mime = &mime_line.content["[FILE:mime] ".len()..];
             FileKind::from(find_extract_dispatch::mime_to_kind(mime))
-        } else if lines.iter().any(|l| l.line_number > 0) {
+        } else if file.lines.iter().any(|l| l.line_number > 0) {
             FileKind::Text
         } else {
-            kind
+            file.kind.clone()
         }
     } else {
-        kind
+        file.kind.clone()
     };
     // Hash raw file bytes for dedup (streaming to avoid OOM on large files).
     // Skip hashing known binary extensions that no specialist extractor handles:
     // opening these files can block indefinitely on Windows (e.g. live VHDX held by Hyper-V).
-    let content_hash = if find_extract_dispatch::is_binary_ext_path(abs_path) {
+    let content_hash = if find_extract_dispatch::is_binary_ext_path(&file.abs_path) {
         None
     } else {
-        hash_file(abs_path)
+        hash_file(&file.abs_path)
     };
-    let mut index_files = build_index_files(rel_path.to_string(), mtime, size, kind, lines);
+    let mut index_files = build_index_files(file.rel_path.clone(), file.mtime, file.size, kind, file.lines.clone());
     if let Some(f) = index_files.first_mut() {
-        f.extract_ms = Some(extract_ms);
+        f.extract_ms = Some(file.extract_ms);
         f.content_hash = content_hash;
-        f.is_new = is_new;
+        f.is_new = file.is_new;
     }
-    for file in index_files {
-        ctx.batch_bytes += index_file_bytes(&file);
-        ctx.batch.push(file);
+    for f in index_files {
+        ctx.batch_bytes += index_file_bytes(&f);
+        ctx.batch.push(f);
         ctx.maybe_flush().await?;
     }
     Ok(())
@@ -518,7 +523,16 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                     };
 
                     let extract_ms = t0.elapsed().as_millis() as u64;
-                    push_non_archive_files(ctx, rel_path, abs_path, mtime, size, kind, lines, extract_ms, is_new).await?;
+                    push_non_archive_files(ctx, &ExtractedFile {
+                        rel_path: rel_path.to_string(),
+                        abs_path: abs_path.to_path_buf(),
+                        mtime,
+                        size,
+                        kind,
+                        lines,
+                        extract_ms,
+                        is_new,
+                    }).await?;
                 }
                 ExternalExtractorMode::TempDir => {
                     // ── External tempdir extraction ───────────────────────────────
@@ -747,7 +761,16 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
             };
 
             let extract_ms = t0.elapsed().as_millis() as u64;
-            push_non_archive_files(ctx, rel_path, abs_path, mtime, size, kind, lines, extract_ms, is_new).await?;
+            push_non_archive_files(ctx, &ExtractedFile {
+                rel_path: rel_path.to_string(),
+                abs_path: abs_path.to_path_buf(),
+                mtime,
+                size,
+                kind,
+                lines,
+                extract_ms,
+                is_new,
+            }).await?;
         }
         subprocess::ExtractorRoute::Inline(inline_kind) => {
             // `inline_kind` is the InlineKind enum variant (bound here to avoid shadowing
@@ -759,8 +782,17 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
             if ctx.quiet { lazy_header::clear_pending(); }
 
             let extract_ms = t0.elapsed().as_millis() as u64;
-            // `kind` here is the outer String variable, not the InlineKind.
-            push_non_archive_files(ctx, rel_path, abs_path, mtime, size, kind, lines, extract_ms, is_new).await?;
+            // `kind` here is the outer FileKind variable, not the InlineKind.
+            push_non_archive_files(ctx, &ExtractedFile {
+                rel_path: rel_path.to_string(),
+                abs_path: abs_path.to_path_buf(),
+                mtime,
+                size,
+                kind,
+                lines,
+                extract_ms,
+                is_new,
+            }).await?;
         }
     }
 

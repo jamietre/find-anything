@@ -148,19 +148,21 @@ pub async fn start_inbox_worker(
 
         tokio::spawn(async move {
             tracing::debug!("Indexing worker started");
+            let handles = request::IndexerHandles {
+                status,
+                cfg: cfg_index,
+                archive_notify,
+                shared_archive: shared,
+                recent_tx,
+            };
             while let Some(path) = work_rx.recv().await {
-                request::process_request_async(
-                    &data_dir,
-                    &path,
-                    &failed_dir,
-                    &to_archive_dir_clone,
-                    status.clone(),
-                    cfg_index.clone(),
-                    &archive_notify,
-                    Arc::clone(&shared),
-                    recent_tx.clone(),
-                )
-                .await;
+                let ctx = request::RequestContext {
+                    data_dir: data_dir.clone(),
+                    request_path: path.clone(),
+                    failed_dir: failed_dir.clone(),
+                    to_archive_dir: to_archive_dir_clone.clone(),
+                };
+                request::process_request_async(&ctx, &handles).await;
                 // Signal the router that this path is done (success or failure).
                 let _ = done_tx.send(path).await;
             }

@@ -11,8 +11,9 @@ use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use rusqlite::ErrorCode;
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 use find_common::api::{BulkRequest, IndexingFailure, RecentAction, RecentFile};
 use find_common::path::is_composite;
@@ -24,30 +25,45 @@ use crate::normalize;
 use super::{StatusHandle, WorkerConfig, timed, warn_slow};
 use super::pipeline;
 
+// ── Context structs ─────────────────────────────────────────────────────────────
+
+/// Per-request path context for `process_request_async`.
+pub(super) struct RequestContext {
+    pub data_dir:       PathBuf,
+    pub request_path:   PathBuf,
+    pub failed_dir:     PathBuf,
+    pub to_archive_dir: PathBuf,
+}
+
+/// Worker-lifetime handles passed by reference to every `process_request_async` call.
+pub(super) struct IndexerHandles {
+    pub status:         StatusHandle,
+    pub cfg:            WorkerConfig,
+    pub archive_notify: Arc<tokio::sync::Notify>,
+    pub shared_archive: Arc<SharedArchiveState>,
+    pub recent_tx:      broadcast::Sender<RecentFile>,
+}
+
 // ── Public entry point ─────────────────────────────────────────────────────────
 
 /// Async wrapper: runs `process_request_phase1` in a blocking task with a
 /// configurable timeout, then moves the file to `failed/` on error.
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn process_request_async(
-    data_dir: &Path,
-    request_path: &Path,
-    failed_dir: &Path,
-    to_archive_dir: &Path,
-    status: StatusHandle,
-    cfg: WorkerConfig,
-    archive_notify: &Arc<tokio::sync::Notify>,
-    shared_archive_state: Arc<SharedArchiveState>,
-    recent_tx: tokio::sync::broadcast::Sender<RecentFile>,
+    ctx: &RequestContext,
+    handles: &IndexerHandles,
 ) {
-    let status_reset = status.clone();
-    let request_timeout = cfg.request_timeout;
+    let status_reset = handles.status.clone();
+    let request_timeout = handles.cfg.request_timeout;
 
     let blocking_task = tokio::task::spawn_blocking({
-        let data_dir = data_dir.to_path_buf();
-        let request_path = request_path.to_path_buf();
-        let to_archive_dir = to_archive_dir.to_path_buf();
-        move || process_request_phase1(&data_dir, &request_path, &to_archive_dir, &status, cfg, &shared_archive_state, &recent_tx)
+        let data_dir = ctx.data_dir.clone();
+        let request_path = ctx.request_path.clone();
+        let to_archive_dir = ctx.to_archive_dir.clone();
+        let status = handles.status.clone();
+        let cfg = handles.cfg.clone();
+        let shared_archive = Arc::clone(&handles.shared_archive);
+        let recent_tx = handles.recent_tx.clone();
+        move || process_request_phase1(&data_dir, &request_path, &to_archive_dir, &status, cfg, &shared_archive, &recent_tx)
     });
 
     let timed_result = tokio::time::timeout(request_timeout, blocking_task).await;
@@ -61,11 +77,11 @@ pub(super) async fn process_request_async(
             tracing::error!(
                 "Request processing timed out after {}s, abandoning: {}",
                 request_timeout.as_secs(),
-                request_path.display(),
+                ctx.request_path.display(),
             );
             handle_failure(
-                request_path,
-                failed_dir,
+                &ctx.request_path,
+                &ctx.failed_dir,
                 anyhow::anyhow!("Processing timed out after {}s", request_timeout.as_secs()),
             )
             .await;
@@ -73,15 +89,15 @@ pub(super) async fn process_request_async(
         Ok(Ok(Ok(()))) => {
             // The normalized .gz was already written to to-archive/ by the blocking task.
             // Delete the original from inbox/.
-            if let Err(e) = tokio::fs::remove_file(request_path).await {
+            if let Err(e) = tokio::fs::remove_file(&ctx.request_path).await {
                 tracing::error!(
                     "Failed to delete processed request {}: {}",
-                    request_path.display(),
+                    ctx.request_path.display(),
                     e
                 );
             } else {
-                tracing::debug!("Phase 1 complete, queued for archive: {}", request_path.display());
-                archive_notify.notify_one();
+                tracing::debug!("Phase 1 complete, queued for archive: {}", ctx.request_path.display());
+                handles.archive_notify.notify_one();
             }
         }
         Ok(Ok(Err(e))) => {
@@ -90,16 +106,16 @@ pub(super) async fn process_request_async(
                 // retry it on the next scan tick.
                 tracing::warn!(
                     "Database locked while processing {}, will retry: {e:#}",
-                    request_path.display(),
+                    ctx.request_path.display(),
                 );
             } else {
-                handle_failure(request_path, failed_dir, e).await;
+                handle_failure(&ctx.request_path, &ctx.failed_dir, e).await;
             }
         }
         Ok(Err(e)) => {
             handle_failure(
-                request_path,
-                failed_dir,
+                &ctx.request_path,
+                &ctx.failed_dir,
                 anyhow::anyhow!("Task error: {}", e),
             )
             .await;

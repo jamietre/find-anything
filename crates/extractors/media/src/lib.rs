@@ -4,7 +4,6 @@ use std::path::Path;
 
 use find_extract_types::IndexLine;
 use find_extract_types::ExtractorConfig;
-use id3::TagLike;
 
 /// Extract metadata from media files (images, audio, video).
 ///
@@ -277,112 +276,142 @@ pub fn is_image_ext(ext: &str) -> bool {
 // ============================================================================
 
 fn extract_audio(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
-    let ext = path.extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase();
+    use symphonia::core::codecs::CODEC_TYPE_NULL;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+    use symphonia::core::probe::Hint;
 
-    match ext.as_str() {
-        "mp3" => extract_mp3_tags(path),
-        "flac" => extract_flac_tags(path),
-        "m4a" | "aac" => extract_mp4_tags(path),
-        _ => Ok(vec![]),  // Unsupported format
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return Ok(vec![]),
+    };
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let probed = match symphonia::default::get_probe()
+        .format(&hint, mss, &FormatOptions::default(), &MetadataOptions::default())
+    {
+        Ok(p) => p,
+        Err(_) => return Ok(vec![]),
+    };
+
+    let mut format = probed.format;
+    let mut probed_meta = probed.metadata;
+    let mut lines: Vec<IndexLine> = Vec::new();
+
+    // ── Tags ──────────────────────────────────────────────────────────────────
+    // Pre-container metadata (e.g. ID3v2 prepended to MP3) lives in probed_meta;
+    // container-native metadata (Vorbis comments in FLAC/OGG, MP4 atoms) lives
+    // in format.metadata(). Check both and merge.
+    if let Some(meta) = probed_meta.get() {
+        if let Some(rev) = meta.current() {
+            collect_audio_tags(rev.tags(), &mut lines);
+        }
+    }
+    {
+        let meta = format.metadata();
+        if let Some(rev) = meta.current() {
+            collect_audio_tags(rev.tags(), &mut lines);
+        }
+    }
+
+    // ── Technical metadata from the first real audio track ────────────────────
+    if let Some(track) = format.tracks().iter().find(|t| t.codec_params.codec != CODEC_TYPE_NULL) {
+        let params = &track.codec_params;
+
+        let codec = audio_codec_name(params.codec);
+        if !codec.is_empty() {
+            lines.push(make_audio_line("codec", codec));
+        }
+
+        if let Some(sr) = params.sample_rate {
+            lines.push(make_audio_line("sample_rate", &format!("{sr} Hz")));
+        }
+
+        if let Some(ch) = params.channels {
+            let label = match ch.count() {
+                1 => "1 (mono)".to_string(),
+                2 => "2 (stereo)".to_string(),
+                n => n.to_string(),
+            };
+            lines.push(make_audio_line("channels", &label));
+        }
+
+        if let Some(bps) = params.bits_per_sample {
+            lines.push(make_audio_line("bit_depth", &format!("{bps} bit")));
+        }
+
+        if let (Some(n_frames), Some(tb)) = (params.n_frames, params.time_base) {
+            let secs = (n_frames * tb.numer as u64) / tb.denom as u64;
+            if secs > 0 {
+                lines.push(make_audio_line("duration", &format!("{}:{:02}", secs / 60, secs % 60)));
+            }
+        }
+    }
+
+    Ok(lines)
+}
+
+fn collect_audio_tags(tags: &[symphonia::core::meta::Tag], lines: &mut Vec<IndexLine>) {
+    use symphonia::core::meta::{StandardTagKey, Value};
+    for tag in tags {
+        let key = if let Some(std_key) = tag.std_key {
+            match std_key {
+                StandardTagKey::TrackTitle  => "title",
+                StandardTagKey::Artist      => "artist",
+                StandardTagKey::AlbumArtist => "album_artist",
+                StandardTagKey::Album       => "album",
+                StandardTagKey::Date        => "year",
+                StandardTagKey::Genre       => "genre",
+                StandardTagKey::Comment     => "comment",
+                StandardTagKey::Composer    => "composer",
+                StandardTagKey::TrackNumber => "track",
+                StandardTagKey::DiscNumber  => "disc",
+                _ => continue,
+            }
+        } else {
+            continue;
+        };
+        let value = match &tag.value {
+            Value::String(s)      => s.trim().to_string(),
+            Value::UnsignedInt(n) => n.to_string(),
+            Value::SignedInt(n)   => n.to_string(),
+            Value::Float(f)       => format!("{f}"),
+            Value::Boolean(b)     => b.to_string(),
+            _                     => continue, // skip binary (album art) and flags
+        };
+        if !value.is_empty() {
+            lines.push(make_tag_line(key, &value));
+        }
     }
 }
 
-fn extract_mp3_tags(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
-    match id3::Tag::read_from_path(path) {
-        Ok(tag) => {
-            let mut lines = Vec::new();
-
-            if let Some(title) = tag.title() {
-                lines.push(make_tag_line("title", title));
-            }
-            if let Some(artist) = tag.artist() {
-                lines.push(make_tag_line("artist", artist));
-            }
-            if let Some(album) = tag.album() {
-                lines.push(make_tag_line("album", album));
-            }
-            if let Some(year) = tag.year() {
-                lines.push(make_tag_line("year", &year.to_string()));
-            }
-            if let Some(genre) = tag.genre() {
-                lines.push(make_tag_line("genre", genre));
-            }
-            for comment in tag.comments() {
-                let text = &comment.text;
-                if !text.is_empty() {
-                    lines.push(make_tag_line("comment", text));
-                }
-            }
-
-            Ok(lines)
-        }
-        Err(_) => {
-            // File may not have ID3 tags or tags may be unreadable
-            Ok(vec![])
-        }
-    }
-}
-
-fn extract_flac_tags(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
-    match metaflac::Tag::read_from_path(path) {
-        Ok(tag) => {
-            let mut lines = Vec::new();
-            let vorbis = tag.vorbis_comments();
-
-            if let Some(vorbis) = vorbis {
-                for (key, values) in vorbis.comments.iter() {
-                    for value in values {
-                        if !value.is_empty() {
-                            lines.push(make_tag_line(key, value));
-                        }
-                    }
-                }
-            }
-
-            Ok(lines)
-        }
-        Err(_) => {
-            // File may not have FLAC tags or tags may be unreadable
-            Ok(vec![])
-        }
-    }
-}
-
-fn extract_mp4_tags(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
-    match mp4ameta::Tag::read_from_path(path) {
-        Ok(tag) => {
-            let mut lines = Vec::new();
-
-            if let Some(title) = tag.title() {
-                lines.push(make_tag_line("title", title));
-            }
-            if let Some(artist) = tag.artist() {
-                lines.push(make_tag_line("artist", artist));
-            }
-            if let Some(album) = tag.album() {
-                lines.push(make_tag_line("album", album));
-            }
-            if let Some(year) = tag.year() {
-                lines.push(make_tag_line("year", year));
-            }
-            if let Some(genre) = tag.genre() {
-                lines.push(make_tag_line("genre", genre));
-            }
-            if let Some(comment) = tag.comment() {
-                if !comment.is_empty() {
-                    lines.push(make_tag_line("comment", comment));
-                }
-            }
-
-            Ok(lines)
-        }
-        Err(_) => {
-            // File may not have MP4 tags or tags may be unreadable
-            Ok(vec![])
-        }
+fn audio_codec_name(codec: symphonia::core::codecs::CodecType) -> &'static str {
+    use symphonia::core::codecs::*;
+    match codec {
+        CODEC_TYPE_MP3       => "MP3",
+        CODEC_TYPE_FLAC      => "FLAC",
+        CODEC_TYPE_VORBIS    => "Vorbis",
+        CODEC_TYPE_AAC       => "AAC",
+        CODEC_TYPE_ALAC      => "ALAC",
+        CODEC_TYPE_PCM_S8    => "PCM",
+        CODEC_TYPE_PCM_U8    => "PCM",
+        CODEC_TYPE_PCM_S16LE => "PCM",
+        CODEC_TYPE_PCM_S16BE => "PCM",
+        CODEC_TYPE_PCM_S24LE => "PCM",
+        CODEC_TYPE_PCM_S24BE => "PCM",
+        CODEC_TYPE_PCM_S32LE => "PCM",
+        CODEC_TYPE_PCM_S32BE => "PCM",
+        CODEC_TYPE_PCM_F32LE => "PCM",
+        CODEC_TYPE_PCM_F32BE => "PCM",
+        CODEC_TYPE_PCM_F64LE => "PCM",
+        CODEC_TYPE_PCM_F64BE => "PCM",
+        _                    => "",
     }
 }
 
@@ -391,6 +420,14 @@ fn make_tag_line(key: &str, value: &str) -> IndexLine {
         archive_path: None,
         line_number: 0,
         content: format!("[TAG:{}] {}", key, value),
+    }
+}
+
+fn make_audio_line(key: &str, value: &str) -> IndexLine {
+    IndexLine {
+        archive_path: None,
+        line_number: 0,
+        content: format!("[AUDIO:{}] {}", key, value),
     }
 }
 
@@ -517,4 +554,158 @@ pub fn is_video_ext(ext: &str) -> bool {
         ext,
         "mp4" | "m4v" | "mkv" | "webm" | "ogv" | "ogg" | "avi" | "mov" | "wmv" | "flv" | "mpg" | "mpeg" | "3gp"
     )
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    // ── Embedded fixtures ─────────────────────────────────────────────────────
+
+    /// Small MP3 with full ID3v2 tags (title, artist, album, year, genre,
+    /// comment, composer, album_artist, track number).
+    static MP3_ID3V2: &[u8] = include_bytes!("../testdata/id3v2.mp3");
+
+    /// Small FLAC (100 samples of silence) with Vorbis comment tags:
+    /// title, artist, album, year.  Generated with `flac` 1.4.3.
+    static FLAC_TAGGED: &[u8] = include_bytes!("../testdata/tagged.flac");
+
+    // ── Test helpers ──────────────────────────────────────────────────────────
+
+    fn write_fixture(bytes: &[u8], suffix: &str) -> tempfile::NamedTempFile {
+        let mut f = tempfile::Builder::new().suffix(suffix).tempfile().unwrap();
+        f.write_all(bytes).unwrap();
+        f.flush().unwrap();
+        f
+    }
+
+    fn has(lines: &[IndexLine], s: &str) -> bool {
+        lines.iter().any(|l| l.content == s)
+    }
+
+    fn has_containing(lines: &[IndexLine], s: &str) -> bool {
+        lines.iter().any(|l| l.content.contains(s))
+    }
+
+    /// Build a minimal PCM WAV in memory (100 samples of silence).
+    fn minimal_wav(sample_rate: u32, channels: u16, bps: u16) -> Vec<u8> {
+        let n_samples: u32 = 100;
+        let data_size  = n_samples * (bps as u32 / 8) * channels as u32;
+        let block_align = channels * (bps / 8);
+        let byte_rate   = sample_rate * block_align as u32;
+        let chunk_size  = 36 + data_size;
+
+        let mut v = Vec::new();
+        v.extend_from_slice(b"RIFF");
+        v.extend_from_slice(&chunk_size.to_le_bytes());
+        v.extend_from_slice(b"WAVE");
+        v.extend_from_slice(b"fmt ");
+        v.extend_from_slice(&16u32.to_le_bytes());
+        v.extend_from_slice(&1u16.to_le_bytes());           // PCM format
+        v.extend_from_slice(&channels.to_le_bytes());
+        v.extend_from_slice(&sample_rate.to_le_bytes());
+        v.extend_from_slice(&byte_rate.to_le_bytes());
+        v.extend_from_slice(&block_align.to_le_bytes());
+        v.extend_from_slice(&bps.to_le_bytes());
+        v.extend_from_slice(b"data");
+        v.extend_from_slice(&data_size.to_le_bytes());
+        v.extend(std::iter::repeat(0u8).take(data_size as usize));
+        v
+    }
+
+    // ── Audio extraction tests ────────────────────────────────────────────────
+
+    #[test]
+    fn wav_mono_16bit_44khz() {
+        let f = write_fixture(&minimal_wav(44100, 1, 16), ".wav");
+        let lines = extract_audio(f.path()).unwrap();
+        assert!(has(&lines, "[AUDIO:codec] PCM"),        "lines: {lines:?}");
+        assert!(has(&lines, "[AUDIO:sample_rate] 44100 Hz"));
+        assert!(has(&lines, "[AUDIO:channels] 1 (mono)"));
+        assert!(has(&lines, "[AUDIO:bit_depth] 16 bit"));
+    }
+
+    #[test]
+    fn wav_stereo_24bit_48khz() {
+        let f = write_fixture(&minimal_wav(48000, 2, 24), ".wav");
+        let lines = extract_audio(f.path()).unwrap();
+        assert!(has(&lines, "[AUDIO:sample_rate] 48000 Hz"), "lines: {lines:?}");
+        assert!(has(&lines, "[AUDIO:channels] 2 (stereo)"));
+        assert!(has(&lines, "[AUDIO:bit_depth] 24 bit"));
+    }
+
+    #[test]
+    fn mp3_extracts_id3v2_tags_and_stream_info() {
+        let f = write_fixture(MP3_ID3V2, ".mp3");
+        let lines = extract_audio(f.path()).unwrap();
+        // Tags
+        assert!(has_containing(&lines, "[TAG:title]"),       "lines: {lines:?}");
+        assert!(has_containing(&lines, "[TAG:artist]"));
+        assert!(has_containing(&lines, "[TAG:album]"));
+        assert!(has(&lines,            "[TAG:year] 2015"));
+        assert!(has_containing(&lines, "[TAG:track]"));
+        assert!(has_containing(&lines, "[TAG:comment]"));
+        assert!(has_containing(&lines, "[TAG:composer]"));
+        assert!(has_containing(&lines, "[TAG:album_artist]"));
+        // Stream info
+        assert!(has(&lines, "[AUDIO:codec] MP3"));
+        assert!(has(&lines, "[AUDIO:sample_rate] 44100 Hz"));
+        assert!(has(&lines, "[AUDIO:channels] 1 (mono)"));
+    }
+
+    #[test]
+    fn flac_extracts_vorbis_comment_tags_and_stream_info() {
+        let f = write_fixture(FLAC_TAGGED, ".flac");
+        let lines = extract_audio(f.path()).unwrap();
+        // Vorbis comment tags
+        assert!(has(&lines, "[TAG:title] Test FLAC"),    "lines: {lines:?}");
+        assert!(has(&lines, "[TAG:artist] FLAC Artist"));
+        assert!(has(&lines, "[TAG:album] Test Album"));
+        assert!(has(&lines, "[TAG:year] 2024"));
+        // Stream info
+        assert!(has(&lines, "[AUDIO:codec] FLAC"));
+        assert!(has(&lines, "[AUDIO:sample_rate] 44100 Hz"));
+        assert!(has(&lines, "[AUDIO:channels] 1 (mono)"));
+        assert!(has(&lines, "[AUDIO:bit_depth] 16 bit"));
+    }
+
+    #[test]
+    fn corrupt_audio_returns_empty_gracefully() {
+        let f = write_fixture(b"this is not valid audio data at all", ".mp3");
+        let lines = extract_audio(f.path()).unwrap();
+        assert!(lines.is_empty(), "corrupt file should yield no lines, got: {lines:?}");
+    }
+
+    #[test]
+    fn extract_dispatches_wav_by_extension() {
+        let cfg = find_extract_types::ExtractorConfig::default();
+        let f = write_fixture(&minimal_wav(44100, 1, 16), ".wav");
+        let lines = extract(f.path(), &cfg).unwrap();
+        assert!(!lines.is_empty(), "extract() should dispatch .wav to audio extractor");
+    }
+
+    #[test]
+    fn extract_skips_unknown_extension() {
+        let cfg = find_extract_types::ExtractorConfig::default();
+        let f = write_fixture(b"irrelevant", ".xyz");
+        let lines = extract(f.path(), &cfg).unwrap();
+        assert!(lines.is_empty());
+    }
+
+    // ── Extension detection ───────────────────────────────────────────────────
+
+    #[test]
+    fn audio_ext_detection() {
+        for ext in ["mp3", "flac", "ogg", "m4a", "aac", "opus", "wav"] {
+            assert!(is_audio_ext(ext), "{ext} should be an audio ext");
+        }
+        assert!(!is_audio_ext("jpg"));
+        assert!(!is_audio_ext("txt"));
+        assert!(!is_audio_ext("mp4"));
+    }
 }

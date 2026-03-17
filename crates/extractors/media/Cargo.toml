@@ -19,10 +19,16 @@ serde = { workspace = true }
 # Image EXIF
 kamadak-exif = "0.5"
 
-# Audio tags
-id3 = "1"
-metaflac = "0.2"
-mp4ameta = "0.11"
+# Audio metadata (tags + technical stream info)
+symphonia = { version = "0.5", default-features = false, features = [
+    "mp3",     # MP3
+    "flac",    # FLAC
+    "ogg",     # OGG container (Vorbis, Opus)
+    "vorbis",  # Vorbis codec (OGG streams)
+    "wav",     # WAV (also enables pcm)
+    "isomp4",  # M4A / MP4 container
+    "aac",     # AAC codec
+] }
 
 # Video metadata
 nom-exif = "2"

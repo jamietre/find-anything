@@ -3,7 +3,9 @@
 Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
- 
+
+[ ] archive/unfiled/OpenMULE-Win32.zip::resources/action.wav shows a duplicate. But when you click on it, it doesn't have a dup link back to the original.
+[ ] Add image zoom/pan controls to normal detail view
 [ ] BUG: back arrow browser navigation doesn't work at all
 [ ] CHORE: frontent ux tests
 [ ] CHORE: Code quality analysis on file scanning/walking/filtering pipeline
