@@ -197,7 +197,7 @@ fn process_request_phase1(
         }
         let file_start = std::time::Instant::now();
         let normalized_file;
-        let file = if file.kind == "text" || file.kind == "pdf" {
+        let file = if file.kind.is_text_like() {
             let normalized_lines = timed!(tag, format!("normalize {}", file.path), {
                 normalize::normalize_lines(
                     file.lines.clone(),
@@ -362,7 +362,7 @@ fn process_request_phase1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use find_common::api::{BulkRequest, IndexFile, IndexLine, PathRename};
+    use find_common::api::{BulkRequest, FileKind, IndexFile, IndexLine, PathRename};
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
@@ -380,12 +380,12 @@ mod tests {
         Arc::new(Mutex::new(find_common::api::WorkerStatus::Idle))
     }
 
-    fn make_index_file(path: &str, kind: &str) -> IndexFile {
+    fn make_index_file(path: &str, kind: FileKind) -> IndexFile {
         IndexFile {
             path: path.to_string(),
             mtime: 1_000_000,
             size: Some(42),
-            kind: kind.to_string(),
+            kind,
             scanner_version: 1,
             lines: vec![IndexLine {
                 archive_path: None,
@@ -425,7 +425,7 @@ mod tests {
 
         let req = BulkRequest {
             source: "testsource".to_string(),
-            files: vec![make_index_file("docs/readme.txt", "text")],
+            files: vec![make_index_file("docs/readme.txt", FileKind::Text)],
             delete_paths: vec![],
             rename_paths: vec![],
             scan_timestamp: Some(1_000_000),
@@ -472,7 +472,7 @@ mod tests {
         // First, index the file.
         let upsert_req = BulkRequest {
             source: "testsource".to_string(),
-            files: vec![make_index_file("notes/todo.txt", "text")],
+            files: vec![make_index_file("notes/todo.txt", FileKind::Text)],
             delete_paths: vec![],
             rename_paths: vec![],
             scan_timestamp: Some(1_000_000),
@@ -557,7 +557,7 @@ mod tests {
         // Index file at original path.
         let upsert_req = BulkRequest {
             source: "testsource".to_string(),
-            files: vec![make_index_file("src/old_name.rs", "text")],
+            files: vec![make_index_file("src/old_name.rs", FileKind::Text)],
             delete_paths: vec![],
             rename_paths: vec![],
             scan_timestamp: Some(1_000_000),
@@ -680,7 +680,7 @@ mod tests {
         // First, seed the file so there is something to delete.
         let seed_req = BulkRequest {
             source: "testsource".to_string(),
-            files: vec![make_index_file("data/file.txt", "text")],
+            files: vec![make_index_file("data/file.txt", FileKind::Text)],
             delete_paths: vec![],
             rename_paths: vec![],
             scan_timestamp: Some(1_000_000),
@@ -702,7 +702,7 @@ mod tests {
         // Now send a request that both deletes AND upserts the same path.
         let combined_req = BulkRequest {
             source: "testsource".to_string(),
-            files: vec![make_index_file("data/file.txt", "text")],
+            files: vec![make_index_file("data/file.txt", FileKind::Text)],
             delete_paths: vec!["data/file.txt".to_string()],
             rename_paths: vec![],
             scan_timestamp: Some(1_000_001),

@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+- **`FileKind` enum (plan 073 stage 1)** — replaced all `kind: String` fields across the API, DB, and client with a typed `FileKind` enum (`Text`, `Pdf`, `Archive`, `Image`, `Audio`, `Video`, `Document`, `Executable`, `Epub`, `Unknown`); wire format is unchanged (`serde(rename_all = "lowercase")`); `#[serde(other)]` on `Unknown` ensures unrecognised strings from older clients deserialise cleanly; `SourceStats.by_kind` key changes from `String` to `FileKind`; `DateFilter.kinds` becomes `Vec<FileKind>`; `is_text_like()` helper replaces scattered `kind == "text" || kind == "pdf"` checks
+
 ### Added
 
 - **`[log] compact = true`** — new config option for `find-server` and `find-watch`; omits the timestamp and module-path target from each log line, eliminating redundancy when running under systemd/journald which already captures these from process metadata; config is now parsed before logging is initialised so the format takes effect from the first log line

@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use find_common::api::FileResponse;
+use find_common::api::{FileKind, FileResponse};
 use find_common::path::split_composite;
 
 use crate::{archive::ArchiveManager, db, AppState};
@@ -70,13 +70,14 @@ pub async fn get_file(
         let conn = db::open(&db_path)?;
         let archive_mgr = ArchiveManager::new_for_reading(data_dir);
 
-        let (kind, mtime, size): (String, Option<i64>, Option<i64>) = conn
+        let (kind, mtime, size): (FileKind, Option<i64>, Option<i64>) = conn
             .query_row(
                 "SELECT kind, mtime, size FROM files WHERE path = ?1",
                 rusqlite::params![full_path],
-                |row| Ok((row.get(0)?, row.get(1).ok(), row.get(2).ok())),
+                |row| Ok((row.get::<_, String>(0)?, row.get(1).ok(), row.get(2).ok())),
             )
-            .unwrap_or_else(|_| ("text".into(), None, None));
+            .map(|(s, m, sz)| (FileKind::from(s.as_str()), m, sz))
+            .unwrap_or_else(|_| (FileKind::Text, None, None));
 
         let (all_lines, total_lines, content_unavailable) =
             db::get_file_lines_paged(&conn, &archive_mgr, &full_path, offset, limit)?;

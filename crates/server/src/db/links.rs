@@ -2,13 +2,15 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
+use find_common::api::FileKind;
+
 pub struct LinkRow {
     pub source: String,
     /// Outer file path (no `::` suffix).
     pub path: String,
     /// Inner archive member path if this is a composite path.
     pub archive_path: Option<String>,
-    pub kind: String,
+    pub kind: FileKind,
     pub mtime: i64,
     pub expires_at: i64,
 }
@@ -70,11 +72,12 @@ pub fn resolve_link(conn: &Connection, code: &str) -> Result<ResolveResult> {
              FROM links WHERE code = ?1",
             params![code],
             |row| {
+                let kind_str: String = row.get(3)?;
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, Option<String>>(2)?,
-                    row.get::<_, String>(3)?,
+                    FileKind::from(kind_str.as_str()),
                     row.get::<_, i64>(4)?,
                     row.get::<_, i64>(5)?,
                 ))
@@ -149,7 +152,7 @@ mod tests {
             ResolveResult::Found(row) => {
                 assert_eq!(row.source, "src");
                 assert_eq!(row.path, "foo/bar.jpg");
-                assert_eq!(row.kind, "image");
+                assert_eq!(row.kind, FileKind::Image);
             }
             other => panic!("expected Found, got {:?}", std::mem::discriminant(&other)),
         }

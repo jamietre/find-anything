@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 
-use find_common::api::{IndexFile, IndexLine};
+use find_common::api::{FileKind, IndexFile, IndexLine};
 use find_common::path::{composite_like_prefix, is_composite};
 
 // ── Public entry points ───────────────────────────────────────────────────────
@@ -90,7 +90,7 @@ pub(super) fn process_file_phase1_fallback(
                    content_hash     = excluded.content_hash,
                    canonical_file_id = excluded.canonical_file_id",
                 rusqlite::params![
-                    file.path, file.mtime, file.size, file.kind,
+                    file.path, file.mtime, file.size, file.kind.to_string(),
                     now_secs,
                     file.extract_ms.map(|ms| ms as i64),
                     hash,
@@ -136,7 +136,7 @@ pub(super) fn process_file_phase1_fallback(
            canonical_file_id = NULL
          RETURNING id",
         rusqlite::params![
-            file.path, file.mtime, file.size, file.kind,
+            file.path, file.mtime, file.size, file.kind.to_string(),
             file.scanner_version,
             now_secs,
             file.extract_ms.map(|ms| ms as i64),
@@ -218,10 +218,10 @@ pub(super) fn process_file_phase1_fallback(
 
 // ── Helper constructors ───────────────────────────────────────────────────────
 
-/// Returns `true` if `file` is a top-level archive (kind="archive" with no
+/// Returns `true` if `file` is a top-level archive (kind=Archive with no
 /// "::" in the path).
-pub(crate) fn is_outer_archive(path: &str, kind: &str) -> bool {
-    kind == "archive" && !is_composite(path)
+pub(crate) fn is_outer_archive(path: &str, kind: &FileKind) -> bool {
+    *kind == FileKind::Archive && !is_composite(path)
 }
 
 /// Build a fallback `IndexFile` that records only the file path (line 0).
@@ -231,7 +231,7 @@ pub(super) fn filename_only_file(file: &IndexFile) -> IndexFile {
         path: file.path.clone(),
         mtime: file.mtime,
         size: file.size,
-        kind: if file.kind == "archive" { "unknown".to_string() } else { file.kind.clone() },
+        kind: if file.kind == FileKind::Archive { FileKind::Unknown } else { file.kind.clone() },
         lines: vec![IndexLine {
             archive_path: None,
             line_number: 0,
@@ -251,7 +251,7 @@ pub(super) fn outer_archive_stub(file: &IndexFile) -> IndexFile {
         path: file.path.clone(),
         mtime: 0,
         size: file.size,
-        kind: "archive".to_string(),
+        kind: FileKind::Archive,
         lines: vec![IndexLine {
             archive_path: None,
             line_number: 0,
@@ -293,7 +293,7 @@ mod tests {
             path: path.to_string(),
             mtime,
             size: Some(content.len() as i64),
-            kind: "text".to_string(),
+            kind: FileKind::Text,
             scanner_version: 1,
             lines: vec![
                 IndexLine { archive_path: None, line_number: 0, content: path.to_string() },

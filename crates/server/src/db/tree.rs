@@ -1,7 +1,7 @@
 use anyhow::Result;
 use rusqlite::{Connection, params};
 
-use find_common::api::DirEntry;
+use find_common::api::{DirEntry, FileKind};
 use find_common::path::is_composite;
 
 // ── Directory listing ─────────────────────────────────────────────────────────
@@ -79,7 +79,7 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
                             name: child_name.to_string(),
                             path: format!("{}{}", prefix, child_name),
                             entry_type: "file".to_string(),
-                            kind: Some("archive".to_string()),
+                            kind: Some(FileKind::Archive),
                             size: None,
                             mtime: None,
                         });
@@ -105,7 +105,7 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
                     name: rest.to_string(),
                     path,
                     entry_type: "file".to_string(),
-                    kind: Some(kind),
+                    kind: Some(FileKind::from(kind.as_str())),
                     size,
                     mtime: Some(mtime),
                 });
@@ -135,7 +135,7 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
                     name: rest.to_string(),
                     path,
                     entry_type: "file".to_string(),
-                    kind: Some(kind),
+                    kind: Some(FileKind::from(kind.as_str())),
                     size,
                     mtime: Some(mtime),
                 });
@@ -289,7 +289,7 @@ mod tests {
         // Only the outer archive, not the member.
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "archive.zip");
-        assert_eq!(entries[0].kind.as_deref(), Some("archive"));
+        assert_eq!(entries[0].kind, Some(FileKind::Archive));
     }
 
     #[test]
@@ -379,7 +379,7 @@ mod tests {
         assert_eq!(inner.name, "inner.zip");
         assert_eq!(inner.entry_type, "file",
             "nested archive must be entry_type='file', not 'dir'");
-        assert_eq!(inner.kind.as_deref(), Some("archive"),
+        assert_eq!(inner.kind, Some(FileKind::Archive),
             "nested archive must have kind='archive' so the UI calls listArchiveMembers");
         assert_eq!(inner.path, "outer.zip::inner.zip",
             "path must not have a trailing '/' or '::'");
@@ -415,7 +415,7 @@ mod tests {
         assert_eq!(inner.name, "inner.zip");
         // Whether the row comes from the explicit entry or the virtual inference,
         // the result must be kind="archive" and no trailing "/" in the path.
-        assert_eq!(inner.kind.as_deref(), Some("archive"));
+        assert_eq!(inner.kind, Some(FileKind::Archive));
         assert!(!inner.path.ends_with('/'), "path must not end with '/'");
         assert!(!inner.path.ends_with("::"), "path must not end with '::'");
     }
@@ -430,14 +430,14 @@ mod tests {
         let entries = list_dir(&conn, "outer.zip::").unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "middle.zip");
-        assert_eq!(entries[0].kind.as_deref(), Some("archive"));
+        assert_eq!(entries[0].kind, Some(FileKind::Archive));
         assert_eq!(entries[0].path, "outer.zip::middle.zip");
 
         // Listing middle.zip should show inner.zip as kind="archive".
         let entries = list_dir(&conn, "outer.zip::middle.zip::").unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "inner.zip");
-        assert_eq!(entries[0].kind.as_deref(), Some("archive"));
+        assert_eq!(entries[0].kind, Some(FileKind::Archive));
         assert_eq!(entries[0].path, "outer.zip::middle.zip::inner.zip");
 
         // Listing inner.zip should show the file.
@@ -483,7 +483,7 @@ mod tests {
 
         assert_eq!(files.len(), 2);
         let nested = files.iter().find(|e| e.name == "nested.zip").unwrap();
-        assert_eq!(nested.kind.as_deref(), Some("archive"));
+        assert_eq!(nested.kind, Some(FileKind::Archive));
         assert_eq!(nested.path, "outer.zip::nested.zip");
 
         let plain = files.iter().find(|e| e.name == "plain.txt").unwrap();

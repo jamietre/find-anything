@@ -307,7 +307,7 @@ mod tests {
     use super::*;
     use std::io::Write;
 
-    use find_common::api::{BulkRequest, IndexFile, IndexLine};
+    use find_common::api::{BulkRequest, FileKind, IndexFile, IndexLine};
     use find_common::config::NormalizationSettings;
 
     fn setup_data_dir(data_dir: &Path) {
@@ -348,7 +348,7 @@ mod tests {
                 path: path.to_string(),
                 mtime: 1000,
                 size: Some(content.len() as i64),
-                kind: "text".to_string(),
+                kind: FileKind::Text,
                 scanner_version: 1,
                 lines: vec![
                     IndexLine {

@@ -287,14 +287,14 @@ pub async fn start_inbox_worker(
 #[cfg(test)]
 mod tests {
     use super::pipeline::{filename_only_file, is_outer_archive, outer_archive_stub};
-    use find_common::api::{IndexFile, IndexLine};
+    use find_common::api::{FileKind, IndexFile, IndexLine};
 
-    fn make_file(path: &str, kind: &str) -> IndexFile {
+    fn make_file(path: &str, kind: FileKind) -> IndexFile {
         IndexFile {
             path: path.to_string(),
             mtime: 1000,
             size: Some(100),
-            kind: kind.to_string(),
+            kind,
             lines: vec![IndexLine {
                 archive_path: None,
                 line_number: 0,
@@ -309,36 +309,36 @@ mod tests {
 
     #[test]
     fn outer_archive_detected() {
-        assert!(is_outer_archive("data.zip", "archive"));
+        assert!(is_outer_archive("data.zip", &FileKind::Archive));
     }
 
     #[test]
     fn archive_member_not_outer() {
-        assert!(!is_outer_archive("data.zip::inner.txt", "archive"));
+        assert!(!is_outer_archive("data.zip::inner.txt", &FileKind::Archive));
     }
 
     #[test]
     fn non_archive_kind_not_outer() {
-        assert!(!is_outer_archive("data.zip", "text"));
+        assert!(!is_outer_archive("data.zip", &FileKind::Text));
     }
 
     #[test]
     fn filename_only_converts_archive_kind_to_unknown() {
-        let f = make_file("data.zip", "archive");
+        let f = make_file("data.zip", FileKind::Archive);
         let fallback = filename_only_file(&f);
-        assert_eq!(fallback.kind, "unknown");
+        assert_eq!(fallback.kind, FileKind::Unknown);
     }
 
     #[test]
     fn filename_only_keeps_non_archive_kind() {
-        let f = make_file("notes.md", "text");
+        let f = make_file("notes.md", FileKind::Text);
         let fallback = filename_only_file(&f);
-        assert_eq!(fallback.kind, "text");
+        assert_eq!(fallback.kind, FileKind::Text);
     }
 
     #[test]
     fn filename_only_has_single_path_line() {
-        let f = make_file("docs/report.pdf", "pdf");
+        let f = make_file("docs/report.pdf", FileKind::Pdf);
         let fallback = filename_only_file(&f);
         assert_eq!(fallback.lines.len(), 1);
         assert_eq!(fallback.lines[0].line_number, 0);
@@ -347,7 +347,7 @@ mod tests {
 
     #[test]
     fn filename_only_preserves_mtime_and_size() {
-        let f = make_file("file.txt", "text");
+        let f = make_file("file.txt", FileKind::Text);
         let fallback = filename_only_file(&f);
         assert_eq!(fallback.mtime, f.mtime);
         assert_eq!(fallback.size, f.size);
@@ -355,21 +355,21 @@ mod tests {
 
     #[test]
     fn outer_archive_stub_preserves_archive_kind() {
-        let f = make_file("backup.7z", "archive");
+        let f = make_file("backup.7z", FileKind::Archive);
         let stub = outer_archive_stub(&f);
-        assert_eq!(stub.kind, "archive");
+        assert_eq!(stub.kind, FileKind::Archive);
     }
 
     #[test]
     fn outer_archive_stub_uses_zero_mtime() {
-        let f = make_file("backup.7z", "archive");
+        let f = make_file("backup.7z", FileKind::Archive);
         let stub = outer_archive_stub(&f);
         assert_eq!(stub.mtime, 0);
     }
 
     #[test]
     fn outer_archive_stub_has_single_path_line() {
-        let f = make_file("backups/big.tar.gz", "archive");
+        let f = make_file("backups/big.tar.gz", FileKind::Archive);
         let stub = outer_archive_stub(&f);
         assert_eq!(stub.lines.len(), 1);
         assert_eq!(stub.lines[0].line_number, 0);

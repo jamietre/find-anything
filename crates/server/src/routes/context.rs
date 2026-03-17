@@ -9,7 +9,7 @@ use axum::{
 use serde::Deserialize;
 
 use find_common::api::{
-    ContextBatchRequest, ContextBatchResponse, ContextBatchResult, ContextResponse,
+    ContextBatchRequest, ContextBatchResponse, ContextBatchResult, ContextResponse, FileKind,
 };
 
 use crate::{archive::ArchiveManager, db, AppState};
@@ -48,11 +48,11 @@ pub async fn get_context(
     run_blocking("context", move || {
         let conn = db::open(&db_path)?;
         let archive_mgr = ArchiveManager::new_for_reading(data_dir);
-        let kind: String = conn.query_row(
+        let kind: FileKind = conn.query_row(
             "SELECT kind FROM files WHERE path = ?1",
             rusqlite::params![full_path],
-            |row| row.get(0),
-        ).unwrap_or_else(|_| "text".into());
+            |row| row.get::<_, String>(0),
+        ).map(|s| FileKind::from(s.as_str())).unwrap_or(FileKind::Text);
         let raw = db::get_context(&conn, &archive_mgr, &full_path, params.line, window)?;
         let (start, match_index, lines) = compact_lines(raw, params.line);
         Ok(Json(ContextResponse { start, match_index, lines, kind }))
@@ -92,7 +92,7 @@ pub async fn context_batch(
                 Err(e) => {
                     tracing::warn!("context_batch open {}: {e:#}", db_path.display());
                     for item in items {
-                        results.push(ContextBatchResult { source: item.source, path: item.path, line: item.line, start: 0, match_index: None, lines: vec![], kind: String::new() });
+                        results.push(ContextBatchResult { source: item.source, path: item.path, line: item.line, start: 0, match_index: None, lines: vec![], kind: FileKind::Unknown });
                     }
                     continue;
                 }
@@ -102,9 +102,10 @@ pub async fn context_batch(
                 let full_path = composite_path(&item.path, item.archive_path.as_deref());
 
                 let (kind, start, match_index, lines) = match (|| -> anyhow::Result<_> {
-                    let kind = conn
+                    let kind: FileKind = conn
                         .query_row("SELECT kind FROM files WHERE path = ?1", rusqlite::params![full_path], |row| row.get::<_, String>(0))
-                        .unwrap_or_else(|_| "text".into());
+                        .map(|s| FileKind::from(s.as_str()))
+                        .unwrap_or(FileKind::Text);
                     let raw = db::get_context(&conn, &archive_mgr, &full_path, item.line, item.window)?;
                     let (start, match_index, lines) = compact_lines(raw, item.line);
                     Ok((kind, start, match_index, lines))
@@ -112,7 +113,7 @@ pub async fn context_batch(
                     Ok(t) => t,
                     Err(e) => {
                         tracing::warn!("context_batch item {}/{}: {e:#}", item.source, item.path);
-                        (String::new(), 0_usize, None, vec![])
+                        (FileKind::Unknown, 0_usize, None, vec![])
                     }
                 };
 

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use find_common::api::{detect_kind_from_ext, BulkRequest, IndexFile, IndexingFailure, IndexLine, SCANNER_VERSION};
+use find_common::api::{BulkRequest, FileKind, IndexFile, IndexingFailure, IndexLine, SCANNER_VERSION};
 
 use crate::api::ApiClient;
 
@@ -18,7 +18,7 @@ pub fn build_index_files(
     rel_path: String,
     mtime: i64,
     size: i64,
-    kind: String,
+    kind: FileKind,
     lines: Vec<IndexLine>,
 ) -> Vec<IndexFile> {
     let has_archive_members = lines.iter().any(|l| l.archive_path.is_some());
@@ -87,7 +87,7 @@ pub fn build_index_files(
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("");
-        let member_kind = detect_kind_from_ext(ext).to_string();
+        let member_kind = FileKind::from_extension(ext);
         result.push(IndexFile {
             path: composite_path,
             mtime,
@@ -147,16 +147,16 @@ pub fn build_member_index_files(
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("");
-        let mut member_kind = detect_kind_from_ext(ext).to_string();
-        // Refine "unknown" or "text" kind using extracted content:
+        let mut member_kind = FileKind::from_extension(ext);
+        // Refine Unknown or Text kind using extracted content:
         // - A [FILE:mime] line emitted by dispatch means binary → use mime_to_kind.
-        // - Text content lines (line_number > 0) present → promote to "text".
-        if member_kind == "text" || member_kind == "unknown" {
+        // - Text content lines (line_number > 0) present → promote to Text.
+        if member_kind == FileKind::Text || member_kind == FileKind::Unknown {
             if let Some(mime_line) = lines.iter().find(|l| l.line_number == 0 && l.content.starts_with("[FILE:mime] ")) {
                 let mime = &mime_line.content["[FILE:mime] ".len()..];
-                member_kind = find_extract_dispatch::mime_to_kind(mime).to_string();
+                member_kind = FileKind::from(find_extract_dispatch::mime_to_kind(mime));
             } else if lines.iter().any(|l| l.line_number > 0) {
-                member_kind = "text".to_string();
+                member_kind = FileKind::Text;
             }
         }
         result.push(IndexFile {
@@ -223,11 +223,11 @@ mod tests {
 
     #[test]
     fn non_archive_no_content_lines() {
-        let files = build_index_files("readme.md".into(), 100, 200, "text".into(), vec![]);
+        let files = build_index_files("readme.md".into(), 100, 200, FileKind::Text, vec![]);
         assert_eq!(files.len(), 1);
         let f = &files[0];
         assert_eq!(f.path, "readme.md");
-        assert_eq!(f.kind, "text");
+        assert_eq!(f.kind, FileKind::Text);
         assert_eq!(f.mtime, 100);
         assert_eq!(f.size, Some(200));
         // Should have exactly the path line.
@@ -243,7 +243,7 @@ mod tests {
             line(None, 1, "hello"),
             line(None, 2, "world"),
         ];
-        let files = build_index_files("src/main.rs".into(), 0, 0, "text".into(), lines);
+        let files = build_index_files("src/main.rs".into(), 0, 0, FileKind::Text, lines);
         assert_eq!(files.len(), 1);
         let f = &files[0];
         // Content lines + the path line appended at the end.
@@ -262,17 +262,17 @@ mod tests {
             line(Some("report.txt"), 2, "results"),
             line(Some("photo.jpg"), 1, "exif data"),
         ];
-        let files = build_index_files("data.zip".into(), 10, 20, "archive".into(), lines);
+        let files = build_index_files("data.zip".into(), 10, 20, FileKind::Archive, lines);
 
         // Outer file + one per distinct member.
         assert_eq!(files.len(), 3);
 
         let outer = files.iter().find(|f| f.path == "data.zip").unwrap();
-        assert_eq!(outer.kind, "archive");
+        assert_eq!(outer.kind, FileKind::Archive);
         assert!(outer.lines.iter().any(|l| l.line_number == 0 && l.content == "[PATH] data.zip"));
 
         let report = files.iter().find(|f| f.path == "data.zip::report.txt").unwrap();
-        assert_eq!(report.kind, "text");
+        assert_eq!(report.kind, FileKind::Text);
         assert_eq!(report.mtime, 10);
         assert_eq!(report.size, None); // archive member sizes are not available
         // archive_path stripped from member lines.
@@ -284,22 +284,22 @@ mod tests {
         assert!(report.lines.iter().any(|l| l.content == "results"));
 
         let photo = files.iter().find(|f| f.path == "data.zip::photo.jpg").unwrap();
-        assert_eq!(photo.kind, "image");
+        assert_eq!(photo.kind, FileKind::Image);
         assert!(photo.lines.iter().any(|l| l.line_number == 0 && l.content == "[PATH] data.zip::photo.jpg"));
     }
 
     #[test]
     fn archive_member_kinds_detected_from_extension() {
         let cases = [
-            ("doc.pdf",  "pdf"),
-            ("song.mp3", "audio"),
-            ("clip.mp4", "video"),
-            ("inner.zip","archive"),
-            ("data.rs",  "text"),
+            ("doc.pdf",   FileKind::Pdf),
+            ("song.mp3",  FileKind::Audio),
+            ("clip.mp4",  FileKind::Video),
+            ("inner.zip", FileKind::Archive),
+            ("data.rs",   FileKind::Text),
         ];
         for (member_name, expected_kind) in &cases {
             let lines = vec![line(Some(member_name), 1, "content")];
-            let files = build_index_files("outer.zip".into(), 0, 0, "archive".into(), lines);
+            let files = build_index_files("outer.zip".into(), 0, 0, FileKind::Archive, lines);
             let member = files
                 .iter()
                 .find(|f| f.path == format!("outer.zip::{member_name}"))
@@ -317,7 +317,7 @@ mod tests {
             line(None, 1, "hello world"),       // 11 bytes
             line(None, 2, "foo"),               // 3 bytes
         ];
-        let files = build_index_files("src/main.rs".into(), 0, 0, "text".into(), lines);
+        let files = build_index_files("src/main.rs".into(), 0, 0, FileKind::Text, lines);
         // build_index_files appends a [PATH] line; the manually-passed line(0, "src/main.rs")
         // is kept as-is, so total lines = 3 + 1 = 4 after the append.
         let total = super::index_file_bytes(&files[0]);
@@ -333,7 +333,7 @@ mod tests {
             line(None, 1, &big_line),
             line(None, 2, &big_line),
         ];
-        let files = build_index_files("big.txt".into(), 0, 0, "text".into(), lines);
+        let files = build_index_files("big.txt".into(), 0, 0, FileKind::Text, lines);
         let bytes = super::index_file_bytes(&files[0]);
         // 5000 + 5000 + len("big.txt") = 10007 — exceeds an 8192-byte budget.
         assert!(bytes > 8_192, "expected bytes > 8192, got {bytes}");
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn index_file_bytes_empty_file() {
-        let files = build_index_files("empty.txt".into(), 0, 0, "text".into(), vec![]);
+        let files = build_index_files("empty.txt".into(), 0, 0, FileKind::Text, vec![]);
         let bytes = super::index_file_bytes(&files[0]);
         // Only the path line: len("[PATH] empty.txt") = 16.
         assert_eq!(bytes, 16);
@@ -354,7 +354,7 @@ mod tests {
             line(None, 1, "outer-only content"),
             line(Some("inner.txt"), 1, "inner content"),
         ];
-        let files = build_index_files("pkg.tar.gz".into(), 0, 0, "archive".into(), lines);
+        let files = build_index_files("pkg.tar.gz".into(), 0, 0, FileKind::Archive, lines);
         let outer = files.iter().find(|f| f.path == "pkg.tar.gz").unwrap();
         assert!(outer.lines.iter().any(|l| l.content == "outer-only content"));
         let inner = files.iter().find(|f| f.path == "pkg.tar.gz::inner.txt").unwrap();

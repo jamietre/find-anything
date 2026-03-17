@@ -1,7 +1,7 @@
 mod helpers;
 use helpers::{make_text_bulk, TestServer};
 
-use find_common::api::{FileResponse, SearchResponse, SourceInfo, StatsResponse, TreeResponse};
+use find_common::api::{FileKind, FileResponse, SearchResponse, SourceInfo, StatsResponse, TreeResponse};
 
 #[tokio::test]
 async fn test_bulk_index_then_search() {
@@ -83,7 +83,7 @@ async fn test_file_retrieval() {
         .await
         .unwrap();
 
-    assert_eq!(resp.file_kind, "text");
+    assert_eq!(resp.file_kind, FileKind::Text);
     // total_lines counts content lines only (line_number > 0); the filename at line_number=0 is excluded
     assert_eq!(resp.total_lines, 5);
 }

@@ -8,7 +8,7 @@ use axum::{
 };
 use tokio::task::spawn_blocking;
 
-use find_common::api::{ContextLine, SearchResponse, SearchResult};
+use find_common::api::{ContextLine, FileKind, SearchResponse, SearchResult};
 
 use crate::fuzzy::FuzzyScorer;
 use crate::{archive::ArchiveManager, db, db::search::CandidateRow, db::DateFilter, AppState};
@@ -206,7 +206,7 @@ pub async fn search(
 
     let data_dir = state.data_dir.clone();
     let offset = params.offset;
-    let date_filter = DateFilter { from: params.date_from, to: params.date_to, kinds: params.kinds, filename_only: false };
+    let date_filter = DateFilter { from: params.date_from, to: params.date_to, kinds: params.kinds.into_iter().map(|s| FileKind::from(s.as_str())).collect(), filename_only: false };
     let case_sensitive = params.case_sensitive;
 
     // Only score enough candidates to fill this page plus a buffer for fuzzy

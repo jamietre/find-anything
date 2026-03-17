@@ -117,13 +117,12 @@ pub async fn index_upload(
         .as_secs() as i64;
 
     let file_size = file_path.metadata().ok().map(|m| m.len() as i64);
-    let kind = find_common::api::detect_kind_from_ext(
+    let kind = find_common::api::FileKind::from_extension(
         std::path::Path::new(&meta.rel_path)
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or(""),
-    )
-    .to_string();
+    );
 
     let req = BulkRequest {
         source: meta.source.clone(),

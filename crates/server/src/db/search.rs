@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use rusqlite::{Connection, params};
 
+use find_common::api::FileKind;
+
 use crate::archive::ArchiveManager;
 
 use super::read_chunk_lines;
@@ -14,8 +16,8 @@ use super::split_composite_path;
 pub struct DateFilter {
     pub from: Option<i64>,
     pub to: Option<i64>,
-    /// Allowlist of `files.kind` values (e.g. "pdf", "image"). Empty = any kind.
-    pub kinds: Vec<String>,
+    /// Allowlist of file kinds. Empty = any kind.
+    pub kinds: Vec<FileKind>,
     /// When true, restrict matches to line_number = 0 (filename-only search).
     pub filename_only: bool,
 }
@@ -43,7 +45,7 @@ fn kind_in_clause(n: usize, start: usize) -> String {
 pub struct CandidateRow {
     /// Full path, potentially composite ("archive.zip::member.txt").
     pub file_path: String,
-    pub file_kind: String,
+    pub file_kind: FileKind,
     /// For archive members: the part after the first "::".
     /// For outer files: None.
     pub archive_path: Option<String>,
@@ -123,7 +125,7 @@ pub fn fts_count(conn: &Connection, query: &str, limit: usize, phrase: bool, dat
         Box::new(to),
     ];
     for k in &date.kinds {
-        dyn_params.push(Box::new(k.clone()));
+        dyn_params.push(Box::new(k.to_string()));
     }
     let count: i64 = conn.query_row(
         &sql,
@@ -148,7 +150,7 @@ pub fn fts_candidates(
 
     struct RawRow {
         file_path: String,
-        file_kind: String,
+        file_kind: FileKind,
         line_number: usize,
         chunk_archive: Option<String>,
         chunk_name: Option<String>,
@@ -159,9 +161,10 @@ pub fn fts_candidates(
     }
 
     let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<RawRow> {
+        let file_kind_str: String = row.get(1)?;
         Ok(RawRow {
             file_path:     row.get(0)?,
-            file_kind:     row.get(1)?,
+            file_kind:     FileKind::from(file_kind_str.as_str()),
             line_number:   row.get::<_, i64>(2)? as usize,
             chunk_archive: row.get(3)?,
             chunk_name:    row.get(4)?,
@@ -198,7 +201,7 @@ pub fn fts_candidates(
             Box::new(to),
         ];
         for k in &date.kinds {
-            dyn_params.push(Box::new(k.clone()));
+            dyn_params.push(Box::new(k.to_string()));
         }
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(
@@ -337,7 +340,7 @@ pub fn document_candidates(
         let id_params: Vec<Box<dyn rusqlite::ToSql>> = std::iter::once(Box::new(from) as Box<dyn rusqlite::ToSql>)
             .chain(std::iter::once(Box::new(to) as Box<dyn rusqlite::ToSql>))
             .chain(qualifying_ids.iter().map(|&id| Box::new(id) as Box<dyn rusqlite::ToSql>))
-            .chain(date.kinds.iter().map(|k| Box::new(k.clone()) as Box<dyn rusqlite::ToSql>))
+            .chain(date.kinds.iter().map(|k| Box::new(k.to_string()) as Box<dyn rusqlite::ToSql>))
             .collect();
         let filtered: HashSet<i64> = stmt
             .query_map(rusqlite::params_from_iter(id_params.iter().map(|p| p.as_ref())), |row| row.get(0))?
@@ -363,7 +366,7 @@ pub fn document_candidates(
 
     struct RawRow {
         file_path: String,
-        file_kind: String,
+        file_kind: FileKind,
         line_number: usize,
         chunk_archive: Option<String>,
         chunk_name: Option<String>,
@@ -400,9 +403,10 @@ pub fn document_candidates(
             Vec::new()
         });
         if entry.len() < per_file_cap {
+            let file_kind_str: String = row.get(1)?;
             entry.push(RawRow {
                 file_path:    row.get(0)?,
-                file_kind:    row.get(1)?,
+                file_kind:    FileKind::from(file_kind_str.as_str()),
                 line_number:  row.get::<_, i64>(2)? as usize,
                 chunk_archive: row.get::<_, Option<String>>(3)?,
                 chunk_name:   row.get::<_, Option<String>>(4)?,
@@ -687,10 +691,10 @@ mod tests {
             (1, "common search term"),
         ]);
 
-        let filter = DateFilter { kinds: vec!["pdf".to_string()], ..Default::default() };
+        let filter = DateFilter { kinds: vec![FileKind::Pdf], ..Default::default() };
         let results = fts_candidates(&conn, &mgr, "common search", 100, false, filter).unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].file_kind, "pdf");
+        assert_eq!(results[0].file_kind, FileKind::Pdf);
     }
 
     #[test]

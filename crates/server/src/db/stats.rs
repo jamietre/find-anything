@@ -3,12 +3,12 @@ use std::collections::HashMap;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 
-use find_common::api::{ExtStat, IndexingError, IndexingFailure, KindStats, ScanHistoryPoint};
+use find_common::api::{ExtStat, FileKind, IndexingError, IndexingFailure, KindStats, ScanHistoryPoint};
 
 // ── Stats ─────────────────────────────────────────────────────────────────────
 
 /// Returns (total_files, total_size, by_kind) aggregated from the files table.
-pub fn get_stats(conn: &Connection) -> Result<(usize, i64, HashMap<String, KindStats>)> {
+pub fn get_stats(conn: &Connection) -> Result<(usize, i64, HashMap<FileKind, KindStats>)> {
     let mut stmt = conn.prepare(
         "SELECT kind, COUNT(*), COALESCE(SUM(size), 0), AVG(CAST(extract_ms AS REAL))
          FROM files GROUP BY kind",
@@ -27,12 +27,12 @@ pub fn get_stats(conn: &Connection) -> Result<(usize, i64, HashMap<String, KindS
 
     let mut total_files = 0usize;
     let mut total_size = 0i64;
-    let mut by_kind = HashMap::new();
+    let mut by_kind: HashMap<FileKind, KindStats> = HashMap::new();
 
-    for (kind, count, size, avg_ms) in rows {
+    for (kind_str, count, size, avg_ms) in rows {
         total_files += count as usize;
         total_size += size;
-        by_kind.insert(kind, KindStats { count: count as usize, size, avg_extract_ms: avg_ms });
+        by_kind.insert(FileKind::from(kind_str.as_str()), KindStats { count: count as usize, size, avg_extract_ms: avg_ms });
     }
 
     Ok((total_files, total_size, by_kind))

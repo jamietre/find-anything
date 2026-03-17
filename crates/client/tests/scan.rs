@@ -1,7 +1,7 @@
 mod helpers;
 use helpers::TestEnv;
 
-use find_common::api::SCANNER_VERSION;
+use find_common::api::{FileKind, SCANNER_VERSION};
 use find_common::config::{ExtractorEntry, ExternalExtractorConfig, ExternalExtractorMode};
 
 // ── S1 — Text file is indexed and searchable ─────────────────────────────────
@@ -346,7 +346,7 @@ async fn s11_upgrade_reindexes_old_scanner_version() {
             path: "upgrade.txt".to_string(),
             mtime: 1_000_000,
             size: Some(27),
-            kind: "text".to_string(),
+            kind: FileKind::Text,
             lines: vec![
                 IndexLine { archive_path: None, line_number: 0, content: "upgrade.txt".to_string() },
                 IndexLine { archive_path: None, line_number: 1, content: "upgrade test content here".to_string() },

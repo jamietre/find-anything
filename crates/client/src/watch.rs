@@ -10,7 +10,7 @@ use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 use find_common::{
-    api::{detect_kind_from_ext, BulkRequest, IndexFile, PathRename},
+    api::{BulkRequest, FileKind, IndexFile, PathRename},
     config::{extractor_config_from_scan, load_dir_override, ClientConfig, ExternalExtractorMode, ScanConfig, SourceConfig},
     path::is_composite,
 };
@@ -531,9 +531,9 @@ async fn handle_update(
     // If the extractor returned archive members, treat the outer file as "archive"
     // regardless of extension (e.g. .rar mapped to an external tempdir extractor).
     let kind = if lines.iter().any(|l| l.archive_path.is_some()) {
-        "archive".to_string()
+        FileKind::Archive
     } else {
-        detect_kind_from_ext(ext).to_string()
+        FileKind::from_extension(ext)
     };
 
     let mut files = build_index_files(rel_path.to_string(), mtime, size, kind, lines);
@@ -878,9 +878,9 @@ async fn handle_dir_rename(
             let size = size_of(new_abs).unwrap_or(0);
             let ext = new_abs.extension().and_then(|e| e.to_str()).unwrap_or("");
             let kind = if lines.iter().any(|l| l.archive_path.is_some()) {
-                "archive".to_string()
+                FileKind::Archive
             } else {
-                detect_kind_from_ext(ext).to_string()
+                FileKind::from_extension(ext)
             };
             let mut built = build_index_files(new_rel, mtime, size, kind, lines);
             new_files.append(&mut built);

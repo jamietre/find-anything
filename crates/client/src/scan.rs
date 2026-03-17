@@ -9,7 +9,7 @@ use globset::GlobSet;
 use tracing::{info, warn};
 
 use find_common::{
-    api::{IndexFile, IndexLine, IndexingFailure, SCANNER_VERSION},
+    api::{FileKind, IndexFile, IndexLine, IndexingFailure, SCANNER_VERSION},
     config::{extractor_config_from_scan, load_dir_override, ExternalExtractorMode, ScanConfig},
     path::is_composite,
 };
@@ -388,21 +388,21 @@ async fn push_non_archive_files(
     abs_path: &Path,
     mtime: i64,
     size: i64,
-    kind: String,
+    kind: FileKind,
     lines: Vec<IndexLine>,
     extract_ms: u64,
     is_new: bool,
 ) -> Result<()> {
-    // Refine "unknown" or "text" kind using extracted content:
+    // Refine Unknown or Text kind using extracted content:
     // - A [FILE:mime] line emitted by dispatch means binary → use mime_to_kind.
-    // - Text content lines (line_number > 0) present → promote to "text".
+    // - Text content lines (line_number > 0) present → promote to Text.
     // - Neither → keep as-is.
-    let kind = if kind == "text" || kind == "unknown" {
+    let kind = if kind == FileKind::Text || kind == FileKind::Unknown {
         if let Some(mime_line) = lines.iter().find(|l| l.line_number == 0 && l.content.starts_with("[FILE:mime] ")) {
             let mime = &mime_line.content["[FILE:mime] ".len()..];
-            find_extract_dispatch::mime_to_kind(mime).to_string()
+            FileKind::from(find_extract_dispatch::mime_to_kind(mime))
         } else if lines.iter().any(|l| l.line_number > 0) {
-            "text".to_string()
+            FileKind::Text
         } else {
             kind
         }
@@ -477,7 +477,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
     }
 
     let size = size_of(abs_path).unwrap_or(0);
-    let kind = extract::detect_kind(abs_path).to_string();
+    let kind = FileKind::from(extract::detect_kind(abs_path));
 
     if !ctx.quiet {
         info!("Processing {rel_path}");
@@ -533,7 +533,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                         path: rel_path.to_string(),
                         mtime: 0,
                         size: Some(size),
-                        kind: "archive".to_string(),
+                        kind: FileKind::Archive,
                         lines: vec![IndexLine { archive_path: None, line_number: 0, content: format!("[PATH] {}", rel_path) }],
                         extract_ms: None,
                         content_hash: None,
@@ -584,7 +584,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                         path: rel_path.to_string(),
                         mtime,
                         size: Some(size),
-                        kind: "archive".to_string(),
+                        kind: FileKind::Archive,
                         lines: vec![IndexLine { archive_path: None, line_number: 0, content: format!("[PATH] {}", rel_path) }],
                         extract_ms: None,
                         content_hash: outer_hash,

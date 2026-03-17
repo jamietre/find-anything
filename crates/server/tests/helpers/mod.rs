@@ -2,7 +2,7 @@
 
 use std::time::{Duration, Instant};
 
-use find_common::api::{BulkRequest, IndexFile, IndexLine, StatsResponse, SCANNER_VERSION};
+use find_common::api::{BulkRequest, FileKind, IndexFile, IndexLine, StatsResponse, SCANNER_VERSION};
 use find_common::config::parse_server_config;
 use find_server::{build_router, create_app_state};
 use flate2::{write::GzEncoder, Compression};
@@ -135,7 +135,7 @@ pub fn make_text_bulk(source: &str, path: &str, content: &str) -> BulkRequest {
             path: path.to_string(),
             mtime: 1_700_000_000,
             size: Some(content.len() as i64),
-            kind: "text".to_string(),
+            kind: FileKind::Text,
             lines,
             extract_ms: None,
             content_hash: None,

@@ -46,13 +46,13 @@ pub async fn post_link(
     run_blocking("post_link", move || {
         let full_path = composite_path(&path, archive_path.as_deref());
         let source_conn = db::open(&db_path)?;
-        let (kind, mtime): (String, i64) = source_conn
+        let (kind_str, mtime): (String, i64) = source_conn
             .query_row(
                 "SELECT kind, mtime FROM files WHERE path = ?1",
                 rusqlite::params![full_path],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .unwrap_or_else(|_| ("text".into(), 0));
+            .unwrap_or_else(|_| ("text".to_string(), 0));
 
         let links_conn = db::links::open_links_db(&data_dir)?;
 
@@ -76,7 +76,7 @@ pub async fn post_link(
             source: &source,
             path: &path,
             archive_path: archive_path.as_deref(),
-            kind: &kind,
+            kind: &kind_str,
             mtime,
             created_at: now,
             expires_at,

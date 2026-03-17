@@ -2,6 +2,82 @@ use serde::{Deserialize, Serialize};
 
 pub use find_extract_types::index_line::{detect_kind_from_ext, IndexLine, SCANNER_VERSION};
 
+/// Typed representation of a file's kind — replaces the stringly-typed `kind: String`
+/// pattern throughout the codebase.
+///
+/// `#[serde(rename_all = "lowercase")]` preserves the existing wire format exactly:
+/// `"text"`, `"pdf"`, `"archive"`, etc.
+///
+/// `#[serde(other)]` on `Unknown` ensures any unrecognised string from an older or
+/// third-party client deserialises to `Unknown` instead of returning an error.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FileKind {
+    Text,
+    Pdf,
+    Archive,
+    Image,
+    Audio,
+    Video,
+    Document,
+    Executable,
+    Epub,
+    #[serde(other)]
+    Unknown,
+}
+
+impl FileKind {
+    /// Re-derive kind from file extension.  Delegates to `detect_kind_from_ext`.
+    pub fn from_extension(ext: &str) -> Self {
+        Self::from(detect_kind_from_ext(ext))
+    }
+
+    /// True for kinds whose extracted lines are passed through the text normalizer.
+    pub fn is_text_like(&self) -> bool {
+        matches!(self, Self::Text | Self::Pdf)
+    }
+}
+
+impl std::fmt::Display for FileKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Text       => "text",
+            Self::Pdf        => "pdf",
+            Self::Archive    => "archive",
+            Self::Image      => "image",
+            Self::Audio      => "audio",
+            Self::Video      => "video",
+            Self::Document   => "document",
+            Self::Executable => "executable",
+            Self::Epub       => "epub",
+            Self::Unknown    => "unknown",
+        })
+    }
+}
+
+impl From<&str> for FileKind {
+    fn from(s: &str) -> Self {
+        match s {
+            "text"       => Self::Text,
+            "pdf"        => Self::Pdf,
+            "archive"    => Self::Archive,
+            "image"      => Self::Image,
+            "audio"      => Self::Audio,
+            "video"      => Self::Video,
+            "document"   => Self::Document,
+            "executable" => Self::Executable,
+            "epub"       => Self::Epub,
+            _            => Self::Unknown,
+        }
+    }
+}
+
+impl From<String> for FileKind {
+    fn from(s: String) -> Self {
+        Self::from(s.as_str())
+    }
+}
+
 /// Minimum client version the server will accept.
 /// Update this constant whenever a breaking API change is made (e.g. new
 /// required request fields, removed endpoints, changed response shapes).
@@ -26,8 +102,7 @@ pub struct IndexFile {
     /// sizes are not available (only the outer archive's size is known).
     #[serde(default)]
     pub size: Option<i64>,
-    /// "text" | "pdf" | "archive" | "image" | "audio"
-    pub kind: String,
+    pub kind: FileKind,
     pub lines: Vec<IndexLine>,
     /// Milliseconds taken to extract content for this file, measured by the client.
     /// Set on the outer file; None for inner archive members.
@@ -99,8 +174,7 @@ pub struct SearchResult {
     pub line_number: usize,
     pub snippet: String,
     pub score: u32,
-    /// File kind (e.g. "text", "pdf", "image").
-    pub kind: String,
+    pub kind: FileKind,
     /// Unix timestamp (seconds) of last modification.
     pub mtime: i64,
     /// File size in bytes. None for archive members whose individual sizes are unknown.
@@ -144,7 +218,7 @@ pub struct ContextResponse {
     /// was not found in the returned window (e.g. it fell in a gap).
     pub match_index: Option<usize>,
     pub lines: Vec<String>,
-    pub kind: String,
+    pub kind: FileKind,
 }
 
 /// GET /api/v1/file response.
@@ -162,7 +236,7 @@ pub struct FileResponse {
     /// Line-number-0 entries: the file's own path, EXIF/audio metadata strings,
     /// and dedup-alias paths. Clients filter these to determine what to display.
     pub metadata: Vec<String>,
-    pub file_kind: String,
+    pub file_kind: FileKind,
     pub total_lines: usize,
     pub mtime: Option<i64>,
     pub size: Option<i64>,
@@ -181,7 +255,7 @@ pub struct FileResponse {
 pub struct FileRecord {
     pub path: String,
     pub mtime: i64,
-    pub kind: String,
+    pub kind: FileKind,
     /// Scanner version stored when the file was last indexed. Used by
     /// `find-scan --upgrade` to detect entries that need re-extraction.
     #[serde(default)]
@@ -203,7 +277,7 @@ pub struct DirEntry {
     /// `"dir"` or `"file"`. Archive files have `kind = "archive"` and can be expanded.
     pub entry_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub kind: Option<String>,
+    pub kind: Option<FileKind>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -245,7 +319,7 @@ pub struct ContextBatchResult {
     pub start: usize,
     pub match_index: Option<usize>,
     pub lines: Vec<String>,
-    pub kind: String,
+    pub kind: FileKind,
 }
 
 /// POST /api/v1/context-batch response.
@@ -340,7 +414,7 @@ pub struct SourceStats {
     pub last_scan: Option<i64>,
     pub total_files: usize,
     pub total_size: i64,
-    pub by_kind: std::collections::HashMap<String, KindStats>,
+    pub by_kind: std::collections::HashMap<FileKind, KindStats>,
     /// File counts by extension, sorted by count descending (outer files only).
     #[serde(default)]
     pub by_ext: Vec<ExtStat>,
@@ -467,7 +541,7 @@ pub struct SourceDeleteResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxShowFile {
     pub path: String,
-    pub kind: String,
+    pub kind: FileKind,
     /// Number of content lines (line_number > 0).
     pub content_lines: usize,
 }
@@ -566,8 +640,7 @@ pub struct ResolveLinkResponse {
     pub path: String,
     /// Inner archive member path, if this is a composite path.
     pub archive_path: Option<String>,
-    /// File kind (e.g. `"image"`, `"pdf"`, `"video"`, `"text"`).
-    pub kind: String,
+    pub kind: FileKind,
     /// Basename of the file (last path component).
     pub filename: String,
     /// Unix timestamp (seconds) of last modification.
@@ -612,4 +685,91 @@ pub struct UploadStatusResponse {
 pub struct UploadPatchResponse {
     /// Total bytes received after this patch.
     pub received: u64,
+}
+
+#[cfg(test)]
+mod file_kind_tests {
+    use super::*;
+
+    #[test]
+    fn file_kind_serde_round_trip() {
+        for (variant, wire) in [
+            (FileKind::Text,       "\"text\""),
+            (FileKind::Pdf,        "\"pdf\""),
+            (FileKind::Archive,    "\"archive\""),
+            (FileKind::Image,      "\"image\""),
+            (FileKind::Audio,      "\"audio\""),
+            (FileKind::Video,      "\"video\""),
+            (FileKind::Document,   "\"document\""),
+            (FileKind::Executable, "\"executable\""),
+            (FileKind::Epub,       "\"epub\""),
+            (FileKind::Unknown,    "\"unknown\""),
+        ] {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, wire, "serialize {variant}");
+            let deserialized: FileKind = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {wire}");
+        }
+    }
+
+    #[test]
+    fn file_kind_unknown_string_deserializes_to_unknown() {
+        let result: FileKind = serde_json::from_str("\"binary\"").unwrap();
+        assert_eq!(result, FileKind::Unknown);
+        let result2: FileKind = serde_json::from_str("\"spreadsheet\"").unwrap();
+        assert_eq!(result2, FileKind::Unknown);
+    }
+
+    #[test]
+    fn file_kind_from_str_known_values() {
+        assert_eq!(FileKind::from("text"),     FileKind::Text);
+        assert_eq!(FileKind::from("pdf"),      FileKind::Pdf);
+        assert_eq!(FileKind::from("archive"),  FileKind::Archive);
+        assert_eq!(FileKind::from("image"),    FileKind::Image);
+        assert_eq!(FileKind::from("audio"),    FileKind::Audio);
+        assert_eq!(FileKind::from("video"),    FileKind::Video);
+        assert_eq!(FileKind::from("document"), FileKind::Document);
+        assert_eq!(FileKind::from("unknown"),  FileKind::Unknown);
+    }
+
+    #[test]
+    fn file_kind_from_str_unrecognised_returns_unknown() {
+        assert_eq!(FileKind::from("binary"),      FileKind::Unknown);
+        assert_eq!(FileKind::from(""),            FileKind::Unknown);
+        assert_eq!(FileKind::from("spreadsheet"), FileKind::Unknown);
+    }
+
+    #[test]
+    fn file_kind_from_extension_covers_known_exts() {
+        assert_eq!(FileKind::from_extension("pdf"),  FileKind::Pdf);
+        assert_eq!(FileKind::from_extension("zip"),  FileKind::Archive);
+        assert_eq!(FileKind::from_extension("jpg"),  FileKind::Image);
+        assert_eq!(FileKind::from_extension("mp3"),  FileKind::Audio);
+        assert_eq!(FileKind::from_extension("mp4"),  FileKind::Video);
+        assert_eq!(FileKind::from_extension("docx"), FileKind::Document);
+        assert_eq!(FileKind::from_extension("rs"),   FileKind::Text);
+        assert_eq!(FileKind::from_extension("txt"),  FileKind::Text);
+        assert_eq!(FileKind::from_extension(""),     FileKind::Unknown);
+    }
+
+    #[test]
+    fn file_kind_display_matches_wire_format() {
+        assert_eq!(FileKind::Text.to_string(),       "text");
+        assert_eq!(FileKind::Pdf.to_string(),        "pdf");
+        assert_eq!(FileKind::Archive.to_string(),    "archive");
+        assert_eq!(FileKind::Image.to_string(),      "image");
+        assert_eq!(FileKind::Audio.to_string(),      "audio");
+        assert_eq!(FileKind::Video.to_string(),      "video");
+        assert_eq!(FileKind::Document.to_string(),   "document");
+        assert_eq!(FileKind::Unknown.to_string(),    "unknown");
+    }
+
+    #[test]
+    fn file_kind_is_text_like() {
+        assert!(FileKind::Text.is_text_like());
+        assert!(FileKind::Pdf.is_text_like());
+        assert!(!FileKind::Image.is_text_like());
+        assert!(!FileKind::Archive.is_text_like());
+        assert!(!FileKind::Unknown.is_text_like());
+    }
 }

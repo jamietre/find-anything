@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, functions::FunctionFlags, params};
 
-use find_common::api::{ContextLine, FileRecord, IndexFile, PathRename};
+use find_common::api::{ContextLine, FileKind, FileRecord, IndexFile, PathRename};
 use find_common::path::{composite_like_prefix, is_composite};
 
 use crate::archive::{ArchiveManager, ChunkRef};
@@ -322,10 +322,11 @@ pub fn list_files(conn: &Connection) -> Result<Vec<FileRecord>> {
     )?;
     let rows = stmt
         .query_map([], |row| {
+            let kind_str: String = row.get(2)?;
             Ok(FileRecord {
                 path: row.get(0)?,
                 mtime: row.get(1)?,
-                kind: row.get(2)?,
+                kind: FileKind::from(kind_str.as_str()),
                 scanner_version: row.get::<_, u32>(3).unwrap_or(0),
                 indexed_at: row.get(4)?,
             })
@@ -343,7 +344,8 @@ pub fn search_files(conn: &Connection, q: &str, limit: usize) -> Result<Vec<File
             "SELECT path, kind FROM files ORDER BY indexed_at DESC LIMIT ?"
         )?;
         let rows = stmt.query_map(params![limit as i64], |row| {
-            Ok(FileRecord { path: row.get(0)?, mtime: 0, kind: row.get(1)?,
+            let kind_str: String = row.get(1)?;
+            Ok(FileRecord { path: row.get(0)?, mtime: 0, kind: FileKind::from(kind_str.as_str()),
                 scanner_version: 0, indexed_at: Some(0) })
         })?.collect::<rusqlite::Result<Vec<_>>>()?;
         return Ok(rows);
@@ -353,7 +355,8 @@ pub fn search_files(conn: &Connection, q: &str, limit: usize) -> Result<Vec<File
         "SELECT path, kind FROM files WHERE lower(path) LIKE lower(?) ORDER BY path LIMIT ?"
     )?;
     let rows = stmt.query_map(params![pattern, limit as i64], |row| {
-        Ok(FileRecord { path: row.get(0)?, mtime: 0, kind: row.get(1)?,
+        let kind_str: String = row.get(1)?;
+        Ok(FileRecord { path: row.get(0)?, mtime: 0, kind: FileKind::from(kind_str.as_str()),
             scanner_version: 0, indexed_at: Some(0) })
     })?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
@@ -373,7 +376,7 @@ pub fn upsert_files(conn: &Connection, files: &[IndexFile]) -> Result<()> {
                size            = excluded.size,
                kind            = excluded.kind,
                scanner_version = excluded.scanner_version",
-            params![file.path, file.mtime, file.size.as_ref().map(|&s| s), file.kind, file.scanner_version],
+            params![file.path, file.mtime, file.size.as_ref().map(|&s| s), file.kind.to_string(), file.scanner_version],
         )?;
 
         let file_id: i64 = tx.query_row(
@@ -1151,18 +1154,19 @@ pub fn get_context(
 ) -> Result<Vec<ContextLine>> {
     let kind = get_file_kind(conn, file_path)?;
 
-    match kind.as_str() {
-        "image" | "audio" => get_metadata_context(conn, archive_mgr, file_path),
+    match kind {
+        FileKind::Image | FileKind::Audio => get_metadata_context(conn, archive_mgr, file_path),
         _ => get_line_context(conn, archive_mgr, file_path, center, window),
     }
 }
 
-fn get_file_kind(conn: &Connection, file_path: &str) -> Result<String> {
+fn get_file_kind(conn: &Connection, file_path: &str) -> Result<FileKind> {
     conn.query_row(
         "SELECT kind FROM files WHERE path = ?1 LIMIT 1",
         params![file_path],
-        |row| row.get(0),
+        |row| row.get::<_, String>(0),
     )
+    .map(|s| FileKind::from(s.as_str()))
     .map_err(Into::into)
 }
 
