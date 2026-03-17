@@ -11,6 +11,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **SQLite WAL mode** — source databases now open with `PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;`; previously the default rollback-journal mode held an exclusive write lock for the full duration of every index transaction, blocking concurrent search queries; WAL mode allows reads and writes to proceed concurrently; `synchronous = NORMAL` is safe with WAL and significantly faster than the default `FULL` mode
+- **Formatter stderr noise** — when an external formatter (e.g. biome) exits with a non-zero code, its stderr output is now logged at `debug` level rather than included in the `warn` line; the warn still fires so failures are visible, but multi-line tool output (e.g. biome's "Code formatting aborted due to parsing errors") no longer clutters production logs
+
 - **Video metadata crash on large files** — replaced `audio_video_metadata` (which calls `read_to_end` on the entire file, panicking with `capacity overflow` on multi-GB MKVs) with `nom-exif` which uses seek-based I/O and never loads the full file; `nom-exif` covers MP4, MOV, MKV, WebM natively; AVI, WMV, FLV, MPEG, OGV fall back to magic-byte detection that emits at minimum a `[VIDEO:format]` line so the file is findable by container type
 
 ### Changed

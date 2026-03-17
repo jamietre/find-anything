@@ -38,6 +38,11 @@ pub fn open(db_path: &Path) -> Result<Connection> {
     // SQLITE_BUSY.  Multiple workers share one DB per source, so brief
     // contention is normal and should not be treated as an error.
     conn.busy_timeout(std::time::Duration::from_secs(30))?;
+    // WAL mode allows concurrent reads during writes and avoids exclusive locks
+    // for the full duration of large write transactions.  synchronous=NORMAL is
+    // safe with WAL (data is never lost on crash) and much faster than the
+    // default FULL mode (syncs at WAL checkpoints rather than every commit).
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
     // foreign_keys must be re-enabled on every connection; PRAGMA in schema SQL
     // only runs once at creation time and does not persist across connections.
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;

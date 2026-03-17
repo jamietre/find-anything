@@ -196,8 +196,13 @@ fn try_external_formatters(
                 formatter = %fmt.path,
                 file = %name,
                 exit_code = ?output.status.code(),
-                stderr = %stderr.trim(),
                 "normalize: formatter exited with error"
+            );
+            tracing::debug!(
+                formatter = %fmt.path,
+                file = %name,
+                stderr = %stderr.trim(),
+                "normalize: formatter stderr"
             );
         }
     }
