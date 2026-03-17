@@ -4,6 +4,7 @@ pub(crate) mod db;
 pub(crate) mod fuzzy;
 pub(crate) mod normalize;
 pub(crate) mod routes;
+pub(crate) mod stats_cache;
 pub(crate) mod upload;
 pub(crate) mod worker;
 
