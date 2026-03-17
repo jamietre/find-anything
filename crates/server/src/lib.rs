@@ -81,6 +81,7 @@ pub struct AppState {
     pub archive_state: Arc<SharedArchiveState>,
     pub inbox_paused: Arc<AtomicBool>,
     pub compaction_stats: Arc<std::sync::RwLock<Option<compaction::CompactionStats>>>,
+    pub source_stats_cache: Arc<std::sync::RwLock<stats_cache::SourceStatsCache>>,
     pub under_systemd: bool,
     pub update_cache: tokio::sync::RwLock<Option<CachedUpdateCheck>>,
     pub recent_tx: tokio::sync::broadcast::Sender<RecentFile>,
@@ -110,6 +111,7 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
         .context("initialising archive state")?;
     let initial_compaction_stats = compaction::load_cached_stats(&data_dir);
     let compaction_stats = Arc::new(std::sync::RwLock::new(initial_compaction_stats));
+    let source_stats_cache = Arc::new(std::sync::RwLock::new(stats_cache::SourceStatsCache::default()));
     let (recent_tx, _) = tokio::sync::broadcast::channel::<RecentFile>(256);
 
     // Open links.db (creates table on first use).
@@ -124,6 +126,7 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
         archive_state: Arc::clone(&archive_state),
         inbox_paused: Arc::clone(&inbox_paused),
         compaction_stats: Arc::clone(&compaction_stats),
+        source_stats_cache: Arc::clone(&source_stats_cache),
         under_systemd,
         update_cache: tokio::sync::RwLock::new(None),
         recent_tx,
@@ -167,6 +170,19 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
         Arc::clone(&state.archive_state),
         state.config.compaction.clone(),
     );
+
+    // Startup full rebuild of source stats cache (delayed 30 s to let the inbox
+    // worker settle before running expensive DB queries).
+    {
+        let cache = Arc::clone(&source_stats_cache);
+        let dd = data_dir.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            tokio::task::spawn_blocking(move || {
+                stats_cache::full_rebuild(&dd, &cache);
+            }).await.ok();
+        });
+    }
 
     // Hourly task to remove expired share links from links.db.
     let sweep_data_dir = data_dir.clone();
