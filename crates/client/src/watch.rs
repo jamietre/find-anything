@@ -28,12 +28,22 @@ pub struct WatchOptions {
     pub scan_now: bool,
 }
 
-/// (root_path, source_name, root_str, include_globset, include_dir_terminals)
-///
-/// `include_dir_terminals` is `None` when no pruning can be determined (e.g.
-/// `**/*.rs` patterns), meaning all directories must be traversed.  When
-/// `Some`, only directories inside the terminal set need to be watched.
-type SourceMap = Vec<(PathBuf, String, String, GlobSet, Option<std::collections::HashSet<String>>)>;
+/// One configured source as used by the watcher.
+#[allow(dead_code)] // root_str is stored but only used in construction
+struct WatchSource {
+    root:        PathBuf,
+    source_name: String,
+    /// Normalised root path as a `String` (forward-slash separators).
+    root_str:    String,
+    /// Compiled include glob patterns (empty = include everything).
+    includes:    GlobSet,
+    /// Include directory prefixes derived from `includes`.
+    /// `None` when patterns can't be reduced to a terminal set (e.g. `**/*.rs`),
+    /// meaning every subdirectory must be watched.
+    terminals:   Option<std::collections::HashSet<String>>,
+}
+
+type SourceMap = Vec<WatchSource>;
 
 /// What to do with a path after debounce.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,13 +110,13 @@ pub async fn run_watch(config: &ClientConfig, opts: &WatchOptions) -> Result<()>
     )?;
 
     let global_excludes = build_globset(&config.scan.exclude).unwrap_or_default();
-    for (root, name, _, _, terminals) in &source_map {
+    for src in &source_map {
         tracing::debug!(
             "source {:?}: root={:?} terminals={:?}",
-            name, root, terminals
+            src.source_name, src.root, src.terminals
         );
-        let n = watch_tree(&mut watcher, root, terminals.as_ref(), &global_excludes, &config.scan);
-        info!("watching {:?} ({n} directories registered)", root);
+        let n = watch_tree(&mut watcher, &src.root, src.terminals.as_ref(), &global_excludes, &config.scan);
+        info!("watching {:?} ({n} directories registered)", src.root);
     }
 
     // Accumulator: path → what to do.
@@ -278,7 +288,7 @@ fn build_source_map(sources: &[SourceConfig]) -> SourceMap {
         let root = PathBuf::from(&root_str);
         let includes = build_globset(&src.include).unwrap_or_default();
         let terminals = crate::path_util::include_dir_prefixes(&src.include);
-        map.push((root, src.name.clone(), root_str, includes, terminals));
+        map.push(WatchSource { root, source_name: src.name.clone(), root_str, includes, terminals });
     }
     map
 }
@@ -286,17 +296,17 @@ fn build_source_map(sources: &[SourceConfig]) -> SourceMap {
 /// Return `(source_name, rel_path, source_root, include_globset)` for a given absolute path.
 /// Picks the most-specific (longest) matching root.
 fn find_source<'a>(path: &Path, map: &'a SourceMap) -> Option<(String, String, PathBuf, &'a GlobSet)> {
-    let mut best: Option<(&PathBuf, &String, &String, &GlobSet)> = None;
-    for (root, name, root_str, includes, _terminals) in map {
-        if path.starts_with(root)
-            && best.is_none_or(|(b, _, _, _)| root.as_os_str().len() > b.as_os_str().len())
+    let mut best: Option<&'a WatchSource> = None;
+    for src in map {
+        if path.starts_with(&src.root)
+            && best.is_none_or(|b| src.root.as_os_str().len() > b.root.as_os_str().len())
         {
-            best = Some((root, name, root_str, includes));
+            best = Some(src);
         }
     }
-    best.map(|(root, name, _, includes)| {
-        let rel = normalise_path_sep(&path.strip_prefix(root).unwrap().to_string_lossy());
-        (name.clone(), rel, root.clone(), includes)
+    best.map(|src| {
+        let rel = normalise_path_sep(&path.strip_prefix(&src.root).unwrap().to_string_lossy());
+        (src.source_name.clone(), rel, src.root.clone(), &src.includes)
     })
 }
 
@@ -306,8 +316,8 @@ use crate::walk::build_globset;
 
 fn is_excluded(abs_path: &Path, source_map: &SourceMap, excludes: &GlobSet) -> bool {
     // Find the root for this path and check relative path against excludes.
-    for (root, _, _, _, _) in source_map {
-        if let Ok(rel) = abs_path.strip_prefix(root) {
+    for src in source_map {
+        if let Ok(rel) = abs_path.strip_prefix(&src.root) {
             let rel_normalised = normalise_path_sep(&rel.to_string_lossy());
             if excludes.is_match(&*rel_normalised) {
                 return true;

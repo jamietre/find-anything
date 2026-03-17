@@ -258,8 +258,15 @@ pub fn fts_candidates(
     Ok(results)
 }
 
-/// Return type for `document_candidates`: total qualifying files + per-file (representative, extras).
-pub type DocumentCandidates = (usize, Vec<(CandidateRow, Vec<CandidateRow>)>);
+/// One document-mode result group: the top FTS-ranked line plus additional
+/// lines that cover query terms not present in the representative.
+pub(crate) struct DocumentGroup {
+    pub representative: CandidateRow,
+    pub members:        Vec<CandidateRow>,
+}
+
+/// Return type for `document_candidates`: total qualifying files + per-file groups.
+pub type DocumentCandidates = (usize, Vec<DocumentGroup>);
 
 /// Document-level fuzzy candidate search.
 ///
@@ -515,7 +522,7 @@ pub fn document_candidates(
             }
         }
 
-        results.push((representative, extras));
+        results.push(DocumentGroup { representative, members: extras });
     }
 
     Ok((total, results))

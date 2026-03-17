@@ -11,7 +11,13 @@ use tokio::task::spawn_blocking;
 use find_common::api::{ContextLine, FileKind, SearchMode, SearchResponse, SearchResult};
 
 use crate::fuzzy::FuzzyScorer;
-use crate::{archive::ArchiveManager, db, db::search::CandidateRow, db::DateFilter, AppState};
+use crate::{archive::ArchiveManager, db, db::search::{CandidateRow, DocumentGroup}, db::DateFilter, AppState};
+
+/// A scored search result paired with its `file_id` for alias lookup.
+struct ScoredResult {
+    result:  SearchResult,
+    file_id: i64,
+}
 
 use super::{check_auth, source_db_path};
 
@@ -122,29 +128,29 @@ fn regex_to_fts_terms(pattern: &str) -> String {
 fn group_by_file(
     candidates: Vec<CandidateRow>,
     source_name: &str,
-) -> Vec<(SearchResult, i64)> {
+) -> Vec<ScoredResult> {
     use std::collections::HashMap;
     let mut file_order: Vec<i64> = Vec::new();
-    // (representative SearchResult, extras Vec, file_id)
-    let mut file_reps: HashMap<i64, (SearchResult, Vec<ContextLine>, i64)> = HashMap::new();
+    // (representative SearchResult, extras Vec)
+    let mut file_reps: HashMap<i64, (SearchResult, Vec<ContextLine>)> = HashMap::new();
 
     for c in candidates {
         let file_id = c.file_id;
-        if let Some((_, extras, _)) = file_reps.get_mut(&file_id) {
+        if let Some((_, extras)) = file_reps.get_mut(&file_id) {
             if c.line_number > 0 {
                 extras.push(ContextLine { line_number: c.line_number, content: c.content });
             }
         } else {
             file_order.push(file_id);
             let result = make_result(source_name, &c, 0, vec![]);
-            file_reps.insert(file_id, (result, vec![], file_id));
+            file_reps.insert(file_id, (result, vec![]));
         }
     }
 
-    file_order.into_iter().filter_map(|id| {
-        let (mut result, extras, file_id) = file_reps.remove(&id)?;
+    file_order.into_iter().filter_map(|file_id| {
+        let (mut result, extras) = file_reps.remove(&file_id)?;
         result.extra_matches = extras;
-        Some((result, file_id))
+        Some(ScoredResult { result, file_id })
     }).collect()
 }
 
@@ -232,24 +238,24 @@ pub async fn search(
                     SearchMode::Document => {
                         let (doc_total, candidates) = db::document_candidates(&conn, &archive_mgr, &query, scoring_limit, date_filter, case_sensitive)?;
                         let mut scorer = FuzzyScorer::new(&query, case_sensitive);
-                        let result_pairs: Vec<(SearchResult, i64)> = candidates
+                        let result_pairs: Vec<ScoredResult> = candidates
                             .into_iter()
-                            .map(|(rep, extras)| {
+                            .map(|DocumentGroup { representative: rep, members: extras }| {
                                 let file_id = rep.file_id;
                                 let score = scorer.score(&rep.content).unwrap_or(0);
                                 let extra_matches = extras.into_iter()
                                     .map(|e| ContextLine { line_number: e.line_number, content: e.content })
                                     .collect();
-                                (make_result(&source_name, &rep, score, extra_matches), file_id)
+                                ScoredResult { result: make_result(&source_name, &rep, score, extra_matches), file_id }
                             })
                             .collect();
-                        let canonical_ids: Vec<i64> = result_pairs.iter().map(|(_, id)| *id).collect();
+                        let canonical_ids: Vec<i64> = result_pairs.iter().map(|sr| sr.file_id).collect();
                         let aliases_map = db::fetch_aliases_for_canonical_ids(&conn, &canonical_ids)?;
                         let results: Vec<SearchResult> = result_pairs
                             .into_iter()
-                            .map(|(mut r, id)| {
-                                if let Some(aliases) = aliases_map.get(&id) { r.aliases = aliases.clone(); }
-                                r
+                            .map(|mut sr| {
+                                if let Some(aliases) = aliases_map.get(&sr.file_id) { sr.result.aliases = aliases.clone(); }
+                                sr.result
                             })
                             .collect();
                         return Ok((doc_total, results));
@@ -262,13 +268,13 @@ pub async fn search(
                             .collect();
                         let source_total = filtered.len();
                         let result_pairs = group_by_file(filtered, &source_name);
-                        let canonical_ids: Vec<i64> = result_pairs.iter().map(|(_, id)| *id).collect();
+                        let canonical_ids: Vec<i64> = result_pairs.iter().map(|sr| sr.file_id).collect();
                         let aliases_map = db::fetch_aliases_for_canonical_ids(&conn, &canonical_ids)?;
                         let results: Vec<SearchResult> = result_pairs
                             .into_iter()
-                            .map(|(mut r, id)| {
-                                if let Some(aliases) = aliases_map.get(&id) { r.aliases = aliases.clone(); }
-                                r
+                            .map(|mut sr| {
+                                if let Some(aliases) = aliases_map.get(&sr.file_id) { sr.result.aliases = aliases.clone(); }
+                                sr.result
                             })
                             .collect();
                         return Ok((source_total, results));
@@ -283,13 +289,13 @@ pub async fn search(
                             .collect();
                         let source_total = filtered.len();
                         let result_pairs = group_by_file(filtered, &source_name);
-                        let canonical_ids: Vec<i64> = result_pairs.iter().map(|(_, id)| *id).collect();
+                        let canonical_ids: Vec<i64> = result_pairs.iter().map(|sr| sr.file_id).collect();
                         let aliases_map = db::fetch_aliases_for_canonical_ids(&conn, &canonical_ids)?;
                         let results: Vec<SearchResult> = result_pairs
                             .into_iter()
-                            .map(|(mut r, id)| {
-                                if let Some(aliases) = aliases_map.get(&id) { r.aliases = aliases.clone(); }
-                                r
+                            .map(|mut sr| {
+                                if let Some(aliases) = aliases_map.get(&sr.file_id) { sr.result.aliases = aliases.clone(); }
+                                sr.result
                             })
                             .collect();
                         return Ok((source_total, results));
@@ -324,21 +330,21 @@ pub async fn search(
                     candidates.retain(|c| c.content.starts_with("[PATH] "));
                 }
 
-                // Build (SearchResult, file_id) pairs for alias lookup.
-                let result_pairs: Vec<(SearchResult, i64)> = match mode {
+                // Build ScoredResult pairs for alias lookup.
+                let result_pairs: Vec<ScoredResult> = match mode {
                     SearchMode::Exact | SearchMode::FileExact => {
                         // FTS5 trigram is case-insensitive pre-filter; for case-sensitive mode
                         // add a post-filter to discard candidates that don't literally contain the query.
                         candidates.into_iter()
                             .filter(|c| !case_sensitive || c.content.contains(query.as_str()))
-                            .map(|c| (make_result(&source_name, &c, 0, vec![]), c.file_id))
+                            .map(|c| ScoredResult { result: make_result(&source_name, &c, 0, vec![]), file_id: c.file_id })
                             .collect()
                     }
                     SearchMode::Regex | SearchMode::FileRegex => {
                         let re = regex::RegexBuilder::new(&query).case_insensitive(!case_sensitive).build()?;
                         candidates.into_iter()
                             .filter(|c| re.is_match(&c.content))
-                            .map(|c| (make_result(&source_name, &c, 0, vec![]), c.file_id))
+                            .map(|c| ScoredResult { result: make_result(&source_name, &c, 0, vec![]), file_id: c.file_id })
                             .collect()
                     }
                     _ /* Fuzzy | FileFuzzy */ => {
@@ -362,23 +368,23 @@ pub async fn search(
                                     return None;
                                 }
                                 scorer.score(&c.content)
-                                    .map(|score| (make_result(&source_name, &c, score, vec![]), c.file_id))
+                                    .map(|score| ScoredResult { result: make_result(&source_name, &c, score, vec![]), file_id: c.file_id })
                             })
                             .collect()
                     }
                 };
 
                 // Look up aliases for all canonical file IDs in the result set.
-                let canonical_ids: Vec<i64> = result_pairs.iter().map(|(_, id)| *id).collect();
+                let canonical_ids: Vec<i64> = result_pairs.iter().map(|sr| sr.file_id).collect();
                 let aliases_map = db::fetch_aliases_for_canonical_ids(&conn, &canonical_ids)?;
 
                 let results: Vec<SearchResult> = result_pairs
                     .into_iter()
-                    .map(|(mut r, id)| {
-                        if let Some(aliases) = aliases_map.get(&id) {
-                            r.aliases = aliases.clone();
+                    .map(|mut sr| {
+                        if let Some(aliases) = aliases_map.get(&sr.file_id) {
+                            sr.result.aliases = aliases.clone();
                         }
-                        r
+                        sr.result
                     })
                     .collect();
 

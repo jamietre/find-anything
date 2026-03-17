@@ -446,6 +446,12 @@ pub fn delete_files(
     Ok(refs_to_remove)
 }
 
+/// A file alias row: id + path of a duplicate file that points to a canonical.
+struct AliasRow {
+    file_id: i64,
+    path:    String,
+}
+
 /// Delete one path (outer file + all inner archive members), with canonical promotion.
 /// Chunk refs that need ZIP cleanup are appended to `refs_to_remove`; the
 /// caller is responsible for calling `archive_mgr.remove_chunks` afterwards.
@@ -481,11 +487,11 @@ fn delete_one_path(
         tx.execute("DELETE FROM files WHERE id = ?1", params![outer_id])?;
     } else {
         // Outer file is canonical — check for aliases that need promotion.
-        let aliases: Vec<(i64, String)> = {
+        let aliases: Vec<AliasRow> = {
             let mut stmt = tx.prepare(
                 "SELECT id, path FROM files WHERE canonical_file_id = ?1 ORDER BY id",
             )?;
-            let v: Vec<(i64, String)> = stmt.query_map(params![outer_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            let v: Vec<AliasRow> = stmt.query_map(params![outer_id], |row| Ok(AliasRow { file_id: row.get(0)?, path: row.get(1)? }))?
                 .collect::<rusqlite::Result<_>>()?;
             v
         };
@@ -498,8 +504,7 @@ fn delete_one_path(
             refs_to_remove.extend(refs);
         } else {
             // Canonical promotion: promote the first alias to canonical.
-            let (new_canonical_id, _new_canonical_path) = &aliases[0];
-            let new_canonical_id = *new_canonical_id;
+            let new_canonical_id = aliases[0].file_id;
 
             // Fetch the canonical's lines before deletion.
             struct LineRow {
@@ -574,10 +579,10 @@ fn delete_one_path(
                 params![new_canonical_id],
             )?;
             // Re-point remaining aliases to the new canonical.
-            for (alias_id, _) in aliases.iter().skip(1) {
+            for alias in aliases.iter().skip(1) {
                 tx.execute(
                     "UPDATE files SET canonical_file_id = ?1 WHERE id = ?2",
-                    params![new_canonical_id, alias_id],
+                    params![new_canonical_id, alias.file_id],
                 )?;
             }
 
@@ -751,11 +756,11 @@ fn delete_one_path_phase1(
         tx.execute("DELETE FROM files WHERE id = ?1", params![outer_id])?;
     } else {
         // Outer file is canonical — check for aliases that need promotion.
-        let aliases: Vec<(i64, String)> = {
+        let aliases: Vec<AliasRow> = {
             let mut stmt = tx.prepare(
                 "SELECT id, path FROM files WHERE canonical_file_id = ?1 ORDER BY id",
             )?;
-            let v: Vec<(i64, String)> = stmt.query_map(params![outer_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+            let v: Vec<AliasRow> = stmt.query_map(params![outer_id], |row| Ok(AliasRow { file_id: row.get(0)?, path: row.get(1)? }))?
                 .collect::<rusqlite::Result<_>>()?;
             v
         };
@@ -764,8 +769,8 @@ fn delete_one_path_phase1(
             tx.execute("DELETE FROM files WHERE id = ?1", params![outer_id])?;
         } else {
             // Canonical promotion: promote the first alias.
-            let (new_canonical_id, new_canonical_path) = &aliases[0];
-            let new_canonical_id = *new_canonical_id;
+            let new_canonical_id = aliases[0].file_id;
+            let new_canonical_path = &aliases[0].path;
 
             // Delete the old canonical (CASCADE removes its lines).
             tx.execute("DELETE FROM files WHERE id = ?1", params![outer_id])?;
@@ -776,10 +781,10 @@ fn delete_one_path_phase1(
                 params![new_canonical_id],
             )?;
             // Re-point remaining aliases to the new canonical.
-            for (alias_id, _) in aliases.iter().skip(1) {
+            for alias in aliases.iter().skip(1) {
                 tx.execute(
                     "UPDATE files SET canonical_file_id = ?1 WHERE id = ?2",
-                    params![new_canonical_id, alias_id],
+                    params![new_canonical_id, alias.file_id],
                 )?;
             }
 

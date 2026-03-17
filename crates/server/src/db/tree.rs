@@ -6,6 +6,14 @@ use find_common::path::is_composite;
 
 // ── Directory listing ─────────────────────────────────────────────────────────
 
+/// Raw DB row returned by the path range-scan in `list_dir`.
+struct TreeRow {
+    path:  String,
+    kind:  String,
+    size:  Option<i64>,
+    mtime: i64,
+}
+
 /// List the immediate children (dirs + files) of `prefix` within the source.
 ///
 /// `prefix` should end with `/` for non-root directory queries (e.g. `"src/"`).
@@ -24,14 +32,14 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
         "SELECT path, kind, size, mtime FROM files WHERE path >= ?1 AND path < ?2 ORDER BY path",
     )?;
 
-    let rows: Vec<(String, String, Option<i64>, i64)> = stmt
+    let rows: Vec<TreeRow> = stmt
         .query_map(params![low, high], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
+            Ok(TreeRow {
+                path:  row.get(0)?,
+                kind:  row.get(1)?,
+                size:  row.get(2)?,
+                mtime: row.get(3)?,
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
 
@@ -42,8 +50,8 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
 
     // First pass: collect all actual files to avoid creating duplicate virtual dirs
     if is_archive_listing {
-        for (path, _, _, _) in &rows {
-            let rest = path.strip_prefix(prefix).unwrap_or(path);
+        for row in &rows {
+            let rest = row.path.strip_prefix(prefix).unwrap_or(&row.path);
             if !is_composite(rest) && !rest.contains('/') {
                 seen_files.insert(rest.to_string());
             }
@@ -51,7 +59,8 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
     }
 
     // Second pass: build the directory listing
-    for (path, kind, size, mtime) in rows {
+    for row in rows {
+        let TreeRow { path, kind, size, mtime } = row;
         let rest = path.strip_prefix(prefix).unwrap_or(&path);
 
         if is_archive_listing {
