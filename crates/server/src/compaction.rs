@@ -555,6 +555,16 @@ mod tests {
     }
 }
 
+/// Write `stats` into `slot`, replacing any previously cached value.
+pub fn save_stats_to_slot(
+    slot: &Arc<std::sync::RwLock<Option<CompactionStats>>>,
+    stats: CompactionStats,
+) {
+    if let Ok(mut g) = slot.write() {
+        *g = Some(stats);
+    }
+}
+
 /// Run a wasted-space scan, log the result with timing, update `stats_slot`,
 /// persist to disk, and return the stats.
 async fn run_scan_and_log(
