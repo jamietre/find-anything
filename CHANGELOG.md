@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Video metadata crash on large files** — `audio_video_metadata::get_format_from_file` reads the entire file into memory; on a large video (multi-GB MKV, etc.) this exhausts the allocator and panics with `capacity overflow`; `extract_video` now checks file size first and skips metadata extraction for files over 500 MB (the file is still indexed by name)
+
 ### Changed
 
 - **Named structs for anonymous tuples (plan 073 stage 3)** — five positional tuple types replaced with named structs: `WatchSource` (replaces 5-element tuple in `watch.rs`), `TreeRow` (intermediate DB row in `db/tree.rs`), `DocumentGroup` (representative + members in `db/search.rs`), `ScoredResult` (result + file_id in `routes/search.rs`), `AliasRow` (file_id + path in `db/mod.rs`); no behaviour change — purely internal, all public API surfaces unchanged

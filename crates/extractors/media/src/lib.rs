@@ -406,7 +406,18 @@ pub fn is_audio_ext(ext: &str) -> bool {
 // VIDEO EXTRACTION
 // ============================================================================
 
+/// `audio_video_metadata::get_format_from_file` reads the entire file into
+/// memory via `read_to_end`.  On a large video file (multi-GB MKV, etc.) this
+/// exhausts the allocator and panics with "capacity overflow".  Guard by
+/// checking file size before calling into the library: for files above the
+/// threshold we return an empty result — the file is still indexed by name.
+const MAX_VIDEO_PROBE_BYTES: u64 = 500 * 1024 * 1024; // 500 MB
+
 fn extract_video(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
+    if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > MAX_VIDEO_PROBE_BYTES {
+        return Ok(vec![]);
+    }
+
     match get_format_from_file(path) {
         Ok(Metadata::Video(m)) => {
             let mut lines = Vec::new();
