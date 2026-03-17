@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use find_common::api::{
     InboxDeleteResponse, InboxItem, InboxPauseResponse, InboxResumeResponse, InboxRetryResponse,
     InboxShowFile, InboxShowResponse, InboxStatusResponse, SourceDeleteResponse,
-    UpdateApplyResponse, UpdateCheckResponse,
+    UpdateApplyResponse, UpdateCheckResponse, WorkerQueueSlot,
 };
 
 use crate::archive::ArchiveManager;
@@ -254,9 +254,9 @@ pub async fn inbox_show(
         };
 
         let (path, queue) = if inbox_dir.join(&filename).exists() {
-            (inbox_dir.join(&filename), "pending")
+            (inbox_dir.join(&filename), WorkerQueueSlot::Pending)
         } else if failed_dir.join(&filename).exists() {
-            (failed_dir.join(&filename), "failed")
+            (failed_dir.join(&filename), WorkerQueueSlot::Failed)
         } else {
             return Ok(StatusCode::NOT_FOUND.into_response());
         };
@@ -276,7 +276,7 @@ pub async fn inbox_show(
             .collect();
 
         Ok(Json(InboxShowResponse {
-            queue: queue.to_string(),
+            queue,
             source: req.source,
             files,
             delete_paths: req.delete_paths,

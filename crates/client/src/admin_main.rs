@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 use colored::Colorize;
 
-use find_common::api::WorkerStatus;
+use find_common::api::{RecentAction, WorkerQueueSlot, WorkerStatus};
 use find_common::config::{default_config_path, parse_client_config};
 
 mod api;
@@ -396,7 +396,7 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            let queue_label = if resp.queue == "failed" {
+            let queue_label = if resp.queue == WorkerQueueSlot::Failed {
                 format!(" [{}]", "FAILED".red())
             } else {
                 String::new()
@@ -475,12 +475,11 @@ fn print_recent_line(f: &find_common::api::RecentFile) {
         .map(|utc| chrono::DateTime::<chrono::Local>::from(utc)
             .format("%Y-%m-%d %H:%M").to_string())
         .unwrap_or_else(|| f.indexed_at.to_string());
-    let action_label = match f.action.as_str() {
-        "added"    => "added   ",
-        "modified" => "modified",
-        "deleted"  => "deleted ",
-        "renamed"  => "renamed ",
-        other      => other,
+    let action_label = match f.action {
+        RecentAction::Added    => "added   ",
+        RecentAction::Modified => "modified",
+        RecentAction::Deleted  => "deleted ",
+        RecentAction::Renamed  => "renamed ",
     };
     if let Some(new_path) = &f.new_path {
         println!("  {}  [{}]  {}  {}  →  {}", ts, f.source, action_label, f.path, new_path);

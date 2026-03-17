@@ -78,6 +78,67 @@ impl From<String> for FileKind {
     }
 }
 
+/// Search mode sent in `?mode=` query param.
+///
+/// `kebab-case` preserves the existing wire format exactly (`"fuzzy"`,
+/// `"file-fuzzy"`, `"doc-exact"`, …).
+///
+/// `#[serde(other)]` on `Fuzzy` — any unrecognised mode string from a future
+/// client deserialises to `Fuzzy` (safe fallback) instead of erroring.
+/// `Fuzzy` is also the `Default`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum SearchMode {
+    Exact,
+    Regex,
+    /// Fuzzy multi-term document mode: each term may appear on any line.
+    Document,
+    FileFuzzy,
+    FileExact,
+    FileRegex,
+    DocExact,
+    DocRegex,
+    /// Default mode; also the catch-all for any unrecognised mode string.
+    #[default]
+    #[serde(other)]
+    Fuzzy,
+}
+
+/// Action recorded in the activity log and broadcast on `GET /api/v1/recent`.
+///
+/// No `#[serde(other)]` — the server is the sole producer; an unknown value
+/// here is a server bug, not a client compatibility issue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum RecentAction {
+    #[default]
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+impl From<&str> for RecentAction {
+    fn from(s: &str) -> Self {
+        match s {
+            "modified" => Self::Modified,
+            "deleted"  => Self::Deleted,
+            "renamed"  => Self::Renamed,
+            _          => Self::Added,
+        }
+    }
+}
+
+/// Whether an inbox batch is in the pending or failed queue.
+///
+/// No `#[serde(other)]` — the server is the sole producer of this value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkerQueueSlot {
+    Pending,
+    Failed,
+}
+
 /// Minimum client version the server will accept.
 /// Update this constant whenever a breaking API change is made (e.g. new
 /// required request fields, removed endpoints, changed response shapes).
@@ -549,8 +610,7 @@ pub struct InboxShowFile {
 /// `GET /api/v1/admin/inbox/show` response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InboxShowResponse {
-    /// "pending" or "failed"
-    pub queue: String,
+    pub queue: WorkerQueueSlot,
     pub source: String,
     pub files: Vec<InboxShowFile>,
     pub delete_paths: Vec<String>,
@@ -594,16 +654,15 @@ pub struct RecentFile {
     pub path: String,
     /// Unix timestamp (seconds) when this event was recorded.
     pub indexed_at: i64,
-    /// What happened: `"added"`, `"modified"`, `"deleted"`, or `"renamed"`.
-    /// Defaults to `"added"` when reading from older servers that don't populate this field.
-    #[serde(default = "default_recent_action")]
-    pub action: String,
+    /// What happened. Defaults to `Added` when reading from older servers that
+    /// don't populate this field.
+    #[serde(default)]
+    pub action: RecentAction,
     /// For `action = "renamed"`: the new (post-rename) path.  `None` for all other actions.
     #[serde(default)]
     pub new_path: Option<String>,
 }
 
-fn default_recent_action() -> String { "added".to_string() }
 
 /// `GET /api/v1/recent` response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -771,5 +830,112 @@ mod file_kind_tests {
         assert!(!FileKind::Image.is_text_like());
         assert!(!FileKind::Archive.is_text_like());
         assert!(!FileKind::Unknown.is_text_like());
+    }
+}
+
+#[cfg(test)]
+mod search_mode_tests {
+    use super::*;
+
+    #[test]
+    fn search_mode_serde_round_trip() {
+        for (variant, wire) in [
+            (SearchMode::Fuzzy,     "\"fuzzy\""),
+            (SearchMode::Exact,     "\"exact\""),
+            (SearchMode::Regex,     "\"regex\""),
+            (SearchMode::Document,  "\"document\""),
+            (SearchMode::FileFuzzy, "\"file-fuzzy\""),
+            (SearchMode::FileExact, "\"file-exact\""),
+            (SearchMode::FileRegex, "\"file-regex\""),
+            (SearchMode::DocExact,  "\"doc-exact\""),
+            (SearchMode::DocRegex,  "\"doc-regex\""),
+        ] {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, wire, "serialize {variant:?}");
+            let deserialized: SearchMode = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {wire}");
+        }
+    }
+
+    #[test]
+    fn search_mode_unknown_string_deserializes_to_fuzzy() {
+        let result: SearchMode = serde_json::from_str("\"word-search\"").unwrap();
+        assert_eq!(result, SearchMode::Fuzzy);
+        let result2: SearchMode = serde_json::from_str("\"unknown-mode\"").unwrap();
+        assert_eq!(result2, SearchMode::Fuzzy);
+    }
+
+    #[test]
+    fn search_mode_default_is_fuzzy() {
+        assert_eq!(SearchMode::default(), SearchMode::Fuzzy);
+    }
+}
+
+#[cfg(test)]
+mod recent_action_tests {
+    use super::*;
+
+    #[test]
+    fn recent_action_serde_round_trip() {
+        for (variant, wire) in [
+            (RecentAction::Added,    "\"added\""),
+            (RecentAction::Modified, "\"modified\""),
+            (RecentAction::Deleted,  "\"deleted\""),
+            (RecentAction::Renamed,  "\"renamed\""),
+        ] {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, wire, "serialize {variant:?}");
+            let deserialized: RecentAction = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {wire}");
+        }
+    }
+
+    #[test]
+    fn recent_action_unknown_string_is_deserialization_error() {
+        let result = serde_json::from_str::<RecentAction>("\"created\"");
+        assert!(result.is_err(), "unknown action should fail deserialization");
+    }
+
+    #[test]
+    fn recent_action_from_str_known() {
+        assert_eq!(RecentAction::from("added"),    RecentAction::Added);
+        assert_eq!(RecentAction::from("modified"), RecentAction::Modified);
+        assert_eq!(RecentAction::from("deleted"),  RecentAction::Deleted);
+        assert_eq!(RecentAction::from("renamed"),  RecentAction::Renamed);
+    }
+
+    #[test]
+    fn recent_action_from_str_unknown_defaults_to_added() {
+        assert_eq!(RecentAction::from("created"), RecentAction::Added);
+        assert_eq!(RecentAction::from(""),        RecentAction::Added);
+    }
+
+    #[test]
+    fn recent_action_default_is_added() {
+        assert_eq!(RecentAction::default(), RecentAction::Added);
+    }
+}
+
+#[cfg(test)]
+mod worker_queue_slot_tests {
+    use super::*;
+
+    #[test]
+    fn worker_queue_slot_serde_round_trip() {
+        for (variant, wire) in [
+            (WorkerQueueSlot::Pending, "\"pending\""),
+            (WorkerQueueSlot::Failed,  "\"failed\""),
+        ] {
+            let serialized = serde_json::to_string(&variant).unwrap();
+            assert_eq!(serialized, wire, "serialize {variant:?}");
+            let deserialized: WorkerQueueSlot = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(deserialized, variant, "deserialize {wire}");
+        }
+    }
+
+    #[test]
+    fn worker_queue_slot_unknown_string_is_deserialization_error() {
+        let result = serde_json::from_str::<WorkerQueueSlot>("\"queued\"");
+        assert!(result.is_err(), "unknown slot should fail deserialization");
     }
 }

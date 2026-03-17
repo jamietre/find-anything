@@ -8,7 +8,7 @@ use axum::{
 };
 use tokio::task::spawn_blocking;
 
-use find_common::api::{ContextLine, FileKind, SearchResponse, SearchResult};
+use find_common::api::{ContextLine, FileKind, SearchMode, SearchResponse, SearchResult};
 
 use crate::fuzzy::FuzzyScorer;
 use crate::{archive::ArchiveManager, db, db::search::CandidateRow, db::DateFilter, AppState};
@@ -19,7 +19,7 @@ use super::{check_auth, source_db_path};
 
 pub struct SearchParams {
     pub q: String,
-    pub mode: String,
+    pub mode: SearchMode,
     /// Collected from repeated ?source=a&source=b params.
     pub source: Vec<String>,
     pub limit: usize,
@@ -39,7 +39,7 @@ impl<S: Send + Sync> FromRequestParts<S> for SearchParams {
     async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
         let raw = parts.uri.query().unwrap_or("");
         let mut q = None;
-        let mut mode = None;
+        let mut mode: SearchMode = SearchMode::default();
         let mut source = Vec::new();
         let mut limit = None;
         let mut offset = None;
@@ -51,7 +51,7 @@ impl<S: Send + Sync> FromRequestParts<S> for SearchParams {
         for (k, v) in form_urlencoded::parse(raw.as_bytes()) {
             match k.as_ref() {
                 "q"              => q         = Some(v.into_owned()),
-                "mode"           => mode      = Some(v.into_owned()),
+                "mode"           => mode = serde_json::from_value(serde_json::Value::String(v.into_owned())).unwrap_or_default(),
                 "source"         => source.push(v.into_owned()),
                 "kind"           => kinds.push(v.into_owned()),
                 "limit"          => limit     = Some(v.parse::<usize>()
@@ -68,8 +68,8 @@ impl<S: Send + Sync> FromRequestParts<S> for SearchParams {
         }
 
         Ok(SearchParams {
-            q:         q.ok_or_else(|| (StatusCode::BAD_REQUEST, "missing 'q'".to_string()))?,
-            mode:      mode.unwrap_or_else(|| "fuzzy".to_string()),
+            q:    q.ok_or_else(|| (StatusCode::BAD_REQUEST, "missing 'q'".to_string()))?,
+            mode,
             source,
             limit:     limit.unwrap_or(50),
             offset:    offset.unwrap_or(0),
@@ -181,7 +181,7 @@ pub async fn search(
     let sources_dir = state.data_dir.join("sources");
     let fts_limit = state.config.search.fts_candidate_limit;
     let query = params.q.clone();
-    let mode = params.mode.clone();
+    let mode = params.mode;
     let limit = params.limit.min(state.config.search.max_limit);
 
     // Build the list of (source_name, db_path) to query.
@@ -228,8 +228,8 @@ pub async fn search(
                 let archive_mgr = ArchiveManager::new_for_reading(data_dir);
 
                 // Document-family modes: one result per file.
-                match mode.as_str() {
-                    "document" => {
+                match mode {
+                    SearchMode::Document => {
                         let (doc_total, candidates) = db::document_candidates(&conn, &archive_mgr, &query, scoring_limit, date_filter, case_sensitive)?;
                         let mut scorer = FuzzyScorer::new(&query, case_sensitive);
                         let result_pairs: Vec<(SearchResult, i64)> = candidates
@@ -254,7 +254,7 @@ pub async fn search(
                             .collect();
                         return Ok((doc_total, results));
                     }
-                    "doc-exact" => {
+                    SearchMode::DocExact => {
                         // Phrase FTS pre-filter → fts_candidates → group by file → exact post-filter.
                         let candidates = db::fts_candidates(&conn, &archive_mgr, &query, scoring_limit, true, date_filter)?;
                         let filtered: Vec<CandidateRow> = candidates.into_iter()
@@ -273,7 +273,7 @@ pub async fn search(
                             .collect();
                         return Ok((source_total, results));
                     }
-                    "doc-regex" => {
+                    SearchMode::DocRegex => {
                         // Literal fragments FTS pre-filter → fts_candidates → group by file → regex post-filter.
                         let fts_terms = regex_to_fts_terms(&query);
                         let re = regex::RegexBuilder::new(&query).case_insensitive(!case_sensitive).build()?;
@@ -299,17 +299,17 @@ pub async fn search(
 
                 // Line-family and file-family modes.
                 // file-* modes restrict matches to line_number = 0 (filename rows).
-                let filename_only = mode.starts_with("file-");
+                let filename_only = matches!(mode, SearchMode::FileFuzzy | SearchMode::FileExact | SearchMode::FileRegex);
                 let date_filter = DateFilter { filename_only, ..date_filter };
 
                 // For regex mode, extract literal character sequences from the pattern
                 // for FTS5 pre-filtering, then apply the full regex as a post-filter.
                 // For exact mode, treat the whole query as a phrase (literal substring).
                 // For fuzzy mode, AND individual words.
-                let (fts_phrase, fts_query) = match mode.as_str() {
-                    "fuzzy" | "file-fuzzy" => (false, query.clone()),
-                    "regex" | "file-regex" => (false, regex_to_fts_terms(&query)),
-                    _ /* "exact" | "file-exact" */ => (true, query.clone()),
+                let (fts_phrase, fts_query) = match mode {
+                    SearchMode::Fuzzy | SearchMode::FileFuzzy => (false, query.clone()),
+                    SearchMode::Regex | SearchMode::FileRegex => (false, regex_to_fts_terms(&query)),
+                    _ /* Exact | FileExact */ => (true, query.clone()),
                 };
 
                 // Fast count via FTS5 only — no ZIP reads, no JOINs.
@@ -325,8 +325,8 @@ pub async fn search(
                 }
 
                 // Build (SearchResult, file_id) pairs for alias lookup.
-                let result_pairs: Vec<(SearchResult, i64)> = match mode.as_str() {
-                    "exact" | "file-exact" => {
+                let result_pairs: Vec<(SearchResult, i64)> = match mode {
+                    SearchMode::Exact | SearchMode::FileExact => {
                         // FTS5 trigram is case-insensitive pre-filter; for case-sensitive mode
                         // add a post-filter to discard candidates that don't literally contain the query.
                         candidates.into_iter()
@@ -334,14 +334,14 @@ pub async fn search(
                             .map(|c| (make_result(&source_name, &c, 0, vec![]), c.file_id))
                             .collect()
                     }
-                    "regex" | "file-regex" => {
+                    SearchMode::Regex | SearchMode::FileRegex => {
                         let re = regex::RegexBuilder::new(&query).case_insensitive(!case_sensitive).build()?;
                         candidates.into_iter()
                             .filter(|c| re.is_match(&c.content))
                             .map(|c| (make_result(&source_name, &c, 0, vec![]), c.file_id))
                             .collect()
                     }
-                    _ /* "fuzzy" | "file-fuzzy" */ => {
+                    _ /* Fuzzy | FileFuzzy */ => {
                         let query_terms: Vec<&str> = if case_sensitive {
                             query.split_whitespace().collect()
                         } else {

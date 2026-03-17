@@ -11,6 +11,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- **`SearchMode`, `RecentAction`, `WorkerQueueSlot` enums (plan 073 stage 2)** — `SearchMode` replaces `mode: String` in `SearchParams`; the search handler now uses an exhaustive `match` instead of `mode.as_str()` string comparisons; `RecentAction` replaces `action: String` on `RecentFile`; `WorkerQueueSlot` replaces `queue: String` on `InboxShowResponse`; all three enums preserve their existing wire formats via `serde` attributes; `SearchMode` uses `#[serde(other)]` on `Fuzzy` to safely handle unknown mode strings from future clients
 - **`FileKind` enum (plan 073 stage 1)** — replaced all `kind: String` fields across the API, DB, and client with a typed `FileKind` enum (`Text`, `Pdf`, `Archive`, `Image`, `Audio`, `Video`, `Document`, `Executable`, `Epub`, `Unknown`); wire format is unchanged (`serde(rename_all = "lowercase")`); `#[serde(other)]` on `Unknown` ensures unrecognised strings from older clients deserialise cleanly; `SourceStats.by_kind` key changes from `String` to `FileKind`; `DateFilter.kinds` becomes `Vec<FileKind>`; `is_text_like()` helper replaces scattered `kind == "text" || kind == "pdf"` checks
 
 ### Added

@@ -12,7 +12,7 @@ use tokio::task::spawn_blocking;
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::StreamExt as _;
 
-use find_common::api::{RecentFile, RecentResponse};
+use find_common::api::{RecentAction, RecentFile, RecentResponse};
 
 use crate::{db, AppState};
 
@@ -80,7 +80,7 @@ pub async fn get_recent(
                             source: source_name.clone(),
                             path,
                             indexed_at,
-                            action: "modified".to_string(),
+                            action: RecentAction::Modified,
                             new_path: None,
                         })
                         .collect())
@@ -88,11 +88,11 @@ pub async fn get_recent(
                     let rows = db::recent_activity(&conn, limit)?;
                     Ok(rows
                         .into_iter()
-                        .map(|(action, path, new_path, occurred_at)| RecentFile {
+                        .map(|(action_str, path, new_path, occurred_at)| RecentFile {
                             source: source_name.clone(),
                             path,
                             indexed_at: occurred_at,
-                            action,
+                            action: RecentAction::from(action_str.as_str()),
                             new_path,
                         })
                         .collect())
@@ -145,17 +145,17 @@ async fn fetch_recent_from_dbs(state: &AppState, limit: usize, sort_by_mtime: bo
                             source: source_name.clone(),
                             path,
                             indexed_at,
-                            action: "modified".to_string(),
+                            action: RecentAction::Modified,
                             new_path: None,
                         }).collect()
                     })
                 } else {
                     db::recent_activity(&conn, limit).map(|rows| {
-                        rows.into_iter().map(|(action, path, new_path, occurred_at)| RecentFile {
+                        rows.into_iter().map(|(action_str, path, new_path, occurred_at)| RecentFile {
                             source: source_name.clone(),
                             path,
                             indexed_at: occurred_at,
-                            action,
+                            action: RecentAction::from(action_str.as_str()),
                             new_path,
                         }).collect()
                     })

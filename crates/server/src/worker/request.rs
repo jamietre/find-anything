@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::Arc;
 
-use find_common::api::{BulkRequest, IndexingFailure, RecentFile};
+use find_common::api::{BulkRequest, IndexingFailure, RecentAction, RecentFile};
 use find_common::path::is_composite;
 
 use crate::archive::SharedArchiveState;
@@ -289,16 +289,16 @@ fn process_request_phase1(
         } else {
             let source = &request.source;
             for path in &activity_added {
-                let _ = recent_tx.send(RecentFile { source: source.clone(), path: path.clone(), indexed_at: now, action: "added".into(),    new_path: None });
+                let _ = recent_tx.send(RecentFile { source: source.clone(), path: path.clone(), indexed_at: now, action: RecentAction::Added,    new_path: None });
             }
             for path in &activity_modified {
-                let _ = recent_tx.send(RecentFile { source: source.clone(), path: path.clone(), indexed_at: now, action: "modified".into(), new_path: None });
+                let _ = recent_tx.send(RecentFile { source: source.clone(), path: path.clone(), indexed_at: now, action: RecentAction::Modified, new_path: None });
             }
             for path in &deleted {
-                let _ = recent_tx.send(RecentFile { source: source.clone(), path: path.clone(), indexed_at: now, action: "deleted".into(),  new_path: None });
+                let _ = recent_tx.send(RecentFile { source: source.clone(), path: path.clone(), indexed_at: now, action: RecentAction::Deleted,  new_path: None });
             }
             for (old, new) in &renamed {
-                let _ = recent_tx.send(RecentFile { source: source.clone(), path: old.clone(),  indexed_at: now, action: "renamed".into(),  new_path: Some(new.clone()) });
+                let _ = recent_tx.send(RecentFile { source: source.clone(), path: old.clone(),  indexed_at: now, action: RecentAction::Renamed,  new_path: Some(new.clone()) });
             }
         }
     }
