@@ -555,11 +555,14 @@ mod tests {
     }
 }
 
-/// Write `stats` into `slot`, replacing any previously cached value.
+/// Write `stats` into `slot`, replacing any previously cached value,
+/// and persist to `server.db` so the value survives a server restart.
 pub fn save_stats_to_slot(
     slot: &Arc<std::sync::RwLock<Option<CompactionStats>>>,
+    data_dir: &Path,
     stats: CompactionStats,
 ) {
+    let _ = save_stats(data_dir, &stats);
     if let Ok(mut g) = slot.write() {
         *g = Some(stats);
     }

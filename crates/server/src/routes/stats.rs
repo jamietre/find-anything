@@ -60,6 +60,19 @@ pub async fn get_stats(
 
     let inbox_paused = state.inbox_paused.load(std::sync::atomic::Ordering::Relaxed);
 
+    // If ?refresh=true, rebuild the cache and refresh compaction stats before reading.
+    if query.refresh {
+        let cache        = Arc::clone(&state.source_stats_cache);
+        let compact_slot = Arc::clone(&state.compaction_stats);
+        let data_dir     = state.data_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            crate::stats_cache::full_rebuild(&data_dir, &cache);
+            if let Ok(compact) = crate::compaction::scan_wasted_space(&data_dir) {
+                crate::compaction::save_stats_to_slot(&compact_slot, &data_dir, compact);
+            }
+        }).await.ok();
+    }
+
     let (orphaned_bytes, orphaned_stats_age_secs) = state.compaction_stats
         .read()
         .ok()
@@ -72,19 +85,6 @@ pub async fn get_stats(
             (Some(s.orphaned_bytes), Some(age))
         }))
         .unwrap_or((None, None));
-
-    // If ?refresh=true, rebuild the cache and refresh compaction stats before reading.
-    if query.refresh {
-        let cache        = Arc::clone(&state.source_stats_cache);
-        let compact_slot = Arc::clone(&state.compaction_stats);
-        let data_dir     = state.data_dir.clone();
-        tokio::task::spawn_blocking(move || {
-            crate::stats_cache::full_rebuild(&data_dir, &cache);
-            if let Ok(compact) = crate::compaction::scan_wasted_space(&data_dir) {
-                crate::compaction::save_stats_to_slot(&compact_slot, compact);
-            }
-        }).await.ok();
-    }
 
     // Compute DB file sizes (fast filesystem metadata, no DB connections needed).
     let db_size_bytes: u64 = {
