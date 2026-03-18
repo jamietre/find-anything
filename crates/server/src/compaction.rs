@@ -185,10 +185,11 @@ pub fn compact_archives(
 
     let referenced = build_referenced_set(&sources_dir);
 
-    let mut archives_scanned:  usize = 0;
+    let mut archives_scanned:   usize = 0;
     let mut archives_rewritten: usize = 0;
-    let mut chunks_removed:    usize = 0;
-    let mut bytes_freed:       u64   = 0;
+    let mut archives_deleted:   usize = 0;
+    let mut chunks_removed:     usize = 0;
+    let mut bytes_freed:        u64   = 0;
 
     for subdir_entry in std::fs::read_dir(&content_dir).into_iter().flatten().flatten() {
         let subdir = subdir_entry.path();
@@ -202,12 +203,14 @@ pub fn compact_archives(
             };
             archives_scanned += 1;
 
-            // Catalog scan: identify orphaned entries and their sizes.
+            // Catalog scan: identify orphaned entries, total entry count, and sizes.
             let mut orphaned: HashSet<String> = HashSet::new();
             let mut orphaned_size: u64 = 0;
+            let total_entries: usize;
             {
                 let file = match File::open(&path) { Ok(f) => f, Err(_) => continue };
                 let mut zip = match ZipArchive::new(file) { Ok(z) => z, Err(_) => continue };
+                total_entries = zip.len();
                 for i in 0..zip.len() {
                     if let Ok(entry) = zip.by_index_raw(i) {
                         let name = entry.name().to_string();
@@ -219,32 +222,71 @@ pub fn compact_archives(
                 }
             }
 
-            if orphaned.is_empty() { continue; }
+            // Case 1: nothing to do — all entries are referenced.
+            if orphaned.is_empty() && total_entries > 0 { continue; }
 
+            // Case 2: archive is already empty (e.g. left over from a previous
+            // compaction pass that rewrote all chunks out but didn't delete).
+            if total_entries == 0 {
+                archives_deleted += 1;
+                if !dry_run {
+                    let lock = shared.rewrite_lock_for(&path);
+                    let _guard = lock.lock().unwrap();
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        tracing::error!("compaction: failed to delete empty archive {}: {e:#}", archive_name);
+                        archives_deleted -= 1;
+                    } else {
+                        tracing::info!("compaction: deleted empty archive {}", archive_name);
+                    }
+                }
+                continue;
+            }
+
+            // Case 3: some or all entries are orphaned.
             chunks_removed += orphaned.len();
             bytes_freed    += orphaned_size;
-            archives_rewritten += 1;
 
-            if dry_run { continue; }
-
-            let lock = shared.rewrite_lock_for(&path);
-            let _guard = lock.lock().unwrap();
-
-            if let Err(e) = rewrite_without(&path, &orphaned) {
-                tracing::error!("compaction: failed to rewrite {}: {e:#}", path.display());
-                archives_rewritten -= 1;
-                chunks_removed -= orphaned.len();
-                bytes_freed    -= orphaned_size;
+            if orphaned.len() == total_entries {
+                // All entries orphaned — delete the whole file, no rewrite needed.
+                archives_deleted += 1;
+                if !dry_run {
+                    let lock = shared.rewrite_lock_for(&path);
+                    let _guard = lock.lock().unwrap();
+                    if let Err(e) = std::fs::remove_file(&path) {
+                        tracing::error!("compaction: failed to delete {}: {e:#}", archive_name);
+                        archives_deleted -= 1;
+                        chunks_removed   -= orphaned.len();
+                        bytes_freed      -= orphaned_size;
+                    } else {
+                        tracing::info!(
+                            "compaction: deleted {} — all {} chunks orphaned ({})",
+                            archive_name, orphaned.len(), find_common::mem::fmt_bytes(orphaned_size),
+                        );
+                    }
+                }
             } else {
-                tracing::info!(
-                    "compaction: rewrote {} — removed {} orphaned chunks ({} bytes)",
-                    archive_name, orphaned.len(), orphaned_size,
-                );
+                // Partial — rewrite, keeping the referenced entries.
+                archives_rewritten += 1;
+                if !dry_run {
+                    let lock = shared.rewrite_lock_for(&path);
+                    let _guard = lock.lock().unwrap();
+                    if let Err(e) = rewrite_without(&path, &orphaned) {
+                        tracing::error!("compaction: failed to rewrite {}: {e:#}", path.display());
+                        archives_rewritten -= 1;
+                        chunks_removed     -= orphaned.len();
+                        bytes_freed        -= orphaned_size;
+                    } else {
+                        tracing::info!(
+                            "compaction: rewrote {} — removed {} orphaned chunks ({})",
+                            archive_name, orphaned.len(), find_common::mem::fmt_bytes(orphaned_size),
+                        );
+                    }
+                }
             }
         }
     }
 
-    Ok(CompactResponse { archives_scanned, archives_rewritten, chunks_removed, bytes_freed, dry_run })
+    Ok(CompactResponse { archives_scanned, archives_rewritten, archives_deleted, chunks_removed, bytes_freed, dry_run })
 }
 
 /// Rewrite `archive_path` omitting the named entries.
@@ -371,11 +413,11 @@ pub fn start_compaction_scanner(
                     }).await;
                     match result {
                         Ok(Ok(resp)) => tracing::info!(
-                            "compaction: done in {:.1}s — {} archives rewritten, {} chunks removed, {} bytes freed",
+                            "compaction: done in {:.1}s — {} archives rewritten, {} chunks removed, {} freed",
                             t0.elapsed().as_secs_f64(),
                             resp.archives_rewritten,
                             resp.chunks_removed,
-                            resp.bytes_freed,
+                            find_common::mem::fmt_bytes(resp.bytes_freed),
                         ),
                         Ok(Err(e)) => tracing::error!("compaction: failed: {e:#}"),
                         Err(e)     => tracing::error!("compaction: task panicked: {e}"),
@@ -578,6 +620,80 @@ mod tests {
         );
     }
 
+    /// When every entry in an archive is orphaned, the whole file should be
+    /// deleted (not rewritten to an empty ZIP).
+    #[test]
+    fn all_orphaned_archive_is_deleted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let data_dir = tmp.path();
+        std::fs::create_dir_all(data_dir.join("sources/content/0000")).unwrap();
+
+        let zip_path = data_dir.join("sources/content/0000/content_00001.zip");
+        write_test_zip(&zip_path, &[("42.0", b"some content"), ("42.1", b"more content")]);
+
+        // No DB entries — both chunks are orphaned.
+        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
+        let resp = compact_archives(data_dir, &shared, false).unwrap();
+
+        assert_eq!(resp.archives_deleted, 1, "fully-orphaned archive should be deleted");
+        assert_eq!(resp.archives_rewritten, 0, "should not rewrite a fully-orphaned archive");
+        assert_eq!(resp.chunks_removed, 2);
+        assert!(!zip_path.exists(), "archive file should be gone");
+    }
+
+    /// Archives that are already empty (22-byte ZIP footer, no entries) should
+    /// be deleted by compaction — these are left over when a previous pass
+    /// rewrote all chunks out but didn't delete the file.
+    #[test]
+    fn pre_existing_empty_archive_is_deleted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let data_dir = tmp.path();
+        std::fs::create_dir_all(data_dir.join("sources/content/0000")).unwrap();
+
+        // Write an empty ZIP (no entries).
+        let zip_path = data_dir.join("sources/content/0000/content_00001.zip");
+        write_test_zip(&zip_path, &[]);
+
+        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
+        let resp = compact_archives(data_dir, &shared, false).unwrap();
+
+        assert_eq!(resp.archives_deleted, 1, "pre-existing empty archive should be deleted");
+        assert_eq!(resp.archives_rewritten, 0);
+        assert_eq!(resp.chunks_removed, 0, "no chunks to remove from empty archive");
+        assert!(!zip_path.exists(), "empty archive file should be gone");
+    }
+
+    /// When only some entries are orphaned the archive should be rewritten
+    /// (not deleted), and the referenced entry must survive.
+    #[test]
+    fn partial_orphan_archive_is_rewritten_not_deleted() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let data_dir = tmp.path();
+        std::fs::create_dir_all(data_dir.join("sources/content/0000")).unwrap();
+
+        let zip_path = data_dir.join("sources/content/0000/content_00001.zip");
+        write_test_zip(&zip_path, &[("42.0", b"referenced"), ("99.0", b"orphaned")]);
+
+        // DB references only "42.0".
+        let db_path = data_dir.join("sources/test_source.db");
+        let conn = crate::db::open(&db_path).unwrap();
+        seed_db_with_chunk_ref(&conn, "content_00001.zip", 42, 0, 0, 10);
+
+        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
+        let resp = compact_archives(data_dir, &shared, false).unwrap();
+
+        assert_eq!(resp.archives_rewritten, 1, "partial archive should be rewritten");
+        assert_eq!(resp.archives_deleted, 0, "partial archive must not be deleted");
+        assert_eq!(resp.chunks_removed, 1);
+        assert!(zip_path.exists(), "archive file should still exist after partial rewrite");
+
+        // Verify the surviving entry is still present.
+        let file = File::open(&zip_path).unwrap();
+        let mut zip = ZipArchive::new(file).unwrap();
+        assert_eq!(zip.len(), 1, "rewritten archive should have exactly 1 entry");
+        assert!(zip.by_name("42.0").is_ok(), "referenced chunk must survive rewrite");
+    }
+
     #[test]
     fn empty_content_dir_returns_zero() {
         let tmp = tempfile::TempDir::new().unwrap();
@@ -621,8 +737,8 @@ async fn run_scan_and_log(
                 0.0
             };
             tracing::info!(
-                "compaction scan: {}/{} bytes orphaned ({:.1}%) in {:.1}s",
-                stats.orphaned_bytes, stats.total_bytes, pct,
+                "compaction scan: {}/{} orphaned ({:.1}%) in {:.1}s",
+                find_common::mem::fmt_bytes(stats.orphaned_bytes), find_common::mem::fmt_bytes(stats.total_bytes), pct,
                 elapsed.as_secs_f64(),
             );
             if let Ok(mut slot) = stats_slot.write() {

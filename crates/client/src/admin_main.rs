@@ -320,24 +320,35 @@ async fn main() -> Result<()> {
                 println!("Compacting archives...");
             }
             let resp = client.compact(dry_run).await.context("running compact")?;
-            if resp.chunks_removed == 0 {
+            let nothing_to_do = resp.chunks_removed == 0 && resp.archives_deleted == 0;
+            if nothing_to_do {
                 println!("No orphaned chunks found across {} archive(s).", resp.archives_scanned);
             } else if dry_run {
+                let would_delete = resp.archives_deleted + resp.archives_rewritten; // rewritten == all-orphan deletes in dry-run
                 println!(
-                    "Would free {} across {} orphaned chunk(s) in {} archive(s)  (of {} scanned).",
+                    "Would free {} across {} orphaned chunk(s) — {} archive(s) to rewrite, {} to delete (of {} scanned).",
                     format_bytes(resp.bytes_freed),
                     resp.chunks_removed,
-                    resp.archives_rewritten, // archives_rewritten == archives that would be rewritten
+                    resp.archives_rewritten,
+                    would_delete,
                     resp.archives_scanned,
                 );
                 println!("Run without --dry-run to apply.");
             } else {
-                println!(
-                    "Freed {} — rewrote {} archive(s), removed {} orphaned chunk(s).",
-                    format_bytes(resp.bytes_freed),
-                    resp.archives_rewritten,
-                    resp.chunks_removed,
-                );
+                let mut parts: Vec<String> = Vec::new();
+                if resp.bytes_freed > 0 {
+                    parts.push(format!("freed {}", format_bytes(resp.bytes_freed)));
+                }
+                if resp.archives_rewritten > 0 {
+                    parts.push(format!("rewrote {} archive(s)", resp.archives_rewritten));
+                }
+                if resp.archives_deleted > 0 {
+                    parts.push(format!("deleted {} empty archive(s)", resp.archives_deleted));
+                }
+                if resp.chunks_removed > 0 {
+                    parts.push(format!("removed {} orphaned chunk(s)", resp.chunks_removed));
+                }
+                println!("{}.", parts.join(", ").replace("freed", "Freed"));
             }
         }
 

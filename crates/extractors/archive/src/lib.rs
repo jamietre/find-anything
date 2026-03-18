@@ -834,6 +834,8 @@ fn make_filename_line(name: &str) -> Vec<IndexLine> {
 /// Note: OOM aborts (`handle_alloc_error`) are NOT catchable — this only handles
 /// regular `panic!()` calls, which includes "capacity overflow" in `raw_vec`.
 fn dispatch_catching_panics(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
+    let span = tracing::debug_span!("member", path = name);
+    let _guard = span.enter();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         find_extract_dispatch::dispatch_from_bytes(bytes, name, cfg)
     })) {

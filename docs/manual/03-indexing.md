@@ -116,6 +116,20 @@ In the web UI, archive files expand in the file tree like directories, and their
 
 ---
 
+## Text normalization
+
+Before content is written to the index, the server normalises each text file to improve search quality:
+
+1. **Built-in pretty-printing** — JSON and TOML are reformatted with consistent indentation.
+2. **External formatter** — optional tools (Biome, Prettier, Ruff, …) can reformat code files.
+3. **Word-wrap** — lines longer than `max_line_length` (default: 120) are split at word boundaries.
+
+External formatters run in **batch mode** (one process per request batch, not one per file), which keeps indexing fast even when a batch contains hundreds of JS or TS files.
+
+See [Configuration → Text normalization](02-configuration.md#text-normalization) for the full formatter reference and recommended Biome/Prettier setup.
+
+---
+
 ## Checking indexing status
 
 ```sh

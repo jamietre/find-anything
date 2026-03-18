@@ -28,16 +28,56 @@ pub use tree::{list_dir, list_sources};
 pub use upload::{upload_init, upload_patch, upload_status};
 pub use self::settings::get_settings;
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::{
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    extract::{ConnectInfo, State},
+    http::{HeaderMap, Request, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Response},
     Json,
 };
 
 use crate::AppState;
+
+// ── Request logger middleware ──────────────────────────────────────────────────
+
+/// Middleware that logs every API request with its method, path, and remote
+/// address.
+///
+/// Destructive admin operations (POST/DELETE/PATCH on `/api/v1/admin/*`) are
+/// logged at INFO so they are always visible in production. Every other request
+/// is logged at DEBUG.
+pub async fn log_request(req: Request<axum::body::Body>, next: Next) -> Response {
+    let method = req.method().as_str();
+    let path   = req.uri().path();
+
+    // Prefer X-Forwarded-For (set by reverse proxies); fall back to the TCP
+    // peer address injected by `into_make_service_with_connect_info`.
+    let addr: String = req.headers()
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|s| s.trim().to_string())
+        .or_else(|| {
+            req.extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|ci| ci.0.to_string())
+        })
+        .unwrap_or_else(|| "-".to_string());
+
+    let is_destructive = matches!(method, "POST" | "DELETE" | "PATCH")
+        && path.starts_with("/api/v1/admin");
+
+    if is_destructive {
+        tracing::info!(method, path, addr, "API request");
+    } else {
+        tracing::debug!(method, path, addr, "API request");
+    }
+
+    next.run(req).await
+}
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
 

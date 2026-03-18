@@ -57,7 +57,7 @@ pub async fn extract_lines_via_subprocess(
 
     match cmd.output().await {
         Ok(out) => {
-            relay_subprocess_logs(&out.stderr);
+            relay_subprocess_logs(&out.stderr, &abs_path.to_string_lossy());
             if out.status.success() {
                 if is_archive {
                     // Parse Vec<MemberBatch> minimally — only extract `lines`.
@@ -133,10 +133,13 @@ pub fn extractor_binary_for(path: &Path, extractor_dir: &Option<String>) -> Stri
 /// appear in the parent process output at the correct level and pass through
 /// the same log-ignore filters as in-process events.
 ///
+/// `file` is the path of the file being extracted — included in every log
+/// line so errors can be traced back to the source file.
+///
 /// tracing-subscriber fmt (no time, no ANSI) formats lines as:
 ///   `{LEVEL} {target}: {message}`
 /// We parse the level prefix and re-emit accordingly.
-pub fn relay_subprocess_logs(stderr: &[u8]) {
+pub fn relay_subprocess_logs(stderr: &[u8], file: &str) {
     let text = std::string::String::from_utf8_lossy(stderr);
     for line in text.lines() {
         let line = line.trim();
@@ -147,18 +150,18 @@ pub fn relay_subprocess_logs(stderr: &[u8]) {
         // Typical format: "WARN target: message" or "ERROR target: message".
         let rest = line.trim_start_matches(|c: char| !c.is_alphanumeric());
         if let Some(msg) = rest.strip_prefix("ERROR ") {
-            error!(target: "subprocess", "{msg}");
+            error!(target: "subprocess", file, "{msg}");
         } else if let Some(msg) = rest.strip_prefix("WARN ") {
-            warn!(target: "subprocess", "{msg}");
+            warn!(target: "subprocess", file, "{msg}");
         } else if let Some(msg) = rest.strip_prefix("INFO ") {
-            info!(target: "subprocess", "{msg}");
+            info!(target: "subprocess", file, "{msg}");
         } else if let Some(msg) = rest.strip_prefix("DEBUG ") {
-            debug!(target: "subprocess", "{msg}");
+            debug!(target: "subprocess", file, "{msg}");
         } else if let Some(msg) = rest.strip_prefix("TRACE ") {
-            debug!(target: "subprocess", "{msg}");
+            debug!(target: "subprocess", file, "{msg}");
         } else {
             // Unknown format — emit as warn so it's not silently dropped.
-            warn!(target: "subprocess", "{line}");
+            warn!(target: "subprocess", file, "{line}");
         }
     }
 }

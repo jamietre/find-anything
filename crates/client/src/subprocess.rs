@@ -493,7 +493,7 @@ pub async fn extract_via_subprocess(
             SubprocessOutcome::Failed
         }
         Ok(Ok(out)) => {
-            relay_subprocess_logs(&out.stderr);
+            relay_subprocess_logs(&out.stderr, &abs_path.to_string_lossy());
             if out.status.success() {
                 let lines = if is_archive {
                     let batches: Vec<MemberBatch> =
@@ -644,7 +644,7 @@ pub fn start_archive_subprocess(
         }
 
         if let Ok(stderr_bytes) = stderr_handle.await {
-            relay_subprocess_logs(&stderr_bytes);
+            relay_subprocess_logs(&stderr_bytes, &abs_path.to_string_lossy());
         }
 
         success
@@ -688,20 +688,23 @@ pub(crate) fn parse_relay_line(
 /// appear in the parent process output at the correct level and pass through
 /// the same log-ignore filters as in-process events.
 ///
+/// `file` is the path of the file being extracted — included in every log
+/// line so errors can be traced back to the source file.
+///
 /// tracing-subscriber fmt (no time, no ANSI) formats lines as:
 ///   `{LEVEL} {target}: {message}`
 /// We parse the level prefix and re-emit accordingly.
-pub fn relay_subprocess_logs(stderr: &[u8]) {
+pub fn relay_subprocess_logs(stderr: &[u8], file: &str) {
     let text = String::from_utf8_lossy(stderr);
     for line in text.lines() {
         let Some((tag, msg)) = parse_relay_line(line, find_common::logging::is_ignored) else {
             continue;
         };
         match tag {
-            "ERROR" => error!(target: "subprocess", "{msg}"),
-            "WARN"  => warn!(target: "subprocess", "{msg}"),
-            "INFO"  => info!(target: "subprocess", "{msg}"),
-            _       => debug!(target: "subprocess", "{msg}"),
+            "ERROR" => error!(target: "subprocess", file, "{msg}"),
+            "WARN"  => warn!(target: "subprocess", file, "{msg}"),
+            "INFO"  => info!(target: "subprocess", file, "{msg}"),
+            _       => debug!(target: "subprocess", file, "{msg}"),
         }
     }
 }

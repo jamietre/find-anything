@@ -11,6 +11,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **Server memory reduction (plan 077)** — three memory bugs fixed in the indexing worker: (1) `archive_batch.rs` now processes one gz at a time (two sub-phases: ZIP I/O then batched SQLite writes), eliminating the `upsert_map` clone that held all batch content simultaneously; (2) `request.rs` streams gz files directly from disk via `serde_json::from_reader` + `GzDecoder<BufReader<File>>` instead of buffering the whole file in a `Vec<u8>` then a `String`; (3) `request.rs` consumes `files` by value so normalization no longer clones content strings
+- **Batch formatter mode (`mode = "batch"`)** — new `FormatterMode::Batch` in `FormatterConfig`; all matching files in a batch are written to a temp directory and the formatter is called once on the directory (use `{dir}` in `args`); reduces 150 biome spawns to 1 for a typical JS/TS batch; existing `stdin` mode unchanged and still default
+- **Compaction deletes fully-orphaned archives** — when every entry in an archive is orphaned the file is now deleted outright instead of being rewritten to an empty ZIP; pre-existing empty archives (left over from previous passes) are also cleaned up; `CompactResponse` gains `archives_deleted`
+- **Request logger middleware** — every API request is logged with method, path, and remote address; destructive admin operations (POST/DELETE/PATCH on `/api/v1/admin/*`) log at INFO, all others at DEBUG; remote address prefers `X-Forwarded-For` header
+- **`fmt_bytes` utility** — `find_common::mem::fmt_bytes` formats byte counts as human-readable strings (e.g. `"2.4 GB"`); used in compaction and log messages throughout
+- **Subprocess log lines include source file path** — `relay_subprocess_logs` now takes a `file` parameter and includes it as a structured field in every relayed log line, so extractor errors can be traced back to the file being processed
+
+### Fixed
+
+- **`delete_source` cache eviction uses stale local** — `guard.sources.retain(|s| s.name != source_name)` used a local variable copy instead of `query.source`, meaning the stats cache was never pruned after deleting a source; now uses `query.source` directly
+- **Compaction log messages showed raw byte counts** — compaction scan and compact route now use `fmt_bytes` for human-readable output
+
 - **Nested archive extraction for external extractors** — when a tempdir-based external extractor (e.g. unrar) extracts a member that is itself a recognized archive (ZIP, 7z, TAR, etc.), `run_external_tempdir` now calls `extract_streaming` on it and prefixes `archive_path` values with `member_rel::`, mirroring `handle_nested_archive` in the native path; composite paths like `outer.rar::inner.zip::hello.txt` are now produced correctly
 - **Consistent external dispatch for archive members** — `ExtractorConfig` gains an `external_dispatch` map (populated from `[scan.extractors]` by `extractor_config_from_scan`); `extract_member_bytes` in the archive extractor checks this map first, so any extension registered as an external extractor is handled identically whether found at top level or nested inside a ZIP, 7z, or any other archive format
 - **`ExternalDispatchMode` / `ExternalMemberDispatch` types** — new types in `find_extract_types` carry external-extractor config into the archive extraction pipeline without creating a dependency on `find_common`

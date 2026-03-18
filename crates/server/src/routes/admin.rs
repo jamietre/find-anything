@@ -139,6 +139,7 @@ pub async fn inbox_clear(
             "all" => delete_gz_in(&inbox_dir) + delete_gz_in(&failed_dir),
             _ => delete_gz_in(&inbox_dir), // "pending" or anything else
         };
+        tracing::info!("Inbox cleared: target={target}, {deleted} file(s) removed");
         Ok(Json(InboxDeleteResponse { deleted }))
     }).await
 }
@@ -171,6 +172,7 @@ pub async fn inbox_retry(
                 }
             }
         }
+        tracing::info!("Inbox retry: {count} failed request(s) moved back to inbox");
         Ok(Json(InboxRetryResponse { retried: count }))
     }).await
 }
@@ -563,14 +565,15 @@ pub async fn compact(
         let resp = crate::compaction::compact_archives(&data_dir, &shared, dry_run)?;
         if dry_run {
             tracing::info!(
-                "compact (dry-run): {} archives, {} orphaned chunks, {} bytes would be freed",
-                resp.archives_scanned, resp.chunks_removed, resp.bytes_freed,
+                "compact (dry-run): {} archives, {} orphaned chunks, {} would be freed",
+                resp.archives_scanned, resp.chunks_removed,
+                find_common::mem::fmt_bytes(resp.bytes_freed),
             );
         } else {
             tracing::info!(
-                "compact: rewrote {}/{} archives, removed {} chunks, freed {} bytes",
+                "compact: rewrote {}/{} archives, removed {} chunks, freed {}",
                 resp.archives_rewritten, resp.archives_scanned,
-                resp.chunks_removed, resp.bytes_freed,
+                resp.chunks_removed, find_common::mem::fmt_bytes(resp.bytes_freed),
             );
         }
         Ok(Json(resp))
@@ -614,6 +617,13 @@ pub async fn delete_source(
         let chunk_refs = db::collect_all_chunk_refs(&conn)?;
         let chunks_removed = chunk_refs.len();
 
+        tracing::warn!(
+            source = %source_name,
+            files = files_deleted,
+            chunks = chunks_removed,
+            "source deleted"
+        );
+
         // Close the DB before deleting it.
         drop(conn);
 
@@ -634,7 +644,7 @@ pub async fn delete_source(
     // no longer reports it.  Do this regardless of the exact response shape
     // (the file is already gone if we get this far).
     if let Ok(mut guard) = source_stats_cache.write() {
-        guard.sources.retain(|s| s.name != source_name);
+        guard.sources.retain(|s| s.name != query.source);
     }
     stats_watch.send_modify(|v| *v = v.wrapping_add(1));
 

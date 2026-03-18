@@ -799,6 +799,20 @@ pub enum ExtractorEntry {
     External(ExternalExtractorConfig),
 }
 
+/// How the formatter receives file content.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum FormatterMode {
+    /// One process per file; content passed via stdin, formatted content read
+    /// from stdout. Existing behaviour.
+    #[default]
+    Stdin,
+    /// One process per batch; files written to a temp directory, formatter
+    /// runs on the directory, formatted files read back. Use `{dir}` in `args`
+    /// as a placeholder for the temp directory path.
+    Batch,
+}
+
 /// Configuration for a single external formatter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FormatterConfig {
@@ -806,10 +820,16 @@ pub struct FormatterConfig {
     pub path: String,
     /// File extensions this formatter handles (without leading dot, lowercase).
     pub extensions: Vec<String>,
-    /// Command-line arguments. Use `{name}` as a placeholder for the filename
-    /// (used by tools like biome/prettier to detect the file type).
-    /// Example: `["format", "--stdin-filepath", "{name}", "-"]`
+    /// Command-line arguments.
+    ///
+    /// - `stdin` mode: use `{name}` as a placeholder for the filename
+    ///   (e.g. `["format", "--stdin-filepath", "{name}", "-"]`).
+    /// - `batch` mode: use `{dir}` as a placeholder for the temp directory
+    ///   (e.g. `["format", "--write", "{dir}"]`).
     pub args: Vec<String>,
+    /// How this formatter receives input. Default: `stdin`.
+    #[serde(default)]
+    pub mode: FormatterMode,
 }
 
 /// Server-side text normalization settings.

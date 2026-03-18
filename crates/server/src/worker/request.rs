@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use rusqlite::ErrorCode;
-use std::io::{Read, Write};
+use std::io::{BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -152,16 +152,18 @@ fn process_request_phase1(
     let req_stem = request_path.file_stem().and_then(|s| s.to_str()).unwrap_or("?");
     let pre_tag = format!("[indexer:?:{req_stem}]");
 
-    let (compressed, request): (Vec<u8>, BulkRequest) = timed!(pre_tag, "read+decode gz", {
-        let compressed = std::fs::read(request_path)?;
-        let mut decoder = GzDecoder::new(&compressed[..]);
-        let mut json = String::new();
-        decoder.read_to_string(&mut json)?;
-        let request: BulkRequest = serde_json::from_str(&json)
-            .context("parsing bulk request JSON")?;
-        (compressed, request)
+    // Bug fix: stream directly from disk rather than reading the whole gz into
+    // a Vec<u8> and then decompressing into a String before parsing.  This
+    // keeps only the parsed BulkRequest in memory — no intermediate buffers.
+    let compressed_bytes = std::fs::metadata(request_path)
+        .map(|m| m.len() as usize)
+        .unwrap_or(0);
+    let mut request: BulkRequest = timed!(pre_tag, "read+decode gz", {
+        let file = std::fs::File::open(request_path)?;
+        let decoder = GzDecoder::new(BufReader::new(file));
+        serde_json::from_reader(decoder)
+            .context("parsing bulk request JSON")?
     });
-    let compressed_bytes = compressed.len();
 
     let n_files = request.files.len();
     let n_deletes = request.delete_paths.len();
@@ -232,10 +234,35 @@ fn process_request_phase1(
     let mut successfully_indexed: Vec<String> = Vec::new();
     let mut activity_added: Vec<String> = Vec::new();
     let mut activity_modified: Vec<String> = Vec::new();
-    let mut normalized_files: Vec<find_common::api::IndexFile> = Vec::with_capacity(request.files.len());
+
+    // Bug fix: take ownership of the files vec before the loop so each file is
+    // consumed by value — no clone of lines for normalization and no clone when
+    // pushing to normalized_files.  request.files becomes empty here; all other
+    // request fields (source, delete_paths, etc.) remain accessible below.
+    let mut files_owned = std::mem::take(&mut request.files);
+    let mut normalized_files: Vec<find_common::api::IndexFile> = Vec::with_capacity(files_owned.len());
+
+    // Batch normalize: collect (index, path, lines) for all text-like files,
+    // run batch-mode formatters once per batch, then per-file for the rest.
+    tracing::debug!("{tag} → normalize {} files", n_files);
+    let norm_start = std::time::Instant::now();
+    {
+        let mut to_normalize: Vec<(usize, String, Vec<find_common::api::IndexLine>)> =
+            files_owned.iter_mut()
+                .enumerate()
+                .filter(|(_, f)| f.kind.is_text_like())
+                .map(|(i, f)| (i, f.path.clone(), std::mem::take(&mut f.lines)))
+                .collect();
+        normalize::normalize_batch_indexed(&mut to_normalize, &cfg.normalization);
+        for (i, _, lines) in to_normalize {
+            files_owned[i].lines = lines;
+        }
+    }
+    tracing::debug!("{tag} ← normalize {} files ({:.1}ms)", n_files, norm_start.elapsed().as_secs_f64() * 1000.0);
+
     tracing::debug!("{tag} → index {} files", n_files);
     let index_loop_start = std::time::Instant::now();
-    for file in &request.files {
+    for file in files_owned {
         if let Ok(mut guard) = status.lock() {
             *guard = find_common::api::WorkerStatus::Processing {
                 source: request.source.clone(),
@@ -243,24 +270,8 @@ fn process_request_phase1(
             };
         }
         let file_start = std::time::Instant::now();
-        let normalized_file;
-        let file = if file.kind.is_text_like() {
-            let normalized_lines = timed!(tag, format!("normalize {}", file.path), {
-                normalize::normalize_lines(
-                    file.lines.clone(),
-                    &file.path,
-                    &cfg.normalization,
-                )
-            });
-            normalized_file = find_common::api::IndexFile {
-                lines: normalized_lines,
-                ..file.clone()
-            };
-            &normalized_file
-        } else {
-            file
-        };
-        match pipeline::process_file_phase1(&mut conn, file, cfg.inline_threshold_bytes) {
+
+        match pipeline::process_file_phase1(&mut conn, &file, cfg.inline_threshold_bytes) {
             Ok(outcome) => {
                 successfully_indexed.push(file.path.clone());
                 if file.mtime != 0 && !is_composite(&file.path) {
@@ -302,9 +313,9 @@ fn process_request_phase1(
                     tracing::error!("Failed to index {}: {e:#}", file.path);
                 }
                 let (fallback, skip_inner) = if pipeline::is_outer_archive(&file.path, &file.kind) {
-                    (pipeline::outer_archive_stub(file), true)
+                    (pipeline::outer_archive_stub(&file), true)
                 } else {
-                    (pipeline::filename_only_file(file), false)
+                    (pipeline::filename_only_file(&file), false)
                 };
                 if let Err(e2) = pipeline::process_file_phase1_fallback(&mut conn, &fallback, skip_inner, cfg.inline_threshold_bytes) {
                     if is_db_locked(&e2) {
@@ -320,7 +331,7 @@ fn process_request_phase1(
             }
         }
         warn_slow(file_start, 30, "process_file_phase1", &file.path);
-        normalized_files.push(file.clone());
+        normalized_files.push(file); // moved, not cloned
     }
     tracing::debug!("{tag} ← index {} files ({:.1}ms)", n_files, index_loop_start.elapsed().as_secs_f64() * 1000.0);
 
@@ -812,6 +823,151 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM files WHERE path = 'data/file.txt'", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 1, "file should be present after delete+upsert in same request (upsert wins)");
+    }
+
+    /// Helper: read the normalized BulkRequest written to `to_archive_dir` by phase 1.
+    fn read_to_archive_gz(to_archive_dir: &std::path::Path) -> BulkRequest {
+        let gz_files: Vec<_> = std::fs::read_dir(to_archive_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("gz"))
+            .collect();
+        assert_eq!(gz_files.len(), 1, "expected exactly one .gz in to_archive_dir");
+        let path = gz_files[0].path();
+        let file = std::fs::File::open(&path).unwrap();
+        let decoder = flate2::read::GzDecoder::new(std::io::BufReader::new(file));
+        serde_json::from_reader(decoder).unwrap()
+    }
+
+    /// A text file with a long line should have its lines word-wrapped in the
+    /// normalized gz written to to-archive/.  This verifies that normalization
+    /// still fires correctly through the owned-files (no-clone) code path.
+    #[test]
+    fn normalization_applied_to_text_file() {
+        let (_tmp, data_dir, to_archive_dir, inbox_dir) = setup_dirs();
+        let shared = crate::archive::SharedArchiveState::new(data_dir.clone()).unwrap();
+        let (recent_tx, _rx) = tokio::sync::broadcast::channel::<find_common::api::RecentFile>(16);
+
+        // Build a line longer than the default max_line_length (120 chars).
+        let long_line = "word ".repeat(40).trim_end().to_string(); // ~199 chars
+        assert!(long_line.len() > 120);
+
+        let req = BulkRequest {
+            source: "testsource".to_string(),
+            files: vec![IndexFile {
+                path: "src/main.js".to_string(),
+                mtime: 1_000_000,
+                size: Some(long_line.len() as i64),
+                kind: FileKind::Text,
+                scanner_version: 1,
+                lines: vec![
+                    IndexLine { archive_path: None, line_number: 0, content: "[PATH] src/main.js".to_string() },
+                    IndexLine { archive_path: None, line_number: 1, content: long_line.clone() },
+                ],
+                extract_ms: None,
+                content_hash: None,
+                is_new: true,
+            }],
+            delete_paths: vec![],
+            rename_paths: vec![],
+            scan_timestamp: None,
+            indexing_failures: vec![],
+        };
+
+        let request_path = inbox_dir.join("req001.gz");
+        write_bulk_request_gz(&request_path, &req);
+
+        // Use a config with max_line_length=120 (the default).
+        let cfg = WorkerConfig {
+            normalization: find_common::config::NormalizationSettings {
+                max_line_length: 120,
+                formatters: vec![],
+            },
+            ..make_worker_config()
+        };
+
+        process_request_phase1(
+            &data_dir, &request_path, &to_archive_dir,
+            &make_status(), cfg,
+            &shared, &recent_tx, &make_stats_watch(),
+        ).unwrap();
+
+        // Read the normalized gz and verify lines were wrapped.
+        let normalized = read_to_archive_gz(&to_archive_dir);
+        let file = &normalized.files[0];
+        let content_lines: Vec<_> = file.lines.iter().filter(|l| l.line_number > 0).collect();
+        assert!(
+            content_lines.len() > 1,
+            "long line should have been wrapped into multiple lines, got: {:?}",
+            content_lines
+        );
+        for l in &content_lines {
+            assert!(
+                l.content.len() <= 120,
+                "normalized line exceeds max_line_length: {:?}",
+                l.content
+            );
+        }
+        // The wrapped lines should reconstruct the original content when joined.
+        let reassembled = content_lines.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join(" ");
+        assert_eq!(reassembled.split_whitespace().collect::<Vec<_>>(),
+                   long_line.split_whitespace().collect::<Vec<_>>(),
+                   "word content should be preserved after wrapping");
+    }
+
+    /// Non-text files (e.g. images) must NOT be passed through normalization —
+    /// their lines should reach to-archive/ unchanged.
+    #[test]
+    fn normalization_skipped_for_non_text_file() {
+        let (_tmp, data_dir, to_archive_dir, inbox_dir) = setup_dirs();
+        let shared = crate::archive::SharedArchiveState::new(data_dir.clone()).unwrap();
+        let (recent_tx, _rx) = tokio::sync::broadcast::channel::<find_common::api::RecentFile>(16);
+
+        let exif_line = "DateTimeOriginal: 2024:01:15 14:30:00";
+        let req = BulkRequest {
+            source: "testsource".to_string(),
+            files: vec![IndexFile {
+                path: "photo.jpg".to_string(),
+                mtime: 1_000_000,
+                size: Some(1024),
+                kind: FileKind::Image,
+                scanner_version: 1,
+                lines: vec![
+                    IndexLine { archive_path: None, line_number: 0, content: "[PATH] photo.jpg".to_string() },
+                    IndexLine { archive_path: None, line_number: 1, content: exif_line.to_string() },
+                ],
+                extract_ms: None,
+                content_hash: None,
+                is_new: true,
+            }],
+            delete_paths: vec![],
+            rename_paths: vec![],
+            scan_timestamp: None,
+            indexing_failures: vec![],
+        };
+
+        let request_path = inbox_dir.join("req001.gz");
+        write_bulk_request_gz(&request_path, &req);
+
+        let cfg = WorkerConfig {
+            normalization: find_common::config::NormalizationSettings {
+                max_line_length: 120,
+                formatters: vec![],
+            },
+            ..make_worker_config()
+        };
+
+        process_request_phase1(
+            &data_dir, &request_path, &to_archive_dir,
+            &make_status(), cfg,
+            &shared, &recent_tx, &make_stats_watch(),
+        ).unwrap();
+
+        let normalized = read_to_archive_gz(&to_archive_dir);
+        let file = &normalized.files[0];
+        let content_lines: Vec<_> = file.lines.iter().filter(|l| l.line_number > 0).collect();
+        assert_eq!(content_lines.len(), 1, "image file should have exactly one content line");
+        assert_eq!(content_lines[0].content, exif_line, "image line must be unchanged by normalization");
     }
 }
 

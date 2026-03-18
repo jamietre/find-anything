@@ -16,6 +16,7 @@ use anyhow::{Context, Result};
 use axum::{
     extract::{DefaultBodyLimit, State},
     http::{header, StatusCode},
+    middleware,
     response::IntoResponse,
     routing::{delete, get, head, patch, post},
     Router,
@@ -258,5 +259,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .with_state(Arc::clone(&state));
 
     upload_routes.merge(app)
+        .layer(middleware::from_fn(routes::log_request))
         .layer(TraceLayer::new_for_http())
 }

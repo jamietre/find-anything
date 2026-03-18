@@ -205,22 +205,26 @@ extractor_dir = ""
 
 ## Text normalization
 
-The server applies normalization to text and PDF content before writing it to the index. This turns minified files into readable, line-per-concept content and ensures no line exceeds a configured length. Normalization does not modify markdown files.
+The server applies normalization to text and PDF content before writing it to the index. This turns minified files into readable, line-per-concept content and ensures no line exceeds a configured length.
 
 ```toml
 [normalization]
 max_line_length = 120   # wrap lines longer than this (0 = disabled)
 
-# External formatters are tried in order; first match that exits 0 wins.
-# [[normalization.formatters]]
-# path       = "/usr/local/bin/biome"
-# extensions = ["js", "ts", "jsx", "tsx", "css", "graphql", "json", "jsonc"]
-# args       = ["format", "--stdin-file-path", "{name}", "-"]
-#
-# [[normalization.formatters]]
-# path       = "/usr/local/bin/prettier"
-# extensions = ["html", "vue", "svelte", "scss", "less", "yaml", "yml", "md"]
-# args       = ["--stdin-filepath", "{name}"]
+# External formatters — recommended: use mode = "batch" (one process per batch,
+# much faster than the default stdin mode which spawns once per file).
+
+[[normalization.formatters]]
+path       = "/usr/local/bin/biome"
+extensions = ["js", "ts", "jsx", "tsx", "css", "graphql"]
+args       = ["format", "--write", "{dir}"]
+mode       = "batch"
+
+[[normalization.formatters]]
+path       = "/usr/local/bin/prettier"
+extensions = ["html", "vue", "svelte", "scss", "less", "yaml", "yml"]
+args       = ["--write", "{dir}"]
+mode       = "batch"
 ```
 
 ### How normalization works
@@ -228,10 +232,10 @@ max_line_length = 120   # wrap lines longer than this (0 = disabled)
 For each indexed text file the server attempts the following steps in order, stopping at the first success:
 
 1. **Built-in pretty-printer** — JSON and TOML files are pretty-printed using the built-in `serde_json` / `toml` crates. Parse failures fall through to step 2.
-2. **External formatter** — the `formatters` list is walked in order. The first entry whose `extensions` list matches the file is invoked with the file content on stdin. If it exits 0 and writes non-empty output, that output is used. Failures (non-zero exit, timeout after 5 s, empty output) try the next entry.
+2. **External formatter** — the `formatters` list is walked in order. The first entry whose `extensions` list matches the file is used. How it is invoked depends on `mode` (see below).
 3. **Word-wrap** — any line longer than `max_line_length` characters is split at the last word boundary before the limit. This step always runs after steps 1–2.
 
-**Markdown files are excluded** — line structure is semantically meaningful in markdown (a wrapped paragraph would break rendering). Markdown is never modified regardless of line length.
+**Markdown files are excluded** — line structure is semantically meaningful in markdown. Markdown is never modified regardless of line length.
 
 **Existing content is not retroactively normalized.** Normalization applies only when a file is indexed for the first time or re-indexed. To normalize already-indexed files, run `find-scan --force`.
 
@@ -244,43 +248,80 @@ For each indexed text file the server attempts the following steps in order, sto
 
 ### External formatter configuration
 
-Each `[[normalization.formatters]]` entry has three fields:
+Each `[[normalization.formatters]]` entry supports these fields:
 
 | Field | Description |
 |---|---|
 | `path` | Absolute path to the formatter binary |
 | `extensions` | List of file extensions (without `.`, lowercase) this formatter handles |
-| `args` | Command-line arguments. Use `{name}` as a placeholder for the filename (needed by tools that detect file type from the name) |
+| `args` | Command-line arguments. Use `{dir}` (batch mode) or `{name}` (stdin mode) as a placeholder |
+| `mode` | `"batch"` or `"stdin"` — how the formatter receives input. Default: `"stdin"` |
 
-The formatter receives the file content on **stdin** and must write the formatted result to **stdout**.
+#### `mode = "batch"` (recommended)
+
+All matching files in the request are written to a temp directory (`00001.ext`, `00002.ext`, …) and the formatter is run **once on the whole directory**. Use `{dir}` in `args` for the temp directory path. The formatter must modify files in-place.
+
+This is much faster than stdin mode for large batches — a request with 150 JS files calls the formatter once instead of 150 times.
+
+#### `mode = "stdin"` (default)
+
+The formatter is invoked **once per file** with the file's content on stdin. It must write the formatted result to stdout. Exit code 0 with non-empty stdout is treated as success; non-zero exit or empty output falls through to the next formatter. Use `{name}` in `args` for the filename (needed by tools that detect file type from the extension).
+
+Use stdin mode for tools that do not support formatting a directory (e.g. `gofmt`, `rustfmt`).
 
 ### Well-known formatters
 
-| Tool | Extensions | Install |
-|---|---|---|
-| [Biome](https://biomejs.dev/) | `js ts jsx tsx css graphql json jsonc` | [biomejs.dev/installation](https://biomejs.dev/installation/) |
-| [Prettier](https://prettier.io/) | `html vue svelte angular scss less yaml yml md` (and 50+ via plugins) | [prettier.io/docs/en/install](https://prettier.io/docs/en/install.html) |
-| [Ruff](https://docs.astral.sh/ruff/) | `py pyi` | [docs.astral.sh/ruff/installation](https://docs.astral.sh/ruff/installation/) |
-| [gofmt](https://pkg.go.dev/cmd/gofmt) | `go` | Bundled with the [Go toolchain](https://go.dev/doc/install) |
-| [rustfmt](https://rust-lang.github.io/rustfmt/) | `rs` | Bundled with `rustup` — `rustup component add rustfmt` |
-| [CSharpier](https://csharpier.com/) | `cs` | [csharpier.com/docs/Installation](https://csharpier.com/docs/Installation) |
-| [Taplo](https://taplo.tamasfe.dev/) | `toml` | [taplo.tamasfe.dev/#installation](https://taplo.tamasfe.dev/#installation) (overrides built-in TOML formatter) |
+| Tool | Extensions | Recommended mode | Install |
+|---|---|---|---|
+| [Biome](https://biomejs.dev/) | `js ts jsx tsx css graphql json jsonc` | batch | [biomejs.dev/installation](https://biomejs.dev/installation/) |
+| [Prettier](https://prettier.io/) | `html vue svelte angular scss less yaml yml md` (and 50+ via plugins) | batch | [prettier.io/docs/en/install](https://prettier.io/docs/en/install.html) |
+| [Ruff](https://docs.astral.sh/ruff/) | `py pyi` | batch | [docs.astral.sh/ruff/installation](https://docs.astral.sh/ruff/installation/) |
+| [gofmt](https://pkg.go.dev/cmd/gofmt) | `go` | stdin | Bundled with the [Go toolchain](https://go.dev/doc/install) |
+| [rustfmt](https://rust-lang.github.io/rustfmt/) | `rs` | stdin | Bundled with `rustup` — `rustup component add rustfmt` |
+| [CSharpier](https://csharpier.com/) | `cs` | batch | [csharpier.com/docs/Installation](https://csharpier.com/docs/Installation) |
+| [Taplo](https://taplo.tamasfe.dev/) | `toml` | stdin | [taplo.tamasfe.dev/#installation](https://taplo.tamasfe.dev/#installation) (overrides built-in TOML formatter) |
 
-**Recommended setup** — configure Biome first (fast Rust binary, covers most common code types with no runtime dependency) and Prettier second (slower Node.js, but covers HTML, Vue, Svelte, and anything Biome doesn't handle). Extensions that appear in both lists are served by Biome because it comes first:
+### Recommended setup
+
+Configure Biome first (fast Rust binary, no runtime dependency, covers most common web code) and Prettier second (slower Node.js, but covers HTML, Vue, Svelte, and anything Biome doesn't handle):
 
 ```toml
 [[normalization.formatters]]
 path       = "/usr/local/bin/biome"
 extensions = ["js", "ts", "jsx", "tsx", "css", "graphql"]
-args       = ["format", "--stdin-file-path", "{name}", "-"]
+args       = ["format", "--write", "{dir}"]
+mode       = "batch"
 
 [[normalization.formatters]]
 path       = "/usr/local/bin/prettier"
 extensions = ["html", "vue", "svelte", "scss", "less", "yaml", "yml"]
-args       = ["--stdin-filepath", "{name}"]
+args       = ["--write", "{dir}"]
+mode       = "batch"
 ```
 
-> **Note:** Tools must be explicitly configured with an absolute `path`. There is no auto-detection from `$PATH` — this avoids unexpected behaviour across environments where the same tool may be installed in different locations (or not at all).
+For Python, Go, and Rust:
+
+```toml
+[[normalization.formatters]]
+path       = "/usr/local/bin/ruff"
+extensions = ["py", "pyi"]
+args       = ["format", "{dir}"]
+mode       = "batch"
+
+[[normalization.formatters]]
+path       = "/usr/local/bin/gofmt"
+extensions = ["go"]
+args       = []
+# mode = "stdin"  (default — gofmt reads stdin, writes stdout)
+
+[[normalization.formatters]]
+path       = "/home/user/.cargo/bin/rustfmt"
+extensions = ["rs"]
+args       = ["--edition", "2021"]
+# mode = "stdin"  (default)
+```
+
+> **Note:** Tools must be configured with an absolute `path`. There is no auto-detection from `$PATH` — this avoids unexpected behaviour across environments where the same tool may be installed in different locations (or not at all).
 
 ---
 

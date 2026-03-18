@@ -628,6 +628,9 @@ pub struct InboxResumeResponse {}
 pub struct CompactResponse {
     pub archives_scanned: usize,
     pub archives_rewritten: usize,
+    /// Archives deleted entirely (all entries were orphaned, or the archive was
+    /// already empty from a previous compaction pass).
+    pub archives_deleted: usize,
     pub chunks_removed: usize,
     pub bytes_freed: u64,
     pub dry_run: bool,
