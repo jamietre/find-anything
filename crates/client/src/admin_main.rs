@@ -141,26 +141,18 @@ async fn main() -> Result<()> {
                     print!("{}", format_status(&stats));
                 }
             } else {
-                // Watch mode: clear screen and redraw from top on each poll.
-                // Always do a full clear so lines that got shorter don't leave
-                // trailing characters from the previous draw.
+                // Watch mode: event-driven via SSE stream — redraws on each cache update.
                 use std::io::Write;
-                let poll = std::time::Duration::from_secs_f64(config.cli.poll_interval_secs);
-                loop {
-                    match client.get_stats(refresh).await {
-                        Ok(stats) => {
-                            let output = format_status(&stats);
-                            print!("\x1b[2J\x1b[H{output}");
-                            std::io::stdout().flush().ok();
-                        }
-                        Err(e) => {
-                            eprintln!("Error fetching stats: {e:#}");
-                        }
+                let stream = client.stream_stats(|event| {
+                    let output = format_stream_status(&event);
+                    print!("\x1b[2J\x1b[H{output}");
+                    std::io::stdout().flush().ok();
+                });
+                tokio::select! {
+                    result = stream => {
+                        if let Err(e) = result { eprintln!("Stream error: {e:#}"); }
                     }
-                    tokio::select! {
-                        _ = tokio::time::sleep(poll) => {}
-                        _ = tokio::signal::ctrl_c() => { println!(); break; }
-                    }
+                    _ = tokio::signal::ctrl_c() => { println!(); }
                 }
             }
         }
@@ -537,6 +529,22 @@ fn format_status(stats: &find_common::api::StatsResponse) -> String {
         WorkerStatus::Idle => writeln!(out, "Worker:   idle").unwrap(),
         WorkerStatus::Processing { source, file } =>
             writeln!(out, "Worker:   {} processing {}/{}", "●".cyan(), source, file).unwrap(),
+    }
+    out
+}
+
+fn format_stream_status(event: &find_common::api::StatsStreamEvent) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    writeln!(out, "Sources (live):").unwrap();
+    for s in &event.sources {
+        writeln!(
+            out,
+            "  {:20}  {:>6} files  {:>10}",
+            s.name,
+            s.total_files,
+            format_bytes(s.total_size as u64),
+        ).unwrap();
     }
     out
 }

@@ -9,8 +9,8 @@ use find_common::api::{
     AppSettingsResponse, BulkRequest, CompactResponse, ContextResponse, FileRecord,
     InboxDeleteResponse, InboxPauseResponse, InboxResumeResponse, InboxRetryResponse,
     InboxShowResponse, InboxStatusResponse, RecentFile, RecentResponse, SearchResponse,
-    SourceDeleteResponse, SourceInfo, StatsResponse, UploadInitRequest, UploadInitResponse,
-    UploadPatchResponse, UploadStatusResponse,
+    SourceDeleteResponse, SourceInfo, StatsResponse, StatsStreamEvent, UploadInitRequest,
+    UploadInitResponse, UploadPatchResponse, UploadStatusResponse,
 };
 
 pub struct ApiClient {
@@ -207,6 +207,39 @@ impl ApiClient {
                         if let Some(data) = line.strip_prefix("data:") {
                             if let Ok(file) = serde_json::from_str::<RecentFile>(data.trim()) {
                                 on_event(file);
+                            }
+                        }
+                    }
+                }
+                buf.drain(..pos + 2);
+            }
+        }
+        Ok(())
+    }
+
+    /// Stream `GET /api/v1/stats/stream` (SSE).  Calls `on_event` for each snapshot.
+    pub async fn stream_stats<F>(&self, mut on_event: F) -> Result<()>
+    where
+        F: FnMut(StatsStreamEvent),
+    {
+        let mut resp = self.client
+            .get(self.url("/api/v1/stats/stream"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .context("GET /api/v1/stats/stream")?
+            .error_for_status()
+            .context("stats/stream status")?;
+
+        let mut buf = Vec::<u8>::new();
+        while let Some(chunk) = resp.chunk().await.context("reading stats SSE stream")? {
+            buf.extend_from_slice(&chunk);
+            while let Some(pos) = find_double_newline(&buf) {
+                if let Ok(event_str) = std::str::from_utf8(&buf[..pos]) {
+                    for line in event_str.lines() {
+                        if let Some(data) = line.strip_prefix("data:") {
+                            if let Ok(event) = serde_json::from_str::<StatsStreamEvent>(data.trim()) {
+                                on_event(event);
                             }
                         }
                     }

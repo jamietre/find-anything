@@ -27,6 +27,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **`GET /api/v1/stats/stream`** — SSE endpoint that pushes `StatsStreamEvent` snapshots whenever the in-memory stats cache changes; rate-limited to `server.stats_stream_rate_hz` events per second (default: 5); `find-admin status --watch` now subscribes to this stream and redraws on each event instead of polling on a fixed interval
+
 - **Source stats cache** — `GET /api/v1/stats` now reads from an in-memory `SourceStatsCache` instead of running three expensive full-table-scan queries on every request (previously ~10 s on large databases); the cache is rebuilt from DB at startup (30 s delay) and daily alongside compaction; the worker applies a cheap incremental delta after each batch to keep `total_files`, `total_size`, and `by_kind` accurate without full scans; `by_ext` and `fts_row_count` are slightly stale between daily rebuilds (acceptable trade-off); `find-admin status --refresh` (new `--refresh` flag) forces a synchronous full rebuild before displaying results
 
 - **`[log] compact = true`** — new config option for `find-server` and `find-watch`; omits the timestamp and module-path target from each log line, eliminating redundancy when running under systemd/journald which already captures these from process metadata; config is now parsed before logging is initialised so the format takes effect from the first log line
