@@ -29,6 +29,9 @@ enum Command {
         /// Refresh statistics every 2 seconds until Ctrl+C
         #[arg(long, short)]
         watch: bool,
+        /// Force a full stats rebuild on the server before displaying
+        #[arg(long)]
+        refresh: bool,
     },
     /// List indexed sources
     Sources,
@@ -128,10 +131,10 @@ async fn main() -> Result<()> {
             }
         }
 
-        Command::Status { watch } => {
+        Command::Status { watch, refresh } => {
             let client = api::ApiClient::new(&config.server.url, &config.server.token);
             if args.json || !watch {
-                let stats = client.get_stats().await.context("fetching stats")?;
+                let stats = client.get_stats(refresh).await.context("fetching stats")?;
                 if args.json {
                     println!("{}", serde_json::to_string_pretty(&stats)?);
                 } else {
@@ -144,7 +147,7 @@ async fn main() -> Result<()> {
                 use std::io::Write;
                 let poll = std::time::Duration::from_secs_f64(config.cli.poll_interval_secs);
                 loop {
-                    match client.get_stats().await {
+                    match client.get_stats(refresh).await {
                         Ok(stats) => {
                             let output = format_status(&stats);
                             print!("\x1b[2J\x1b[H{output}");
@@ -355,7 +358,7 @@ async fn main() -> Result<()> {
                     eprintln!("Source '{}' not found.", source);
                     std::process::exit(1);
                 }
-                let stats = client.get_stats().await.context("fetching stats")?;
+                let stats = client.get_stats(false).await.context("fetching stats")?;
                 let file_count = stats.sources.iter()
                     .find(|s| s.name == source)
                     .map(|s| s.total_files)

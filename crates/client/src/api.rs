@@ -111,9 +111,14 @@ impl ApiClient {
     }
 
     /// GET /api/v1/stats
-    pub async fn get_stats(&self) -> Result<StatsResponse> {
+    pub async fn get_stats(&self, refresh: bool) -> Result<StatsResponse> {
+        let url = if refresh {
+            self.url("/api/v1/stats?refresh=true")
+        } else {
+            self.url("/api/v1/stats")
+        };
         self.client
-            .get(self.url("/api/v1/stats"))
+            .get(url)
             .bearer_auth(&self.token)
             .send()
             .await
