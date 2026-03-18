@@ -91,6 +91,30 @@ impl TestServer {
         }
     }
 
+    /// GET /api/v1/stats (from cache, no refresh).
+    pub async fn get_stats(&self) -> StatsResponse {
+        self.client
+            .get(self.url("/api/v1/stats"))
+            .send()
+            .await
+            .expect("stats request")
+            .json()
+            .await
+            .expect("stats json")
+    }
+
+    /// GET /api/v1/stats?refresh=true (forces a DB rebuild of the cache).
+    pub async fn get_stats_refresh(&self) -> StatsResponse {
+        self.client
+            .get(self.url("/api/v1/stats?refresh=true"))
+            .send()
+            .await
+            .expect("stats refresh request")
+            .json()
+            .await
+            .expect("stats refresh json")
+    }
+
     /// gzip-encode a BulkRequest and POST to /api/v1/bulk; asserts 202.
     pub async fn post_bulk(&self, req: &BulkRequest) {
         let json = serde_json::to_vec(req).expect("serialize bulk");
