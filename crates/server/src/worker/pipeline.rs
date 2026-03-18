@@ -17,7 +17,7 @@ pub(super) enum Phase1Outcome {
     /// Path was not previously in the `files` table — this is the first index.
     New,
     /// Path already existed in the `files` table — this is a re-index.
-    Modified,
+    Modified { old_size: i64, old_kind: FileKind },
     /// Stale-mtime guard: incoming mtime < stored mtime; nothing was written.
     Skipped,
 }
@@ -54,16 +54,17 @@ pub(super) fn process_file_phase1_fallback(
         tx.commit()?;
     }
 
-    // Single query for both the existing record id and its stored mtime.
-    // Used for: dedup outcome, stale-mtime guard, chunk-removal queue, and
-    // Phase1Outcome (New vs Modified) — avoids two separate SELECT round-trips.
-    let existing_record: Option<(i64, i64)> = conn.query_row(
-        "SELECT id, mtime FROM files WHERE path = ?1",
+    // Single query for the existing record id, stored mtime, size, and kind.
+    // Used for: dedup outcome, stale-mtime guard, chunk-removal queue,
+    // Phase1Outcome (New vs Modified), and incremental stats delta.
+    let existing_record: Option<(i64, i64, i64, String)> = conn.query_row(
+        "SELECT id, mtime, COALESCE(size,0), kind FROM files WHERE path = ?1",
         rusqlite::params![file.path],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
     ).optional()?;
-    let existing_id    = existing_record.map(|(id, _)| id);
-    let stored_mtime   = existing_record.map(|(_, mtime)| mtime);
+    let existing_id    = existing_record.as_ref().map(|(id, _, _, _)| *id);
+    let stored_mtime   = existing_record.as_ref().map(|(_, mtime, _, _)| *mtime);
+    let old_size_kind  = existing_record.map(|(_, _, size, kind)| (size, FileKind::from(kind.as_str())));
 
     // Dedup check: if another canonical with the same content hash exists,
     // register this file as an alias and skip chunk/lines/FTS writes.
@@ -97,7 +98,12 @@ pub(super) fn process_file_phase1_fallback(
                     canonical_id,
                 ],
             )?;
-            return Ok(if existing_id.is_none() { Phase1Outcome::New } else { Phase1Outcome::Modified });
+            if existing_id.is_none() {
+                return Ok(Phase1Outcome::New);
+            } else {
+                let (old_size, old_kind) = old_size_kind.unwrap_or((0, FileKind::Unknown));
+                return Ok(Phase1Outcome::Modified { old_size, old_kind });
+            }
         }
     }
 
@@ -213,7 +219,12 @@ pub(super) fn process_file_phase1_fallback(
     tx.commit()?;
     super::warn_slow(t_fts, 10, "fts_insert_phase1", &file.path);
 
-    Ok(if existing_id.is_none() { Phase1Outcome::New } else { Phase1Outcome::Modified })
+    if existing_id.is_none() {
+        Ok(Phase1Outcome::New)
+    } else {
+        let (old_size, old_kind) = old_size_kind.unwrap_or((0, FileKind::Unknown));
+        Ok(Phase1Outcome::Modified { old_size, old_kind })
+    }
 }
 
 // ── Helper constructors ───────────────────────────────────────────────────────
@@ -341,7 +352,7 @@ mod tests {
         let mut conn = test_conn();
         process_file_phase1(&mut conn, &make_file("readme.txt", 1000, "v1"), 0).unwrap();
         let outcome = process_file_phase1(&mut conn, &make_file("readme.txt", 2000, "v2"), 0).unwrap();
-        assert!(matches!(outcome, Phase1Outcome::Modified));
+        assert!(matches!(outcome, Phase1Outcome::Modified { .. }));
         assert_eq!(stored_mtime(&conn, "readme.txt"), Some(2000));
     }
 

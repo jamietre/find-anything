@@ -151,6 +151,7 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
         archive_state,
         inbox_paused,
         recent_tx: state.recent_tx.clone(),
+        source_stats_cache: Arc::clone(&source_stats_cache),
     };
     let worker_data_dir = data_dir.clone();
     tokio::spawn(async move {

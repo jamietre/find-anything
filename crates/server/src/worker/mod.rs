@@ -69,6 +69,8 @@ pub struct WorkerHandles {
     pub inbox_paused: Arc<AtomicBool>,
     /// Broadcast channel for live activity events sent to SSE subscribers.
     pub recent_tx: tokio::sync::broadcast::Sender<RecentFile>,
+    /// Shared stats cache for incremental updates after each batch.
+    pub source_stats_cache: Arc<std::sync::RwLock<crate::stats_cache::SourceStatsCache>>,
 }
 
 /// Ensure inbox subdirectories exist on startup.
@@ -117,7 +119,7 @@ pub async fn start_inbox_worker(
     cfg: WorkerConfig,
     handles: WorkerHandles,
 ) -> anyhow::Result<()> {
-    let WorkerHandles { status, archive_state: shared_archive_state, inbox_paused, recent_tx } = handles;
+    let WorkerHandles { status, archive_state: shared_archive_state, inbox_paused, recent_tx, source_stats_cache } = handles;
     let inbox_dir = data_dir.join("inbox");
     let failed_dir = inbox_dir.join("failed");
     let to_archive_dir = inbox_dir.join("to-archive");
@@ -154,6 +156,7 @@ pub async fn start_inbox_worker(
                 archive_notify,
                 shared_archive: shared,
                 recent_tx,
+                source_stats_cache,
             };
             while let Some(path) = work_rx.recv().await {
                 let ctx = request::RequestContext {

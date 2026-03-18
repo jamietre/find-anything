@@ -37,11 +37,12 @@ pub(super) struct RequestContext {
 
 /// Worker-lifetime handles passed by reference to every `process_request_async` call.
 pub(super) struct IndexerHandles {
-    pub status:         StatusHandle,
-    pub cfg:            WorkerConfig,
-    pub archive_notify: Arc<tokio::sync::Notify>,
-    pub shared_archive: Arc<SharedArchiveState>,
-    pub recent_tx:      broadcast::Sender<RecentFile>,
+    pub status:             StatusHandle,
+    pub cfg:                WorkerConfig,
+    pub archive_notify:     Arc<tokio::sync::Notify>,
+    pub shared_archive:     Arc<SharedArchiveState>,
+    pub recent_tx:          broadcast::Sender<RecentFile>,
+    pub source_stats_cache: Arc<std::sync::RwLock<crate::stats_cache::SourceStatsCache>>,
 }
 
 // ── Public entry point ─────────────────────────────────────────────────────────
@@ -86,7 +87,7 @@ pub(super) async fn process_request_async(
             )
             .await;
         }
-        Ok(Ok(Ok(()))) => {
+        Ok(Ok(Ok(delta))) => {
             // The normalized .gz was already written to to-archive/ by the blocking task.
             // Delete the original from inbox/.
             if let Err(e) = tokio::fs::remove_file(&ctx.request_path).await {
@@ -98,6 +99,10 @@ pub(super) async fn process_request_async(
             } else {
                 tracing::debug!("Phase 1 complete, queued for archive: {}", ctx.request_path.display());
                 handles.archive_notify.notify_one();
+            }
+            // Apply incremental stats delta to the cache.
+            if let Ok(mut guard) = handles.source_stats_cache.write() {
+                guard.apply_delta(&delta);
             }
         }
         Ok(Ok(Err(e))) => {
@@ -135,7 +140,7 @@ fn process_request_phase1(
     cfg: WorkerConfig,
     shared_archive_state: &Arc<SharedArchiveState>,
     recent_tx: &tokio::sync::broadcast::Sender<RecentFile>,
-) -> Result<()> {
+) -> Result<crate::stats_cache::SourceStatsDelta> {
     let request_start = std::time::Instant::now();
 
     // Use a placeholder tag until we've parsed the request.
@@ -165,6 +170,11 @@ fn process_request_phase1(
     let tag     = format!("[indexer:{}:{req_stem}]", request.source); // debug-level tag (includes request id)
     let src_tag = format!("[indexer:{}]",            request.source); // info-level tag  (source only)
 
+    let mut delta = crate::stats_cache::SourceStatsDelta {
+        source: request.source.clone(),
+        ..Default::default()
+    };
+
     tracing::debug!("{tag} start: {} files, {} deletes, {} renames", n_files, n_deletes, n_renames);
 
     let db_path = data_dir.join("sources").join(format!("{}.db", request.source));
@@ -185,9 +195,16 @@ fn process_request_phase1(
                 file: format!("(deleting {} files)", n_deletes),
             };
         }
-        timed!(tag, format!("delete {} paths", n_deletes), {
+        let delete_delta = timed!(tag, format!("delete {} paths", n_deletes), {
             db::delete_files_phase1(&conn, &request.delete_paths)?
         });
+        delta.files_delta -= delete_delta.files_removed;
+        delta.size_delta  -= delete_delta.size_removed;
+        for (kind, (count, size)) in delete_delta.by_kind {
+            let e = delta.kind_deltas.entry(kind).or_insert((0, 0));
+            e.0 -= count;
+            e.1 -= size;
+        }
     }
 
     // Process renames after deletes, before upserts.
@@ -233,10 +250,34 @@ fn process_request_phase1(
             Ok(outcome) => {
                 successfully_indexed.push(file.path.clone());
                 if file.mtime != 0 && !is_composite(&file.path) {
-                    match outcome {
+                    match &outcome {
                         pipeline::Phase1Outcome::New      => activity_added.push(file.path.clone()),
-                        pipeline::Phase1Outcome::Modified => activity_modified.push(file.path.clone()),
+                        pipeline::Phase1Outcome::Modified { .. } => activity_modified.push(file.path.clone()),
                         pipeline::Phase1Outcome::Skipped  => {}
+                    }
+                }
+                // Accumulate incremental stats delta (composite paths excluded).
+                if !is_composite(&file.path) {
+                    match &outcome {
+                        pipeline::Phase1Outcome::New => {
+                            delta.files_delta += 1;
+                            let size = file.size.unwrap_or(0);
+                            delta.size_delta += size;
+                            let e = delta.kind_deltas.entry(file.kind.clone()).or_insert((0, 0));
+                            e.0 += 1;
+                            e.1 += size;
+                        }
+                        pipeline::Phase1Outcome::Modified { old_size, old_kind } => {
+                            let new_size = file.size.unwrap_or(0);
+                            delta.size_delta += new_size - old_size;
+                            let old_e = delta.kind_deltas.entry(old_kind.clone()).or_insert((0, 0));
+                            old_e.0 -= 1;
+                            old_e.1 -= old_size;
+                            let new_e = delta.kind_deltas.entry(file.kind.clone()).or_insert((0, 0));
+                            new_e.0 += 1;
+                            new_e.1 += new_size;
+                        }
+                        pipeline::Phase1Outcome::Skipped => {}
                     }
                 }
             }
@@ -345,7 +386,7 @@ fn process_request_phase1(
     // Skip the archive phase entirely when there is nothing to write.
     if normalized_files.is_empty() && request.rename_paths.is_empty() {
         tracing::debug!("{tag} skipping archive phase (no chunks to write)");
-        return Ok(());
+        return Ok(delta);
     }
 
     // Write a normalized BulkRequest as a .gz to to-archive/.
@@ -370,7 +411,7 @@ fn process_request_phase1(
         encoder.finish().context("finalizing normalized gz")?
     });
 
-    Ok(())
+    Ok(delta)
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
