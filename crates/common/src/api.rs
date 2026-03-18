@@ -534,6 +534,24 @@ pub struct StatsResponse {
     pub orphaned_stats_age_secs: Option<u64>,
 }
 
+/// Snapshot sent via `GET /api/v1/stats/stream` (SSE).
+/// Cache-only — no DB opens. Omits last_scan / history / indexing_error_count
+/// which do not change during active indexing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StatsStreamEvent {
+    pub sources: Vec<SourceStreamSnapshot>,
+}
+
+/// Per-source snapshot for SSE streaming.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SourceStreamSnapshot {
+    pub name: String,
+    pub total_files: usize,
+    pub total_size: i64,
+    pub by_kind: std::collections::HashMap<FileKind, KindStats>,
+    pub fts_row_count: i64,
+}
+
 // ── Inbox admin types ─────────────────────────────────────────────────────────
 
 /// One item in the inbox (pending or failed), returned by `GET /api/v1/admin/inbox`.

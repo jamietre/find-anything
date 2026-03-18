@@ -667,10 +667,15 @@ pub struct ServerAppSettings {
     /// Default: 2000.
     #[serde(default = "default_file_view_page_size")]
     pub file_view_page_size: usize,
+    /// Maximum SSE events per second for the stats stream endpoint.
+    /// Default: 5.0.
+    #[serde(default = "default_stats_stream_rate_hz")]
+    pub stats_stream_rate_hz: f64,
 }
 
 fn default_max_markdown_render_kb() -> usize { 512 }
 fn default_file_view_page_size() -> usize { 2000 }
+fn default_stats_stream_rate_hz() -> f64 { 5.0 }
 fn default_bind() -> String { server_defaults().server.bind.clone() }
 fn default_download_zip_member_levels() -> usize { server_defaults().server.download_zip_member_levels }
 fn default_log_batch_detail_limit() -> usize     { server_defaults().server.log_batch_detail_limit }
