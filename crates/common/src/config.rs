@@ -485,6 +485,29 @@ pub use find_extract_types::ExtractorConfig;
 
 /// Build an `ExtractorConfig` from the scan section of the client config.
 pub fn extractor_config_from_scan(scan: &ScanConfig) -> ExtractorConfig {
+    use find_extract_types::{ExternalDispatchMode, ExternalMemberDispatch};
+
+    // Populate external_dispatch from [scan.extractors] so that archive members
+    // whose extension is registered as an external extractor are processed
+    // consistently, regardless of nesting depth.
+    let external_dispatch = scan.extractors.iter()
+        .filter_map(|(ext, entry)| {
+            if let ExtractorEntry::External(cfg) = entry {
+                let mode = match cfg.mode {
+                    ExternalExtractorMode::TempDir => ExternalDispatchMode::TempDir,
+                    ExternalExtractorMode::Stdout  => ExternalDispatchMode::Stdout,
+                };
+                Some((ext.clone(), ExternalMemberDispatch {
+                    mode,
+                    bin: cfg.bin.clone(),
+                    args: cfg.args.clone(),
+                }))
+            } else {
+                None
+            }
+        })
+        .collect();
+
     ExtractorConfig {
         max_content_kb: scan.max_content_size_mb as usize * 1024,
         max_depth: scan.archives.max_depth,
@@ -493,6 +516,7 @@ pub fn extractor_config_from_scan(scan: &ScanConfig) -> ExtractorConfig {
         include_hidden: scan.include_hidden,
         max_7z_solid_block_mb: scan.archives.max_7z_solid_block_mb,
         exclude_patterns: scan.exclude.clone(),
+        external_dispatch,
     }
 }
 

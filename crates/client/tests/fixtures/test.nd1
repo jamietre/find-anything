@@ -6,3 +6,5 @@ notes.txt:this is a plain text note inside the archive
 data.json:{"greeting": "hello world", "count": 42}
 report.md:# Monthly Report\n\nRevenue was up 12% this quarter.
 empty.txt:
+# inner.zip contains hello.txt, subdir/world.txt, and inner.nd1 — used to test nested archive extraction.
+inner.zip:%base64:UEsDBBQAAAAIAEFIcly/lZ5pFwAAABUAAAAJAAAAaGVsbG8udHh0y0jNyclXSCvKz1XISy0uSU1RqMosAABQSwMEFAAAAAgAQUhyXMNtTH8ZAAAAFwAAABAAAABzdWJkaXIvd29ybGQudHh0K88vyklRyMwrzkxJVchLLS5JTVGoyiwAAFBLAwQUAAAACABBSHJcHRfQli8AAAA7AAAACQAAAGlubmVyLm5kMVNWyEsxVMjMK85MSQVSealFelWZBVzpRampJXolFSVWGak5OfkKaUX5ucgqQWoAUEsBAhQDFAAAAAgAQUhyXL+VnmkXAAAAFQAAAAkAAAAAAAAAAAAAAIABAAAAAGhlbGxvLnR4dFBLAQIUAxQAAAAIAEFIclzDbUx/GQAAABcAAAAQAAAAAAAAAAAAAACAAT4AAABzdWJkaXIvd29ybGQudHh0UEsBAhQDFAAAAAgAQUhyXB0X0JYvAAAAOwAAAAkAAAAAAAAAAAAAAIABhQAAAGlubmVyLm5kMVBLBQYAAAAAAwADAKwAAADbAAAAAAA=

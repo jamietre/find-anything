@@ -1,3 +1,28 @@
+/// How an external member extractor delivers its output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExternalDispatchMode {
+    /// Extractor extracts members to a temp directory; each file is then
+    /// dispatched via the normal per-type pipeline (including recursive
+    /// archive extraction and further external dispatch).
+    TempDir,
+    /// Extractor writes `Vec<IndexLine>` JSON to stdout.
+    Stdout,
+}
+
+/// Configuration for an external extractor used to process archive members
+/// whose extension is not handled by any built-in extractor.
+///
+/// Mirrors `ExternalExtractorConfig` in `find_common` but lives here so that
+/// `find_extract_archive` can use it without depending on `find_common`.
+#[derive(Debug, Clone)]
+pub struct ExternalMemberDispatch {
+    pub mode: ExternalDispatchMode,
+    pub bin: String,
+    /// Argument template; `{file}` is replaced with the temp file path,
+    /// `{dir}` with the output directory (TempDir mode only).
+    pub args: Vec<String>,
+}
+
 /// Configuration passed to extractor functions.
 ///
 /// Bundles all per-extraction settings into one struct so that adding new
@@ -31,6 +56,11 @@ pub struct ExtractorConfig {
     /// paths.  Members whose path matches any pattern are skipped entirely —
     /// not indexed by filename, not recursed into.  Empty = no filtering.
     pub exclude_patterns: Vec<String>,
+    /// External extractors for member types not handled by built-in extractors.
+    /// Keyed by lowercase file extension (e.g. `"nd1"`, `"rar"`).  Applied in
+    /// `extract_member_bytes` so that the same extractor is used regardless of
+    /// whether the file is found at the top level or nested inside an archive.
+    pub external_dispatch: std::collections::HashMap<String, ExternalMemberDispatch>,
 }
 
 impl Default for ExtractorConfig {
@@ -43,6 +73,7 @@ impl Default for ExtractorConfig {
             include_hidden: false,
             max_7z_solid_block_mb: 256,
             exclude_patterns: vec![],
+            external_dispatch: std::collections::HashMap::new(),
         }
     }
 }

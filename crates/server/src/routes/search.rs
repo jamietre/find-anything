@@ -399,7 +399,7 @@ pub async fn search(
             Ok((_source_total, mut r)) => {
                 all_results.append(&mut r);
             }
-            Err(e) => tracing::warn!("search source error: {e:#}"),
+            Err(e) => tracing::error!("search source error: {e:#}"),
         }
     }
 

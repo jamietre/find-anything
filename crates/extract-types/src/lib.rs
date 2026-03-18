@@ -3,7 +3,9 @@ pub mod index_line;
 pub mod mem;
 pub mod run;
 
-pub use extractor_config::ExtractorConfig;
+pub use extractor_config::{
+    ExtractorConfig, ExternalDispatchMode, ExternalMemberDispatch,
+};
 pub use index_line::{detect_kind_from_ext, IndexLine, SCANNER_VERSION};
 
 /// Build a [`globset::GlobSet`] from a list of glob patterns.

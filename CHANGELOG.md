@@ -11,6 +11,18 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **Nested archive extraction for external extractors** — when a tempdir-based external extractor (e.g. unrar) extracts a member that is itself a recognized archive (ZIP, 7z, TAR, etc.), `run_external_tempdir` now calls `extract_streaming` on it and prefixes `archive_path` values with `member_rel::`, mirroring `handle_nested_archive` in the native path; composite paths like `outer.rar::inner.zip::hello.txt` are now produced correctly
+- **Consistent external dispatch for archive members** — `ExtractorConfig` gains an `external_dispatch` map (populated from `[scan.extractors]` by `extractor_config_from_scan`); `extract_member_bytes` in the archive extractor checks this map first, so any extension registered as an external extractor is handled identically whether found at top level or nested inside a ZIP, 7z, or any other archive format
+- **`ExternalDispatchMode` / `ExternalMemberDispatch` types** — new types in `find_extract_types` carry external-extractor config into the archive extraction pipeline without creating a dependency on `find_common`
+- **FTS rowid SQL constants** — `constants.rs` now exports `SQL_FTS_FILE_ID`, `SQL_FTS_LINE_NUMBER`, and `SQL_FTS_FILENAME_ONLY`; all five occurrences of the hardcoded `1000000` literal in FTS queries are replaced with these named constants; the module now documents the full encoding rationale, stability guarantee, and overflow bounds
+
+### Fixed
+
+- **`fetch_duplicates_for_file_ids` returns wrong column** — the query selected `d1.file_id, f2.path` but `r.get(0)` inferred `String`, hitting the INTEGER `file_id` column first; caused `InvalidColumnType(0, "file_id", Integer)` errors logged as WARN on every search; fixed by removing the unneeded `d1.file_id` from the SELECT so `f2.path` (TEXT) is column 0
+- **Search source errors logged at WARN instead of ERROR** — a query failure during search is a code bug, not expected degraded behaviour; severity raised to `error!`
+
+### Added
+
 - **Schema v3: content-addressable archive storage (plan 076)** — replaces the `lines` table (one row per line) and `canonical_file_id` alias system with three new tables: `content_blocks` (hash → integer id), `content_archives` (ZIP name → integer id), and `content_chunks` (one row per chunk per block); FTS5 rowid is now encoded as `file_id × 1,000,000 + line_number`, eliminating the `lines` join table entirely; deduplication is tracked via an explicit `duplicates(content_hash, file_id)` junction table instead of the `ON DELETE SET NULL` alias pointer that caused phantom-canonical bugs; ZIP chunk names change from `{file_id}.{chunk_number}` to `{block_id}.{chunk_number}`, so files sharing identical content share ZIP chunks; ~25× fewer DB rows for large sources; **full re-index required** (delete `data_dir/sources/`, restart, run `find-scan --force`)
 - **`files_pending_content` stat** — per-source count of files whose content has not yet been written to a ZIP archive (DB-level archive backlog, independent of the `.gz` queue depth); shown in `find-admin status` as `(N pending content)` when non-zero; updated automatically when the archive queue drains
 - **`duplicate_paths` in file viewer** — `GET /api/v1/file` now returns a `duplicate_paths` field populated from the `duplicates` table; the file viewer displays these links so navigating to a file via a duplicate link shows all other copies

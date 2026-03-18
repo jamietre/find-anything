@@ -1357,6 +1357,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "tracing-subscriber",
+ "walkdir",
  "xz2",
  "zip 8.2.0",
 ]

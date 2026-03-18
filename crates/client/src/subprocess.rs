@@ -257,6 +257,64 @@ pub async fn run_external_tempdir(
             .to_string_lossy()
             .into_owned();
 
+        let member_ext = std::path::Path::new(&member_name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        // If this member is itself a recognized multi-file archive, recurse into
+        // it using extract_streaming (the file is already on disk).  This mirrors
+        // handle_nested_archive in the native archive path: inner member
+        // archive_paths are prefixed with `member_rel::` so the server sees
+        // composite paths like `outer.rar::inner.zip::hello.txt`.
+        if find_extract_archive::is_archive_ext(&member_ext) && ext_config.max_depth > 0 {
+            // Emit a filename-only batch for the archive member itself, exactly as
+            // handle_nested_archive does before recursing.  This makes the inner
+            // archive navigable as an archive in the tree.
+            members.push(MemberBatch {
+                lines: vec![IndexLine {
+                    archive_path: Some(member_rel.clone()),
+                    line_number: 0,
+                    content: member_rel.clone(),
+                }],
+                content_hash: None,
+                skip_reason: None,
+                mtime: None,
+            });
+
+            let inner_cfg = ExtractorConfig {
+                max_depth: ext_config.max_depth.saturating_sub(1),
+                ..ext_config.clone()
+            };
+            let outer = member_rel.clone();
+            let mut ok = true;
+            find_extract_archive::extract_streaming(member_full, &inner_cfg, &mut |batch| {
+                let prefixed: Vec<IndexLine> = batch.lines.into_iter().map(|mut l| {
+                    let inner = l.archive_path.as_deref().unwrap_or("");
+                    l.archive_path = Some(if inner.is_empty() {
+                        outer.clone()
+                    } else {
+                        format!("{}::{}", outer, inner)
+                    });
+                    l
+                }).collect();
+                members.push(MemberBatch {
+                    lines: prefixed,
+                    content_hash: batch.content_hash,
+                    skip_reason: batch.skip_reason,
+                    mtime: batch.mtime,
+                });
+            }).unwrap_or_else(|e| {
+                warn!("failed to recurse into nested archive {}: {e:#}", member_rel);
+                ok = false;
+            });
+            if ok {
+                continue; // inner members emitted; skip dispatch_from_bytes below
+            }
+            // Fall through to filename-only on extraction failure.
+        }
+
         let content_hash = if bytes.is_empty() {
             None
         } else {
@@ -841,20 +899,25 @@ mod tests {
 
         let outcome = super::run_external_tempdir(&test_file, &ext_cfg, &scan, &ext_config).await;
 
-        let lines = match outcome {
-            super::ExternalOutcome::Ok(l) => l,
-            _ => panic!("expected Ok"),
+        let batches = match outcome {
+            super::ExternalOutcome::OkMembers(b) => b,
+            _ => panic!("expected OkMembers"),
         };
+        let lines: Vec<_> = batches.iter().flat_map(|b| &b.lines).collect();
 
         let member_paths: std::collections::HashSet<_> = lines.iter()
             .filter_map(|l| l.archive_path.as_deref())
             .collect();
 
-        // All five members should be present (comment lines are not members).
-        for name in &["readme.txt", "notes.txt", "data.json", "report.md", "empty.txt"] {
+        // Five flat members + inner.zip and its two nested members should all appear.
+        for name in &[
+            "readme.txt", "notes.txt", "data.json", "report.md", "empty.txt",
+            "inner.zip",
+            "inner.zip::hello.txt",
+            "inner.zip::subdir/world.txt",
+        ] {
             assert!(member_paths.contains(name), "{name} not found; paths: {:?}", member_paths);
         }
-        assert_eq!(member_paths.len(), 5, "unexpected extra members: {:?}", member_paths);
 
         let data_content: String = lines.iter()
             .filter(|l| l.archive_path.as_deref() == Some("data.json"))
@@ -869,6 +932,107 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         assert!(notes_content.contains("plain text note"), "missing 'plain text note': {notes_content}");
+    }
+
+    /// Verify that inner archives inside the tempdir are recursed into.
+    /// test.nd1 contains inner.zip (two members); this test checks that those
+    /// members appear as composite paths `inner.zip::hello.txt` etc.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tempdir_nested_archive_recursed() {
+        use std::path::PathBuf;
+        use find_common::config::{
+            extractor_config_from_scan, ExternalExtractorConfig, ExternalExtractorMode,
+            ExtractorEntry, ScanConfig,
+        };
+
+        let fixtures_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
+        let ext_cfg = ExternalExtractorConfig {
+            mode: ExternalExtractorMode::TempDir,
+            bin: fixtures_dir.join("find-extract-nd1").to_string_lossy().into_owned(),
+            args: vec!["{file}".to_string(), "{dir}".to_string()],
+        };
+        // Register the nd1 extractor in scan so that ext_config.external_dispatch
+        // is populated — enabling consistent dispatch for inner.nd1 found inside
+        // inner.zip, just as it would be at the top level.
+        let mut scan = ScanConfig::default();
+        scan.extractors.insert("nd1".to_string(), ExtractorEntry::External(ext_cfg.clone()));
+        let ext_config = extractor_config_from_scan(&scan);
+
+        let outcome = super::run_external_tempdir(
+            &fixtures_dir.join("test.nd1"),
+            &ext_cfg,
+            &scan,
+            &ext_config,
+        ).await;
+
+        let batches = match outcome {
+            super::ExternalOutcome::OkMembers(b) => b,
+            _ => panic!("expected OkMembers"),
+        };
+        let lines: Vec<_> = batches.iter().flat_map(|b| &b.lines).collect();
+
+        // inner.zip itself should appear as a member.
+        let has_inner_zip = lines.iter()
+            .any(|l| l.archive_path.as_deref() == Some("inner.zip"));
+        assert!(has_inner_zip, "inner.zip not found as a member");
+
+        // Members of inner.zip should appear as composite paths.
+        let has_hello = lines.iter()
+            .any(|l| l.archive_path.as_deref() == Some("inner.zip::hello.txt"));
+        let has_world = lines.iter()
+            .any(|l| l.archive_path.as_deref() == Some("inner.zip::subdir/world.txt"));
+        assert!(has_hello, "inner.zip::hello.txt not found");
+        assert!(has_world, "inner.zip::subdir/world.txt not found");
+
+        // Content of the inner members should be extractable.
+        let hello_content: String = lines.iter()
+            .filter(|l| l.archive_path.as_deref() == Some("inner.zip::hello.txt"))
+            .map(|l| l.content.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(hello_content.contains("hello from nested zip"), "unexpected content: {hello_content}");
+
+        // Each member batch for inner zip members should have a content_hash set.
+        let inner_batches_with_hash: Vec<_> = batches.iter()
+            .filter(|b| b.lines.iter().any(|l| {
+                l.archive_path.as_deref()
+                    .map(|p| p.starts_with("inner.zip::") && p.ends_with("hello.txt"))
+                    .unwrap_or(false)
+            }))
+            .filter(|b| b.content_hash.is_some())
+            .collect();
+        assert!(!inner_batches_with_hash.is_empty(), "inner.zip::hello.txt batch has no content_hash");
+
+        // inner.nd1 inside inner.zip should be extracted via the external nd1 extractor,
+        // yielding its member greet.txt as a composite path.
+        let has_nd1_member = lines.iter().any(|l| {
+            l.archive_path.as_deref()
+                .map(|p| p.starts_with("inner.zip::inner.nd1::") && p.ends_with("greet.txt"))
+                .unwrap_or(false)
+        });
+        assert!(has_nd1_member, "inner.zip::inner.nd1::greet.txt not found; paths: {:?}",
+            lines.iter().filter_map(|l| l.archive_path.as_deref()).collect::<Vec<_>>());
+
+        // max_depth = 0 should NOT recurse into inner.zip.
+        let no_recurse_cfg = find_common::config::ExtractorConfig {
+            max_depth: 0,
+            ..ext_config.clone()
+        };
+        let outcome_shallow = super::run_external_tempdir(
+            &fixtures_dir.join("test.nd1"),
+            &ext_cfg,
+            &scan,
+            &no_recurse_cfg,
+        ).await;
+        let shallow_batches = match outcome_shallow {
+            super::ExternalOutcome::OkMembers(b) => b,
+            _ => panic!("expected OkMembers"),
+        };
+        let shallow_lines: Vec<_> = shallow_batches.iter().flat_map(|b| &b.lines).collect();
+        let no_nested = shallow_lines.iter()
+            .all(|l| !l.archive_path.as_deref().unwrap_or("").contains("inner.zip::"));
+        assert!(no_nested, "depth=0 should not recurse into inner.zip");
     }
 
     #[cfg(unix)]

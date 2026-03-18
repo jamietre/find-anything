@@ -3,6 +3,8 @@
 # Usage: find-extract-nd1 <file> <outdir>
 # Each line: <member-filename>:<content>  (first colon is the separator)
 # Lines starting with # are comments and are ignored.
+# If content starts with %base64: the remainder is decoded as binary.
+# Subdirectories in member names are created automatically.
 set -euo pipefail
 file="$1"
 outdir="$2"
@@ -11,5 +13,10 @@ while IFS= read -r line || [ -n "$line" ]; do
     [[ "$line" == \#* ]] && continue
     name="${line%%:*}"
     content="${line#*:}"
-    printf '%s\n' "$content" > "$outdir/$name"
+    mkdir -p "$outdir/$(dirname "$name")"
+    if [[ "$content" == "%base64:"* ]]; then
+        printf '%s' "${content#%base64:}" | base64 -d > "$outdir/$name"
+    else
+        printf '%s\n' "$content" > "$outdir/$name"
+    fi
 done < "$file"

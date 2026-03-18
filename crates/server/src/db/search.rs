@@ -7,8 +7,8 @@ use find_common::api::FileKind;
 
 use crate::archive::ArchiveManager;
 
-use super::read_chunk_for_file;
-use super::split_composite_path;
+use super::{read_chunk_for_file, split_composite_path};
+use super::{SQL_FTS_FILE_ID, SQL_FTS_FILENAME_ONLY, SQL_FTS_LINE_NUMBER};
 
 /// Combined search filter: optional date range (mtime), optional kind allowlist,
 /// and optional filename-only restriction.
@@ -105,7 +105,7 @@ pub fn fts_count(conn: &Connection, query: &str, limit: usize, phrase: bool, dat
     // Date/kind/filename filter active: need JOIN to files.
     let from = date.from.unwrap_or(i64::MIN);
     let to = date.to.unwrap_or(i64::MAX);
-    let filename_clause = if date.filename_only { "AND (lines_fts.rowid % 1000000) = 0" } else { "" };
+    let filename_clause = if date.filename_only { &format!("AND {SQL_FTS_FILENAME_ONLY}") } else { "" };
 
     let mut p = ParamBinder::new();
     let fts_ph   = p.push(fts_query);
@@ -123,7 +123,7 @@ pub fn fts_count(conn: &Connection, query: &str, limit: usize, phrase: bool, dat
         "SELECT count(*) FROM (
              SELECT 1
              FROM lines_fts
-             JOIN files f ON f.id = (lines_fts.rowid / 1000000)
+             JOIN files f ON f.id = {SQL_FTS_FILE_ID}
              WHERE lines_fts MATCH {fts_ph}
                AND f.mtime BETWEEN {from_ph} AND {to_ph}
                {kind_clause}
@@ -163,28 +163,14 @@ pub fn fts_candidates(
         Ok(RawRow {
             file_path:   row.get(0)?,
             file_kind:   FileKind::from(file_kind_str.as_str()),
-            line_number: (row.get::<_, i64>(2)? % 1_000_000) as usize,
-            file_id:     row.get::<_, i64>(2)? / 1_000_000,  // decode from rowid
-            mtime:       row.get(3)?,
-            size:        row.get(4)?,
-        })
-    };
-
-    // Redefine map_row for actual SQL that returns separate columns.
-    let map_row2 = |row: &rusqlite::Row<'_>| -> rusqlite::Result<RawRow> {
-        let file_kind_str: String = row.get(1)?;
-        Ok(RawRow {
-            file_path:   row.get(0)?,
-            file_kind:   FileKind::from(file_kind_str.as_str()),
             line_number: row.get::<_, i64>(2)? as usize,
             file_id:     row.get(3)?,
             mtime:       row.get(4)?,
             size:        row.get(5)?,
         })
     };
-    let _ = map_row; // suppress unused warning
 
-    let filename_clause = if date.filename_only { "AND (lines_fts.rowid % 1000000) = 0" } else { "" };
+    let filename_clause = if date.filename_only { &format!("AND {SQL_FTS_FILENAME_ONLY}") } else { "" };
 
     let raw: Vec<RawRow> = if date.is_active() || date.filename_only {
         let from = date.from.unwrap_or(i64::MIN);
@@ -203,10 +189,10 @@ pub fn fts_candidates(
         };
 
         let sql = format!(
-            "SELECT f.path, f.kind, (lines_fts.rowid % 1000000) AS line_number,
+            "SELECT f.path, f.kind, {SQL_FTS_LINE_NUMBER} AS line_number,
                     f.id, f.mtime, f.size
              FROM lines_fts
-             JOIN files f ON f.id = (lines_fts.rowid / 1000000)
+             JOIN files f ON f.id = {SQL_FTS_FILE_ID}
              WHERE lines_fts MATCH {fts_ph}
                AND f.mtime BETWEEN {from_ph} AND {to_ph}
                {kind_clause}
@@ -215,18 +201,18 @@ pub fn fts_candidates(
         );
         let refs = p.as_refs();
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(refs.as_slice(), map_row2)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        let rows = stmt.query_map(refs.as_slice(), map_row)?.collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     } else {
-        let mut stmt = conn.prepare(
-            "SELECT f.path, f.kind, (lines_fts.rowid % 1000000) AS line_number,
+        let mut stmt = conn.prepare(&format!(
+            "SELECT f.path, f.kind, {SQL_FTS_LINE_NUMBER} AS line_number,
                     f.id, f.mtime, f.size
              FROM lines_fts
-             JOIN files f ON f.id = (lines_fts.rowid / 1000000)
+             JOIN files f ON f.id = {SQL_FTS_FILE_ID}
              WHERE lines_fts MATCH ?1
              LIMIT ?2",
-        )?;
-        let rows = stmt.query_map(params![fts_query, limit as i64], map_row2)?
+        ))?;
+        let rows = stmt.query_map(params![fts_query, limit as i64], map_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         rows
     };
@@ -300,13 +286,13 @@ pub fn document_candidates(
     let mut per_token_ids: Vec<HashSet<i64>> = Vec::new();
     for token in &tokens {
         let fts_expr = format!("\"{}\"", token.replace('"', "\"\""));
-        let mut stmt = conn.prepare(
-            "SELECT DISTINCT (lines_fts.rowid / 1000000) AS file_id
+        let mut stmt = conn.prepare(&format!(
+            "SELECT DISTINCT {SQL_FTS_FILE_ID} AS file_id
              FROM lines_fts
-             JOIN files f ON f.id = (lines_fts.rowid / 1000000)
+             JOIN files f ON f.id = {SQL_FTS_FILE_ID}
              WHERE lines_fts MATCH ?1
              LIMIT 100000",
-        )?;
+        ))?;
         let ids: HashSet<i64> = stmt
             .query_map(params![fts_expr], |row| row.get(0))?
             .collect::<rusqlite::Result<_>>()?;
@@ -369,15 +355,15 @@ pub fn document_candidates(
         size: Option<i64>,
     }
 
-    let mut stmt = conn.prepare(
-        "SELECT f.path, f.kind, (lines_fts.rowid % 1000000) AS line_number,
+    let mut stmt = conn.prepare(&format!(
+        "SELECT f.path, f.kind, {SQL_FTS_LINE_NUMBER} AS line_number,
                 f.id, f.mtime, f.size
          FROM lines_fts
-         JOIN files f ON f.id = (lines_fts.rowid / 1000000)
+         JOIN files f ON f.id = {SQL_FTS_FILE_ID}
          WHERE lines_fts MATCH ?1
          ORDER BY lines_fts.rank
          LIMIT ?2",
-    )?;
+    ))?;
 
     // Collect up to `per_file_cap` raw rows per qualifying file.
     let mut file_rows: HashMap<i64, Vec<RawRow>> = HashMap::new();
@@ -505,7 +491,7 @@ pub fn fetch_duplicates_for_file_ids(
     let mut map: HashMap<i64, Vec<String>> = HashMap::new();
     if file_ids.is_empty() { return Ok(map); }
     let mut stmt = conn.prepare(
-        "SELECT d1.file_id, f2.path
+        "SELECT f2.path
          FROM duplicates d1
          JOIN duplicates d2 ON d2.content_hash = d1.content_hash AND d2.file_id != d1.file_id
          JOIN files f2 ON f2.id = d2.file_id

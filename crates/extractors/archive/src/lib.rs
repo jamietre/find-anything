@@ -10,7 +10,7 @@ use tracing::warn;
 use xz2::read::XzDecoder;
 
 use find_extract_types::IndexLine;
-use find_extract_types::{build_globset, ExtractorConfig};
+use find_extract_types::{build_globset, ExternalDispatchMode, ExternalMemberDispatch, ExtractorConfig};
 
 /// One batch of lines for a single archive member, with its content hash.
 #[derive(Default, serde::Serialize, serde::Deserialize)]
@@ -852,7 +852,159 @@ fn dispatch_catching_panics(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> 
 /// dispatched directly.  Multi-file archives are NOT handled here — the
 /// caller routes those through `handle_nested_archive` before reaching
 /// this function.
+/// Run an external extractor on `bytes`, returning the extracted lines.
+///
+/// Used by `extract_member_bytes` when a member's extension matches an entry
+/// in `cfg.external_dispatch` — ensuring that the same extractor is used
+/// whether a file is found at the top level or nested inside an archive.
+fn run_external_member_dispatch(
+    bytes: &[u8],
+    entry_name: &str,
+    cfg: &ExtractorConfig,
+    spec: &ExternalMemberDispatch,
+) -> Vec<IndexLine> {
+    use std::io::Write as _;
+
+    // Write bytes to a temp file with the member's original extension.
+    let ext = Path::new(entry_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin");
+    let mut tmp = match tempfile::Builder::new().suffix(&format!(".{ext}")).tempfile() {
+        Ok(f) => f,
+        Err(e) => {
+            warn!("external dispatch: failed to create temp file for '{}': {e}", entry_name);
+            return vec![];
+        }
+    };
+    if let Err(e) = tmp.write_all(bytes) {
+        warn!("external dispatch: failed to write temp file for '{}': {e}", entry_name);
+        return vec![];
+    }
+
+    // Substitute {file} and {dir} placeholders.
+    let substitute = |args: &[String], file: &Path, dir: Option<&Path>| -> Vec<std::ffi::OsString> {
+        args.iter().map(|a| {
+            let s = a
+                .replace("{file}", &file.to_string_lossy())
+                .replace("{dir}", &dir.map(|d| d.to_string_lossy().into_owned()).unwrap_or_default());
+            s.into()
+        }).collect()
+    };
+
+    match spec.mode {
+        ExternalDispatchMode::TempDir => {
+            let out_dir = match tempfile::TempDir::new() {
+                Ok(d) => d,
+                Err(e) => {
+                    warn!("external dispatch: failed to create output dir for '{}': {e}", entry_name);
+                    return vec![];
+                }
+            };
+            let args = substitute(&spec.args, tmp.path(), Some(out_dir.path()));
+            let status = std::process::Command::new(&spec.bin).args(&args).status();
+            match status {
+                Ok(s) if !s.success() => {
+                    warn!("external dispatch: '{}' exited {:?} for '{}'", spec.bin, s.code(), entry_name);
+                    return vec![];
+                }
+                Err(e) => {
+                    warn!("external dispatch: failed to run '{}' for '{}': {e}", spec.bin, entry_name);
+                    return vec![];
+                }
+                Ok(_) => {}
+            }
+            // Walk output dir: dispatch each extracted file, prefixing archive_path with entry_name.
+            let mut lines = make_filename_line(entry_name);
+            for file_entry in walkdir::WalkDir::new(out_dir.path())
+                .into_iter()
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().is_file())
+            {
+                let member_full = file_entry.path();
+                let member_rel = match member_full.strip_prefix(out_dir.path()) {
+                    Ok(r) => r.to_string_lossy().replace('\\', "/"),
+                    Err(_) => continue,
+                };
+                let member_bytes = match std::fs::read(member_full) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!("external dispatch: failed to read '{}': {e}", member_full.display());
+                        continue;
+                    }
+                };
+                let member_name = member_full
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .into_owned();
+                let mut content = dispatch_catching_panics(&member_bytes, &member_name, cfg);
+                for l in &mut content {
+                    // Members of the externally-extracted file get a composite archive_path.
+                    let inner = l.archive_path.as_deref().unwrap_or("");
+                    l.archive_path = Some(if inner.is_empty() {
+                        format!("{}::{}", entry_name, member_rel)
+                    } else {
+                        format!("{}::{}::{}", entry_name, member_rel, inner)
+                    });
+                }
+                // Add a filename marker for the extracted member.
+                lines.push(IndexLine {
+                    archive_path: Some(format!("{}::{}", entry_name, member_rel)),
+                    line_number: 0,
+                    content: format!("[PATH] {}::{}", entry_name, member_rel),
+                });
+                lines.extend(content);
+            }
+            lines
+        }
+        ExternalDispatchMode::Stdout => {
+            let args = substitute(&spec.args, tmp.path(), None);
+            let out = match std::process::Command::new(&spec.bin).args(&args).output() {
+                Ok(o) => o,
+                Err(e) => {
+                    warn!("external dispatch: failed to run '{}' for '{}': {e}", spec.bin, entry_name);
+                    return make_filename_line(entry_name);
+                }
+            };
+            if !out.status.success() {
+                warn!("external dispatch: '{}' exited {:?} for '{}'", spec.bin, out.status.code(), entry_name);
+                return make_filename_line(entry_name);
+            }
+            match serde_json::from_slice::<Vec<IndexLine>>(&out.stdout) {
+                Ok(mut parsed) => {
+                    for l in &mut parsed {
+                        if l.archive_path.is_none() {
+                            l.archive_path = Some(entry_name.to_string());
+                        }
+                    }
+                    let mut lines = make_filename_line(entry_name);
+                    lines.extend(parsed);
+                    lines
+                }
+                Err(e) => {
+                    warn!("external dispatch: failed to parse output from '{}' for '{}': {e}", spec.bin, entry_name);
+                    make_filename_line(entry_name)
+                }
+            }
+        }
+    }
+}
+
 fn extract_member_bytes(mut bytes: Vec<u8>, entry_name: &str, display_prefix: &str, cfg: &ExtractorConfig) -> Vec<IndexLine> {
+    // Check external_dispatch first: if this extension has a registered external
+    // extractor, delegate to it and return its output.  This ensures consistent
+    // behaviour regardless of whether the file is found at top level or nested
+    // inside an archive.
+    let member_ext = Path::new(entry_name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if let Some(spec) = cfg.external_dispatch.get(&member_ext) {
+        return run_external_member_dispatch(&bytes, entry_name, cfg, spec);
+    }
+
     // Always index the filename so the member is discoverable by name.
     let mut lines = make_filename_line(entry_name);
 

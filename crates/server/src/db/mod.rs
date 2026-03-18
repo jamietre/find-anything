@@ -18,7 +18,10 @@ pub mod stats;
 pub mod tree;
 
 #[allow(unused_imports)]
-pub use constants::{decode_fts_rowid, encode_fts_rowid, MAX_LINES_PER_FILE};
+pub use constants::{
+    decode_fts_rowid, encode_fts_rowid,
+    MAX_LINES_PER_FILE, SQL_FTS_FILE_ID, SQL_FTS_FILENAME_ONLY, SQL_FTS_LINE_NUMBER,
+};
 pub use search::{
     document_candidates, fetch_duplicates_for_file_ids, fts_candidates, fts_count, DateFilter,
 };
@@ -878,9 +881,9 @@ mod tests {
     fn fts_live_count(conn: &Connection, query: &str) -> usize {
         let phrase = format!("\"{}\"", query);
         conn.query_row(
-            "SELECT COUNT(*) FROM lines_fts lf
-             JOIN files f ON f.id = (lf.rowid / 1000000)
-             WHERE lines_fts MATCH ?1",
+            &format!("SELECT COUNT(*) FROM lines_fts lf
+             JOIN files f ON f.id = (lf.rowid / {MAX_LINES_PER_FILE})
+             WHERE lines_fts MATCH ?1"),
             params![phrase],
             |r| r.get::<_, i64>(0),
         ).unwrap_or(0) as usize
