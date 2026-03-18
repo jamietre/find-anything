@@ -33,8 +33,10 @@ pub enum SubprocessOutcome {
 /// Outcome of an external extractor run.
 #[allow(dead_code)] // used by find-scan; other binaries share this module
 pub enum ExternalOutcome {
-    /// Extraction succeeded; contains extracted lines.
+    /// Extraction succeeded; contains extracted lines (stdout mode).
     Ok(Vec<IndexLine>),
+    /// Extraction succeeded; contains per-member batches with content hashes (tempdir mode).
+    OkMembers(Vec<MemberBatch>),
     /// Extractor ran but failed; file should be indexed filename-only.
     Failed(String),
     /// Extractor binary was not found.
@@ -222,7 +224,10 @@ pub async fn run_external_tempdir(
     }
 
     // Walk extracted files, dispatch each for content extraction.
-    let mut all_lines: Vec<IndexLine> = Vec::new();
+    // Each member becomes its own MemberBatch with a content hash computed from
+    // the raw extracted bytes — enables deduplication of archive members across
+    // different outer archives (e.g. identical MP3s in two different RAR files).
+    let mut members: Vec<MemberBatch> = Vec::new();
     for entry in walkdir::WalkDir::new(tmp_dir.path())
         .into_iter()
         .filter_map(|e| e.ok())
@@ -251,6 +256,13 @@ pub async fn run_external_tempdir(
             .unwrap_or_default()
             .to_string_lossy()
             .into_owned();
+
+        let content_hash = if bytes.is_empty() {
+            None
+        } else {
+            Some(blake3::hash(&bytes).to_hex().to_string())
+        };
+
         let mut content_lines = dispatch_from_bytes(&bytes, &member_name, ext_config);
         // Set archive_path to member_rel on all returned lines.
         for line in &mut content_lines {
@@ -263,10 +275,10 @@ pub async fn run_external_tempdir(
             line_number: 0,
             content: format!("[PATH] {}", member_rel),
         });
-        all_lines.extend(content_lines);
+        members.push(MemberBatch { lines: content_lines, content_hash, skip_reason: None, mtime: None });
     }
 
-    ExternalOutcome::Ok(all_lines)
+    ExternalOutcome::OkMembers(members)
 }
 
 /// Resolve the binary path for a named extractor binary.

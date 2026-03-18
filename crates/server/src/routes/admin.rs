@@ -603,8 +603,11 @@ pub async fn delete_source(
     }
 
     let archive_state = Arc::clone(&state.archive_state);
+    let source_name = query.source.clone();
+    let source_stats_cache = Arc::clone(&state.source_stats_cache);
+    let stats_watch = Arc::clone(&state.stats_watch);
 
-    run_blocking("delete_source", move || -> anyhow::Result<_> {
+    let resp = run_blocking("delete_source", move || -> anyhow::Result<_> {
         let conn = db::open(&db_path)?;
 
         let files_deleted = db::count_files(&conn)?;
@@ -625,5 +628,15 @@ pub async fn delete_source(
             .with_context(|| format!("removing {}", db_path.display()))?;
 
         Ok(Json(SourceDeleteResponse { files_deleted, chunks_removed }))
-    }).await
+    }).await;
+
+    // Evict the deleted source from the stats cache so GET /api/v1/stats
+    // no longer reports it.  Do this regardless of the exact response shape
+    // (the file is already gone if we get this far).
+    if let Ok(mut guard) = source_stats_cache.write() {
+        guard.sources.retain(|s| s.name != source_name);
+    }
+    stats_watch.send_modify(|v| *v = v.wrapping_add(1));
+
+    resp
 }

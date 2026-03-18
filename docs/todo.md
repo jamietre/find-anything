@@ -4,6 +4,7 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
 
+[ ] Is RAR content indexed? Do we compute hashes of all files? For example 1992-04-05 - The Fox Theatre - Boulder, CO part 1 - Copy.rar::I 01 Llama.mp3 is a duplicate of 1992-04-05 - The Fox Theatre - Boulder, CO part 1 - Copy (2).rar::I 01 Llama.mp3 but not marked as so
 [ ] FEAT: Use human readable numbers Mar 17 15:01:26 findanything find-server[312010]:  INFO compaction scan: 2553268401/4119151881 bytes orphaned (62.0%) in 632.3s
 [ ] archive/unfiled/OpenMULE-Win32.zip::resources/action.wav shows a duplicate. But when you click on it, it doesn't have a dup link back to the original.
 [ ] Add image zoom/pan controls to normal detail view

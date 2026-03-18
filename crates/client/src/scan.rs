@@ -500,6 +500,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
 
                     let lines = match outcome {
                         subprocess::ExternalOutcome::Ok(lines) => lines,
+                        subprocess::ExternalOutcome::OkMembers(_) => unreachable!("stdout mode always returns Ok"),
                         subprocess::ExternalOutcome::BinaryMissing => {
                             warn!("skipping {rel_path}: external extractor binary not found (file will be retried once configured correctly)");
                             return Ok(false);
@@ -562,8 +563,9 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                     let outcome = subprocess::run_external_tempdir(abs_path, ext_cfg, &eff_scan, &ext_config).await;
                     if ctx.quiet { lazy_header::clear_pending(); }
 
-                    let all_lines = match outcome {
-                        subprocess::ExternalOutcome::Ok(lines) => lines,
+                    let member_batches = match outcome {
+                        subprocess::ExternalOutcome::OkMembers(batches) => batches,
+                        subprocess::ExternalOutcome::Ok(_) => unreachable!("tempdir always returns OkMembers"),
                         subprocess::ExternalOutcome::BinaryMissing => {
                             warn!("skipping {rel_path}: external extractor binary not found (file will be retried once configured correctly)");
                             return Ok(false);
@@ -580,11 +582,13 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                     };
 
                     let mut members_submitted: usize = 0;
-                    for file in build_member_index_files(rel_path, mtime, size, all_lines, None) {
-                        ctx.batch_bytes += index_file_bytes(&file);
-                        members_submitted += 1;
-                        ctx.batch.push(file);
-                        ctx.maybe_flush().await?;
+                    for batch in member_batches {
+                        for file in build_member_index_files(rel_path, mtime, size, batch.lines, batch.content_hash) {
+                            ctx.batch_bytes += index_file_bytes(&file);
+                            members_submitted += 1;
+                            ctx.batch.push(file);
+                            ctx.maybe_flush().await?;
+                        }
                     }
 
                     // Flush remaining members.

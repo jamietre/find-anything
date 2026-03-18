@@ -495,6 +495,7 @@ async fn handle_update(
             ExternalExtractorMode::Stdout => {
                 match subprocess::run_external_stdout(abs_path, ext_cfg, eff_scan).await {
                     subprocess::ExternalOutcome::Ok(lines) => lines,
+                    subprocess::ExternalOutcome::OkMembers(_) => unreachable!("stdout always returns Ok"),
                     subprocess::ExternalOutcome::BinaryMissing => return Ok(()),
                     subprocess::ExternalOutcome::Failed(_) => vec![],
                 }
@@ -502,7 +503,10 @@ async fn handle_update(
             ExternalExtractorMode::TempDir => {
                 let ext_config = extractor_config_from_scan(eff_scan);
                 match subprocess::run_external_tempdir(abs_path, ext_cfg, eff_scan, &ext_config).await {
-                    subprocess::ExternalOutcome::Ok(lines) => lines,
+                    subprocess::ExternalOutcome::OkMembers(batches) => {
+                        batches.into_iter().flat_map(|b| b.lines).collect()
+                    }
+                    subprocess::ExternalOutcome::Ok(_) => unreachable!("tempdir always returns OkMembers"),
                     subprocess::ExternalOutcome::BinaryMissing => return Ok(()),
                     subprocess::ExternalOutcome::Failed(_) => vec![],
                 }
@@ -849,6 +853,7 @@ async fn handle_dir_rename(
                     ExternalExtractorMode::Stdout => {
                         match subprocess::run_external_stdout(new_abs, ext_cfg, &new_eff_scan).await {
                             subprocess::ExternalOutcome::Ok(lines) => lines,
+                            subprocess::ExternalOutcome::OkMembers(_) => unreachable!("stdout always returns Ok"),
                             subprocess::ExternalOutcome::BinaryMissing
                             | subprocess::ExternalOutcome::Failed(_) => vec![],
                         }
@@ -856,7 +861,10 @@ async fn handle_dir_rename(
                     ExternalExtractorMode::TempDir => {
                         let ext_config = extractor_config_from_scan(&new_eff_scan);
                         match subprocess::run_external_tempdir(new_abs, ext_cfg, &new_eff_scan, &ext_config).await {
-                            subprocess::ExternalOutcome::Ok(lines) => lines,
+                            subprocess::ExternalOutcome::OkMembers(batches) => {
+                                batches.into_iter().flat_map(|b| b.lines).collect()
+                            }
+                            subprocess::ExternalOutcome::Ok(_) => unreachable!("tempdir always returns OkMembers"),
                             subprocess::ExternalOutcome::BinaryMissing
                             | subprocess::ExternalOutcome::Failed(_) => vec![],
                         }
