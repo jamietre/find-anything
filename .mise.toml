@@ -2,6 +2,7 @@
 node = "24"
 pnpm = "10.29.3"
 "cargo:cargo-watch" = "latest"
+"cargo:cargo-llvm-cov" = "latest"
 
 [settings]
 experimental = true # Enables hook support
@@ -122,6 +123,10 @@ run = ["cargo check --workspace", "pnpm --dir web check"]
 [tasks.clippy]
 description = "Run clippy lints (matches CI — fails on warnings)"
 run = "cargo clippy --workspace -- -D warnings"
+
+[tasks.coverage]
+description = "Generate HTML test coverage report → target/llvm-cov/html/index.html (requires: rustup component add llvm-tools)"
+run = "cargo llvm-cov --workspace --html && echo 'Report: target/llvm-cov/html/index.html'"
 
 
 # ── Admin ─────────────────────────────────────────────────────────────────────

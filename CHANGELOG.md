@@ -11,6 +11,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **`mise run coverage` task** — generates an HTML test coverage report via `cargo-llvm-cov` to `target/llvm-cov/html/index.html`; `cargo-llvm-cov` added to `[tools]` so `mise install` handles it automatically (requires `rustup component add llvm-tools`)
 - **Server memory reduction (plan 077)** — three memory bugs fixed in the indexing worker: (1) `archive_batch.rs` now processes one gz at a time (two sub-phases: ZIP I/O then batched SQLite writes), eliminating the `upsert_map` clone that held all batch content simultaneously; (2) `request.rs` streams gz files directly from disk via `serde_json::from_reader` + `GzDecoder<BufReader<File>>` instead of buffering the whole file in a `Vec<u8>` then a `String`; (3) `request.rs` consumes `files` by value so normalization no longer clones content strings
 - **Batch formatter mode (`mode = "batch"`)** — new `FormatterMode::Batch` in `FormatterConfig`; all matching files in a batch are written to a temp directory and the formatter is called once on the directory (use `{dir}` in `args`); reduces 150 biome spawns to 1 for a typical JS/TS batch; existing `stdin` mode unchanged and still default
 - **Compaction deletes fully-orphaned archives** — when every entry in an archive is orphaned the file is now deleted outright instead of being rewritten to an empty ZIP; pre-existing empty archives (left over from previous passes) are also cleaned up; `CompactResponse` gains `archives_deleted`
