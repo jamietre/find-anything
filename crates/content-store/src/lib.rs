@@ -28,7 +28,7 @@ pub fn open_backend(b: &BackendInstanceConfig, dir: &Path) -> Result<Arc<dyn Con
                 .map_err(|e| anyhow::anyhow!("opening zip store '{}': {e:#}", b.name))?,
         )),
         BackendType::Sqlite => Ok(Arc::new(
-            SqliteContentStore::open(dir, b.chunk_size_kb, b.max_read_connections)
+            SqliteContentStore::open(dir, b.chunk_size_kb, b.max_read_connections, b.compress)
                 .map_err(|e| anyhow::anyhow!("opening sqlite store '{}': {e:#}", b.name))?,
         )),
     }

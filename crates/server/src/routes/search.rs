@@ -319,9 +319,6 @@ pub async fn search(
                     _ /* Exact | FileExact */ => (true, query.clone()),
                 };
 
-                // Fast count via FTS5 only — no ZIP reads, no JOINs.
-                let source_total = db::fts_count(&conn, &fts_query, fts_limit, fts_phrase, date_filter.clone())?;
-
                 // Score only as many candidates as needed for this page.
                 let mut candidates = db::fts_candidates(&conn, &fts_query, scoring_limit, fts_phrase, date_filter)?;
 
@@ -414,7 +411,7 @@ pub async fn search(
                     })
                     .collect();
 
-                Ok((source_total, results))
+                Ok((results.len(), results))
             })
         })
         .collect();

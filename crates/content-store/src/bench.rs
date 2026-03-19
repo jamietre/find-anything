@@ -219,7 +219,7 @@ mod tests {
 
     fn make_store() -> (SqliteContentStore, TempDir) {
         let dir = TempDir::new().unwrap();
-        (SqliteContentStore::open(dir.path(), None, None).unwrap(), dir)
+        (SqliteContentStore::open(dir.path(), None, None, None).unwrap(), dir)
     }
 
     #[test]

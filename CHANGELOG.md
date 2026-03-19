@@ -11,6 +11,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **Optional gzip compression for `SqliteContentStore`** — `BackendInstanceConfig` gains a `compress: Option<bool>` field; when `true`, each chunk is gzip-compressed before storage and decompressed transparently on read (magic-byte detection, so uncompressed and compressed databases are both readable by the same code); `blobs.db` schema changes `data TEXT` → `data BLOB`; two new server.toml backends (`sqlite_4k_gz`, `sqlite_12k_gz`) for A/B benchmarking; contract test suite expanded from 24 to 36 tests (12 per backend: zip, sqlite, sqlite_compressed)
+
 - **Backend-neutral stats and compaction output** — `find-admin status` no longer hard-codes "ZIP files"; the label is now "Content: N file(s)" and accurately reflects the active backend (47 ZIP archives or 1 SQLite database); `SqliteContentStore::storage_stats()` now returns `(1, bytes)` instead of `(row_count, bytes)` so the file count is never a meaningless chunk row number; `ContentStore::archive_stats()` renamed to `storage_stats()`; `CompactResult`/`CompactResponse` fields renamed `archives_*` → `units_*`; compaction messages use "storage unit(s)" throughout; web UI global metrics updated to match
 
 - **`find-test` benchmarking binary (plan 083)** — new `find-test` binary in `crates/server` opens backends directly from `server.toml` (no HTTP) and runs write + concurrent read phases against each configured backend; `bench-storage` subcommand accepts `--concurrency` (repeatable), `--blobs`, `--blob-size-kb`, `--reads`, `--seed`, and `--json`; results printed as a text table or JSON; `mise run bench-storage` task added for convenience
@@ -37,6 +39,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Subprocess log lines include source file path** — `relay_subprocess_logs` now takes a `file` parameter and includes it as a structured field in every relayed log line, so extractor errors can be traced back to the file being processed
 
 ### Fixed
+
+- **Dead `fts_count` scan removed from search hot path** — the search handler was calling `db::fts_count()` (a full 2000-row FTS5 scan) before every query, then storing the result in `_source_total` where it was discarded; the `total` in the JSON response was already computed from `unique.len()`; removing this call eliminates a dominant bottleneck on slow hardware (responsible for ~15 s first-result latency on an ARM7 NAS with a large index)
 
 - **`delete_source` cache eviction uses stale local** — `guard.sources.retain(|s| s.name != source_name)` used a local variable copy instead of `query.source`, meaning the stats cache was never pruned after deleting a source; now uses `query.source` directly
 - **Compaction log messages showed raw byte counts** — compaction scan and compact route now use `fmt_bytes` for human-readable output

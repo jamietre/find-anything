@@ -14,6 +14,7 @@ tracing     = { workspace = true }
 rusqlite    = { version = "0.38", features = ["bundled", "functions"] }
 zip         = "8"
 rand        = { version = "0.9", features = ["std_rng"] }
+flate2      = "1"
 
 [dev-dependencies]
 tempfile = "3"

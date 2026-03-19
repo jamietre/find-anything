@@ -1,10 +1,14 @@
 mod db;
 
 use std::collections::HashSet;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use anyhow::{Context, Result};
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
 
 use crate::key::ContentKey;
 use crate::store::{CompactResult, ContentStore};
@@ -133,6 +137,8 @@ pub struct SqliteContentStore {
     /// Target chunk size in bytes.  Configurable per instance to allow
     /// side-by-side benchmarking of 1 KB / 4 KB / 12 KB configurations.
     chunk_size: usize,
+    /// Whether to gzip-compress chunk data before storing.
+    compress: bool,
 }
 
 impl SqliteContentStore {
@@ -141,7 +147,12 @@ impl SqliteContentStore {
     /// `chunk_size_kb` controls how large each chunk can grow before a new
     /// one is started.  Defaults to 1 KB (matching `ZipContentStore`) if
     /// `None` is passed.
-    pub fn open(data_dir: &Path, chunk_size_kb: Option<u32>, max_read_connections: Option<u32>) -> Result<Self> {
+    pub fn open(
+        data_dir: &Path,
+        chunk_size_kb: Option<u32>,
+        max_read_connections: Option<u32>,
+        compress: Option<bool>,
+    ) -> Result<Self> {
         let write_conn = db::open_write(data_dir).context("opening blobs.db")?;
         let max_conns = max_read_connections.unwrap_or(DEFAULT_MAX_READ_CONNECTIONS) as usize;
         Ok(Self {
@@ -149,6 +160,7 @@ impl SqliteContentStore {
             write_conn: Mutex::new(write_conn),
             read_pool: ReadPool::new(data_dir.to_path_buf(), max_conns),
             chunk_size: chunk_size_kb.unwrap_or(1) as usize * 1024,
+            compress: compress.unwrap_or(false),
         })
     }
 }
@@ -204,6 +216,27 @@ fn chunk_blob(blob: &str, chunk_size: usize) -> Vec<Chunk> {
     chunks
 }
 
+// ── Compression helpers ───────────────────────────────────────────────────────
+
+const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
+
+fn gzip_compress(data: &str) -> Result<Vec<u8>> {
+    let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
+    enc.write_all(data.as_bytes())?;
+    Ok(enc.finish()?)
+}
+
+/// Decompress bytes if they look like gzip; otherwise interpret as UTF-8.
+fn decode_chunk(bytes: &[u8]) -> Result<String> {
+    if bytes.starts_with(&GZIP_MAGIC) {
+        let mut out = String::new();
+        GzDecoder::new(bytes).read_to_string(&mut out)?;
+        Ok(out)
+    } else {
+        Ok(std::str::from_utf8(bytes)?.to_owned())
+    }
+}
+
 // ── ContentStore impl ─────────────────────────────────────────────────────────
 
 impl ContentStore for SqliteContentStore {
@@ -219,10 +252,15 @@ impl ContentStore for SqliteContentStore {
         let tx = conn.unchecked_transaction()?;
 
         if chunks.is_empty() {
-            db::insert_chunk(&tx, key_str, 0, 0, 0, "")?;
+            db::insert_chunk(&tx, key_str, 0, 0, 0, b"")?;
         } else {
             for chunk in &chunks {
-                db::insert_chunk(&tx, key_str, chunk.chunk_num, chunk.start_line, chunk.end_line, &chunk.data)?;
+                let bytes: Vec<u8> = if self.compress {
+                    gzip_compress(&chunk.data)?
+                } else {
+                    chunk.data.as_bytes().to_vec()
+                };
+                db::insert_chunk(&tx, key_str, chunk.chunk_num, chunk.start_line, chunk.end_line, &bytes)?;
             }
         }
 
@@ -247,7 +285,8 @@ impl ContentStore for SqliteContentStore {
 
         for row in rows {
             let base = row.start_line as usize;
-            for (offset, line) in row.data.split('\n').enumerate() {
+            let text = decode_chunk(&row.data)?;
+            for (offset, line) in text.split('\n').enumerate() {
                 let pos = base + offset;
                 if pos >= lo && pos <= hi && !line.is_empty() {
                     result.push((pos, line.to_owned()));
@@ -310,7 +349,7 @@ mod tests {
     #[test]
     fn tiny_chunk_size_sub_range() {
         let dir = TempDir::new().unwrap();
-        let store = SqliteContentStore::open(dir.path(), Some(0), None).unwrap();
+        let store = SqliteContentStore::open(dir.path(), Some(0), None, None).unwrap();
         let k = ContentKey::new("eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee");
         let lines: Vec<String> = (0..20).map(|i| format!("line {i:03}")).collect();
         store.put(&k, &lines.join("\n")).unwrap();

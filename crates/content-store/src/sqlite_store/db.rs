@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS blobs (
     chunk_num  INTEGER NOT NULL,   -- 0-based chunk index
     start_line INTEGER NOT NULL,   -- first line position in this chunk
     end_line   INTEGER NOT NULL,   -- last line position in this chunk (inclusive)
-    data       TEXT    NOT NULL,   -- raw chunk text (lines joined by '\\n')
+    data       BLOB    NOT NULL,   -- raw chunk bytes: plain UTF-8 or gzip-compressed UTF-8
     PRIMARY KEY (key, chunk_num)
 );
 
@@ -60,13 +60,14 @@ pub fn blob_exists(conn: &Connection, key: &str) -> Result<bool> {
 }
 
 /// Insert a single chunk row. Ignores conflicts (idempotent).
+/// `data` is the raw bytes to store — either plain UTF-8 or gzip-compressed.
 pub fn insert_chunk(
     tx: &rusqlite::Transaction,
     key: &str,
     chunk_num: usize,
     start_line: usize,
     end_line: usize,
-    data: &str,
+    data: &[u8],
 ) -> Result<()> {
     tx.execute(
         "INSERT OR IGNORE INTO blobs(key, chunk_num, start_line, end_line, data)
@@ -85,7 +86,7 @@ pub fn delete_blob(conn: &Connection, key: &str) -> Result<()> {
 /// A chunk row returned by a range query.
 pub struct ChunkRow {
     pub start_line: i64,
-    pub data: String,
+    pub data: Vec<u8>,
 }
 
 /// Return all chunks for `key` whose line range overlaps `[lo, hi]`.

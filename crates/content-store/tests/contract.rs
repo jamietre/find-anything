@@ -21,7 +21,13 @@ fn make_zip_store() -> (ZipContentStore, TempDir) {
 
 fn make_sqlite_store() -> (SqliteContentStore, TempDir) {
     let dir = TempDir::new().unwrap();
-    let store = SqliteContentStore::open(dir.path(), None, None).unwrap();
+    let store = SqliteContentStore::open(dir.path(), None, None, None).unwrap();
+    (store, dir)
+}
+
+fn make_sqlite_store_compressed() -> (SqliteContentStore, TempDir) {
+    let dir = TempDir::new().unwrap();
+    let store = SqliteContentStore::open(dir.path(), None, None, Some(true)).unwrap();
     (store, dir)
 }
 
@@ -190,5 +196,6 @@ macro_rules! contract_tests {
     };
 }
 
-contract_tests!(zip_store,    make_zip_store());
-contract_tests!(sqlite_store, make_sqlite_store());
+contract_tests!(zip_store,              make_zip_store());
+contract_tests!(sqlite_store,           make_sqlite_store());
+contract_tests!(sqlite_store_compressed, make_sqlite_store_compressed());

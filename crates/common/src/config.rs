@@ -553,6 +553,9 @@ pub struct BackendInstanceConfig {
     /// Callers block when the cap is reached. Only applies to SQLite backends.
     /// Defaults to 100.
     pub max_read_connections: Option<u32>,
+    /// Gzip-compress chunk data before storing. Only applies to SQLite backends.
+    /// Defaults to false.
+    pub compress: Option<bool>,
 }
 
 /// Top-level `[storage]` config section.
@@ -572,6 +575,7 @@ impl StorageConfig {
             backend_type: BackendType::Zip,
             chunk_size_kb: None,
             max_read_connections: None,
+            compress: None,
         }]
     }
 }
