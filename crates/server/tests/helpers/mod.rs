@@ -116,6 +116,10 @@ impl TestServer {
     }
 
     /// gzip-encode a BulkRequest and POST to /api/v1/bulk; asserts 202.
+    pub fn data_dir_path(&self) -> &std::path::Path {
+        self._data_dir.path()
+    }
+
     pub async fn post_bulk(&self, req: &BulkRequest) {
         let json = serde_json::to_vec(req).expect("serialize bulk");
         let mut enc = GzEncoder::new(Vec::new(), Compression::default());
@@ -135,6 +139,24 @@ impl TestServer {
 
         assert_eq!(status.as_u16(), 202, "expected 202 from /api/v1/bulk");
     }
+}
+
+/// Build a BulkRequest identical to `make_text_bulk` but with a content_hash set,
+/// so the archive worker writes chunks to ZIP (it skips files with `content_hash: None`).
+pub fn make_text_bulk_hashed(source: &str, path: &str, content: &str) -> BulkRequest {
+    let mut req = make_text_bulk(source, path, content);
+    req.files[0].content_hash = Some(
+        "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+    );
+    req
+}
+
+/// Write a minimal valid gzip file to `path` (used to seed the failed dir in tests).
+pub fn write_fake_gz(path: &std::path::Path) {
+    let file = std::fs::File::create(path).unwrap();
+    let mut enc = GzEncoder::new(file, Compression::default());
+    enc.write_all(b"{}").unwrap();
+    enc.finish().unwrap();
 }
 
 /// Build a BulkRequest that indexes a single plain-text file.

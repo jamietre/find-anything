@@ -1,7 +1,10 @@
 mod helpers;
-use helpers::{make_text_bulk, TestServer};
+use helpers::{make_text_bulk, make_text_bulk_hashed, write_fake_gz, TestServer};
 
-use find_common::api::{SearchResponse, StatsResponse};
+use find_common::api::{
+    CompactResponse, InboxDeleteResponse, InboxRetryResponse, InboxStatusResponse, SearchResponse,
+    SourceDeleteResponse, StatsResponse,
+};
 
 // ── delete_source ─────────────────────────────────────────────────────────────
 
@@ -187,4 +190,248 @@ async fn test_pause_and_resume_inbox() {
         .unwrap()
         .status();
     assert_eq!(resume_status.as_u16(), 200, "resume should return 200");
+}
+
+// ── inbox status ───────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_inbox_status_after_indexing() {
+    let srv = TestServer::spawn().await;
+
+    // Pause processing so the request stays in pending.
+    srv.client.post(srv.url("/api/v1/admin/inbox/pause")).send().await.unwrap();
+    srv.post_bulk(&make_text_bulk("src", "file.txt", "content")).await;
+
+    let status: InboxStatusResponse = srv.client
+        .get(srv.url("/api/v1/admin/inbox"))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(!status.pending.is_empty(), "should have at least one pending item after pause+bulk");
+    assert!(status.paused, "inbox should report paused=true");
+}
+
+// ── inbox clear ───────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_inbox_clear_pending() {
+    let srv = TestServer::spawn().await;
+
+    srv.client.post(srv.url("/api/v1/admin/inbox/pause")).send().await.unwrap();
+    srv.post_bulk(&make_text_bulk("src", "file.txt", "content")).await;
+
+    let before: InboxStatusResponse = srv.client
+        .get(srv.url("/api/v1/admin/inbox"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(!before.pending.is_empty(), "should have pending items before clear");
+
+    let del: InboxDeleteResponse = srv.client
+        .delete(srv.url("/api/v1/admin/inbox?target=pending"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(del.deleted > 0, "should report deleted count");
+
+    let after: InboxStatusResponse = srv.client
+        .get(srv.url("/api/v1/admin/inbox"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(after.pending.is_empty(), "pending should be empty after clear");
+}
+
+#[tokio::test]
+async fn test_inbox_clear_all() {
+    let srv = TestServer::spawn().await;
+
+    // Seed a file into failed/ directly.
+    let failed_dir = srv.data_dir_path().join("inbox/failed");
+    std::fs::create_dir_all(&failed_dir).unwrap();
+    write_fake_gz(&failed_dir.join("fake_failed.gz"));
+
+    // Pause and submit a pending request.
+    srv.client.post(srv.url("/api/v1/admin/inbox/pause")).send().await.unwrap();
+    srv.post_bulk(&make_text_bulk("src", "file.txt", "content")).await;
+
+    let del: InboxDeleteResponse = srv.client
+        .delete(srv.url("/api/v1/admin/inbox?target=all"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(del.deleted >= 2, "should delete both pending and failed ({} deleted)", del.deleted);
+
+    let after: InboxStatusResponse = srv.client
+        .get(srv.url("/api/v1/admin/inbox"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(after.pending.is_empty(), "pending should be empty after clear-all");
+    assert!(after.failed.is_empty(), "failed should be empty after clear-all");
+}
+
+// ── inbox retry ───────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_inbox_retry_moves_failed_to_pending() {
+    let srv = TestServer::spawn().await;
+
+    // Write a .gz directly into the failed dir.
+    let failed_dir = srv.data_dir_path().join("inbox/failed");
+    std::fs::create_dir_all(&failed_dir).unwrap();
+    write_fake_gz(&failed_dir.join("fake_failed.gz"));
+
+    let before: InboxStatusResponse = srv.client
+        .get(srv.url("/api/v1/admin/inbox"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(!before.failed.is_empty(), "should have a failed item");
+
+    let retry: InboxRetryResponse = srv.client
+        .post(srv.url("/api/v1/admin/inbox/retry"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(retry.retried, 1, "should retry exactly one file");
+
+    let after: InboxStatusResponse = srv.client
+        .get(srv.url("/api/v1/admin/inbox"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(after.failed.is_empty(), "failed should be empty after retry");
+}
+
+// ── inbox pause stops processing ──────────────────────────────────────────
+
+#[tokio::test]
+async fn test_inbox_pause_stops_processing() {
+    let srv = TestServer::spawn().await;
+
+    srv.client.post(srv.url("/api/v1/admin/inbox/pause")).send().await.unwrap();
+    srv.post_bulk(&make_text_bulk("src", "file.txt", "paused content")).await;
+
+    // Give the worker a moment — it must NOT process the request while paused.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+    let status: InboxStatusResponse = srv.client
+        .get(srv.url("/api/v1/admin/inbox"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(!status.pending.is_empty(), "worker must not drain inbox while paused");
+
+    // Resume and verify it drains.
+    srv.client.post(srv.url("/api/v1/admin/inbox/resume")).send().await.unwrap();
+    srv.wait_for_idle().await;
+
+    let after: InboxStatusResponse = srv.client
+        .get(srv.url("/api/v1/admin/inbox"))
+        .send().await.unwrap().json().await.unwrap();
+    assert!(after.pending.is_empty(), "inbox should drain after resume");
+}
+
+// ── compact with real content ─────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_compact_removes_orphaned_chunks() {
+    let srv = TestServer::spawn().await;
+
+    // Index a file with a content_hash so the archive worker writes chunks to ZIP.
+    // Content must exceed the default inline_threshold_bytes (256) so it is stored
+    // in a ZIP archive rather than inline in file_content.
+    let big_content = "archive content line for compaction test. ".repeat(10);
+    srv.post_bulk(&make_text_bulk_hashed("compact-src", "file.txt", &big_content)).await;
+    srv.wait_for_idle().await;
+
+    // Remove the source DB directly (without going through delete_source which would
+    // also call remove_chunks and clean up the ZIP). This leaves the chunks in the
+    // ZIP orphaned — no DB references them any more.
+    let db_path = srv.data_dir_path().join("sources/compact-src.db");
+    assert!(db_path.exists(), "source DB should exist after indexing");
+    std::fs::remove_file(&db_path).unwrap();
+
+    // Now compact should find and remove the orphaned chunks.
+    let resp: CompactResponse = srv.client
+        .post(srv.url("/api/v1/admin/compact"))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(resp.chunks_removed > 0, "compact should remove orphaned chunks (got {})", resp.chunks_removed);
+    assert!(resp.bytes_freed > 0, "compact should report freed bytes");
+    assert!(!resp.dry_run);
+}
+
+#[tokio::test]
+async fn test_compact_deletes_fully_orphaned_archive() {
+    let srv = TestServer::spawn().await;
+
+    let big_content = "archive content line for full orphan compaction test. ".repeat(10);
+    srv.post_bulk(&make_text_bulk_hashed("compact-src2", "file.txt", &big_content)).await;
+    srv.wait_for_idle().await;
+
+    // Remove the source DB directly so all chunks in its archive(s) are now orphaned.
+    // (Using delete_source would also call remove_chunks, which pre-cleans the ZIPs.)
+    let db_path = srv.data_dir_path().join("sources/compact-src2.db");
+    assert!(db_path.exists(), "source DB should exist after indexing");
+    std::fs::remove_file(&db_path).unwrap();
+
+    let resp: CompactResponse = srv.client
+        .post(srv.url("/api/v1/admin/compact"))
+        .send().await.unwrap().json().await.unwrap();
+
+    // When all entries in an archive are orphaned, the file is deleted entirely.
+    // chunks_removed counts the entries that were in the now-deleted archive.
+    assert!(resp.archives_deleted >= 1,
+        "compact should delete the fully-orphaned archive (deleted={})", resp.archives_deleted);
+    assert!(resp.chunks_removed > 0,
+        "compact should count the removed chunks (got {})", resp.chunks_removed);
+}
+
+#[tokio::test]
+async fn test_compact_dry_run_does_not_remove_chunks() {
+    let srv = TestServer::spawn().await;
+
+    let big_content = "archive content line for dry run compaction test. ".repeat(10);
+    srv.post_bulk(&make_text_bulk_hashed("compact-src3", "file.txt", &big_content)).await;
+    srv.wait_for_idle().await;
+
+    // Remove the source DB directly so chunks in ZIP are orphaned but not yet cleaned up.
+    let db_path = srv.data_dir_path().join("sources/compact-src3.db");
+    assert!(db_path.exists(), "source DB should exist after indexing");
+    std::fs::remove_file(&db_path).unwrap();
+
+    // Dry run: counts should be non-zero but nothing is actually removed.
+    let dry: CompactResponse = srv.client
+        .post(srv.url("/api/v1/admin/compact?dry_run=true"))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(dry.chunks_removed > 0, "dry run should report chunks to remove");
+    assert!(dry.dry_run, "response should indicate dry_run=true");
+
+    // Run compact for real — should still find chunks (dry-run didn't touch them).
+    let real: CompactResponse = srv.client
+        .post(srv.url("/api/v1/admin/compact"))
+        .send().await.unwrap().json().await.unwrap();
+
+    assert!(real.chunks_removed > 0,
+        "real compact should still find chunks that dry-run left intact");
+}
+
+// ── delete source removes archive content ─────────────────────────────────
+
+#[tokio::test]
+async fn test_delete_source_removes_chunk_refs() {
+    let srv = TestServer::spawn().await;
+
+    // Index with a content_hash so chunks are archived (content > 256 bytes to exceed inline threshold).
+    let big_content = "archive content line for delete source chunk test. ".repeat(10);
+    srv.post_bulk(&make_text_bulk_hashed("del-src", "file.txt", &big_content)).await;
+    srv.wait_for_idle().await;
+
+    // Verify the source DB exists.
+    let db_path = srv.data_dir_path().join("sources/del-src.db");
+    assert!(db_path.exists(), "source DB should exist after indexing");
+
+    // Delete the source — the response should report chunks_removed > 0,
+    // proving the archive worker wrote chunks and delete_source cleaned them up.
+    let del_resp: SourceDeleteResponse = srv.client
+        .delete(srv.url("/api/v1/admin/source?source=del-src"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(del_resp.files_deleted, 1, "should report one file deleted");
+    assert!(del_resp.chunks_removed > 0,
+        "delete_source should report chunks_removed > 0 (got {})", del_resp.chunks_removed);
+
+    // Source DB should be gone.
+    assert!(!db_path.exists(), "source DB should be removed after delete_source");
+
+    // After delete_source physically cleaned up the ZIP, compact should find nothing to do
+    // (or at most an empty archive to delete) — confirming chunks were already removed.
+    let resp: CompactResponse = srv.client
+        .post(srv.url("/api/v1/admin/compact"))
+        .send().await.unwrap().json().await.unwrap();
+    assert_eq!(resp.chunks_removed, 0,
+        "compact should find no orphaned chunks because delete_source already cleaned them up");
 }
