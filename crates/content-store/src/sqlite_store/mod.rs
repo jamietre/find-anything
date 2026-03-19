@@ -306,32 +306,37 @@ impl ContentStore for SqliteContentStore {
         let conn = self.write_conn.lock().map_err(|_| anyhow::anyhow!("write lock poisoned"))?;
         let live: Vec<&str> = live_keys.iter().map(|k| k.as_str()).collect();
 
+        // Count orphaned rows, distinct keys, and bytes — used by both paths.
+        let (orphaned_rows, orphaned_keys, orphaned_bytes) = db::orphaned_stats(&conn, &live)?;
+
         if dry_run {
-            let orphaned_bytes = db::orphaned_data_bytes(&conn, &live)?;
             return Ok(CompactResult {
                 units_scanned: 1,
                 units_rewritten: 0,
-                units_deleted: 0,
-                chunks_removed: 0,
+                units_deleted: orphaned_keys,
+                chunks_removed: orphaned_rows,
                 bytes_freed: orphaned_bytes,
             });
         }
 
-        let before_rows = db::row_count(&conn)?;
-        let before_bytes = db::db_size_bytes(&self.data_dir);
-
         let deleted_rows = db::delete_orphan_blobs(&conn, &live)?;
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
 
-        let after_rows = db::row_count(&conn)?;
-        let after_bytes = db::db_size_bytes(&self.data_dir);
+        // VACUUM reclaims freed pages on disk. Run in a separate statement batch
+        // so it executes outside of any implicit transaction.
+        if deleted_rows > 0 {
+            conn.execute_batch("VACUUM")?;
+        }
+        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")?;
 
         Ok(CompactResult {
             units_scanned: 1,
-            units_rewritten: if deleted_rows > 0 { 1 } else { 0 },
-            units_deleted: 0,
-            chunks_removed: (before_rows.saturating_sub(after_rows)) as usize,
-            bytes_freed: before_bytes.saturating_sub(after_bytes),
+            units_rewritten: 0,
+            units_deleted: orphaned_keys,
+            chunks_removed: deleted_rows,
+            // Report the logical data bytes removed rather than the physical file
+            // size delta, which is unreliable for small datasets (SQLite page
+            // granularity means a tiny deletion may not shrink the file at all).
+            bytes_freed: orphaned_bytes,
         })
     }
 

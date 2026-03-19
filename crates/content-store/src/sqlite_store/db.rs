@@ -133,15 +133,9 @@ pub fn delete_orphan_blobs(conn: &Connection, live_keys: &[&str]) -> Result<usiz
     Ok(deleted)
 }
 
-/// Return the total number of rows in the blobs table.
-pub fn row_count(conn: &Connection) -> Result<u64> {
-    let n: i64 = conn.query_row("SELECT COUNT(*) FROM blobs", [], |r| r.get(0))?;
-    Ok(n as u64)
-}
-
-/// Return the total bytes of data stored for blobs whose key is not in `live_keys`.
-/// Used for dry-run compaction to report orphaned bytes without deleting anything.
-pub fn orphaned_data_bytes(conn: &Connection, live_keys: &[&str]) -> Result<u64> {
+/// Return statistics for orphaned blobs: `(row_count, distinct_key_count, total_bytes)`.
+/// "Orphaned" = key not in `live_keys`. Used by both dry-run and real compaction.
+pub fn orphaned_stats(conn: &Connection, live_keys: &[&str]) -> Result<(usize, usize, u64)> {
     conn.execute_batch("CREATE TEMP TABLE IF NOT EXISTS _live_keys2 (key TEXT PRIMARY KEY)")?;
     conn.execute_batch("DELETE FROM _live_keys2")?;
     {
@@ -150,13 +144,14 @@ pub fn orphaned_data_bytes(conn: &Connection, live_keys: &[&str]) -> Result<u64>
             stmt.execute(rusqlite::params![key])?;
         }
     }
-    let bytes: i64 = conn.query_row(
-        "SELECT COALESCE(SUM(LENGTH(data)), 0) FROM blobs WHERE key NOT IN (SELECT key FROM _live_keys2)",
+    let (rows, keys, bytes): (i64, i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(DISTINCT key), COALESCE(SUM(LENGTH(data)), 0)
+         FROM blobs WHERE key NOT IN (SELECT key FROM _live_keys2)",
         [],
-        |r| r.get(0),
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
     conn.execute_batch("DROP TABLE IF EXISTS _live_keys2")?;
-    Ok(bytes as u64)
+    Ok((rows as usize, keys as usize, bytes as u64))
 }
 
 /// Return the on-disk size of `blobs.db` in bytes.

@@ -23,6 +23,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Fixed
 
 - **`regex:doc:` cross-line matching** — `DocRegex` mode now tests the regex against the full joined document text (with `dot_matches_new_line`) instead of per-line; previously patterns like `.*UART.*updates.*` matched nothing because `.` could not span newlines; the FTS pre-filter now uses `document_candidates` (per-token file intersection) so a file qualifies if each literal term appears *somewhere* in it, not necessarily on the same line
+- **SQLite compaction metrics** — `compact()` now returns accurate `chunks_removed`, `units_deleted` (distinct orphaned blob keys), and `bytes_freed` (logical data bytes removed) for both dry-run and real compaction; dry-run previously returned `chunks_removed: 0`; `VACUUM` is issued after real deletions to reclaim disk pages
 
 - **Audio player hang / no duration** — `GET /api/v1/raw` now returns `Content-Length` and `Accept-Ranges: bytes` for direct file downloads, and handles `Range:` requests with a proper 206 Partial Content response; browsers require this to display audio/video duration and enable seeking
 - **Audio/video inline viewer for non-ZIP archive members** — `canViewInline` now requires `canServeArchiveMember` (true only when every archive in the composite path is a ZIP); RAR/TAR/7z members no longer show a broken player
