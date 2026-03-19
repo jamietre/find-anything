@@ -549,6 +549,10 @@ pub struct BackendInstanceConfig {
     pub backend_type: BackendType,
     /// Target chunk size in KB. Defaults to 1 KB if not specified.
     pub chunk_size_kb: Option<u32>,
+    /// Maximum total open read connections (idle + in-use).
+    /// Callers block when the cap is reached. Only applies to SQLite backends.
+    /// Defaults to 100.
+    pub max_read_connections: Option<u32>,
 }
 
 /// Top-level `[storage]` config section.
@@ -567,6 +571,7 @@ impl StorageConfig {
             name: "default".to_string(),
             backend_type: BackendType::Zip,
             chunk_size_kb: None,
+            max_read_connections: None,
         }]
     }
 }

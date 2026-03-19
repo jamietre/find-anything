@@ -27,6 +27,18 @@ CREATE TABLE IF NOT EXISTS blobs (
 CREATE INDEX IF NOT EXISTS idx_blobs_key_start ON blobs(key, start_line);
 ";
 
+/// Open `blobs.db` read-only with a 1 s busy timeout.
+pub fn open_read_only(data_dir: &Path) -> Result<Connection> {
+    let path = data_dir.join("blobs.db");
+    let conn = Connection::open_with_flags(
+        &path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .with_context(|| format!("opening {} (read-only)", path.display()))?;
+    conn.busy_timeout(std::time::Duration::from_secs(1))?;
+    Ok(conn)
+}
+
 /// Open (or create) `blobs.db` with WAL mode.
 pub fn open_write(data_dir: &Path) -> Result<Connection> {
     let path = data_dir.join("blobs.db");

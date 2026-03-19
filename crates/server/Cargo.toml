@@ -7,6 +7,10 @@ edition = "2021"
 name = "find-server"
 path = "src/main.rs"
 
+[[bin]]
+name = "find-test"
+path = "src/find_test_main.rs"
+
 [lib]
 name = "find_server"
 path = "src/lib.rs"

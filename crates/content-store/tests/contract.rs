@@ -21,7 +21,7 @@ fn make_zip_store() -> (ZipContentStore, TempDir) {
 
 fn make_sqlite_store() -> (SqliteContentStore, TempDir) {
     let dir = TempDir::new().unwrap();
-    let store = SqliteContentStore::open(dir.path(), None).unwrap();
+    let store = SqliteContentStore::open(dir.path(), None, None).unwrap();
     (store, dir)
 }
 

@@ -135,6 +135,13 @@ run = "cargo llvm-cov --workspace --html && echo 'Report: target/llvm-cov/html/i
 description = "Show inbox status (pending and failed files)"
 run = "cargo run -p find-client --bin find-admin -- --config config/client.toml"
 
+[tasks.bench-storage]
+description = "Benchmark content store backends (stop find-server first — find-test opens store files directly)"
+run = [
+  "cargo build -p find-server --bin find-test",
+  "cargo run -p find-server --bin find-test -- bench-storage --config config/server.toml --concurrency 1 --concurrency 4 --concurrency 16",
+]
+
 # ── Database management ───────────────────────────────────────────────────────
 
 [tasks.clean-db]

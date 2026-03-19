@@ -24,9 +24,9 @@ use axum::{
 use tower_http::trace::TraceLayer;
 
 use find_common::api::{RecentFile, WorkerStatus};
-use find_common::config::{BackendType, ServerAppConfig};
+use find_common::config::ServerAppConfig;
 use archive::SharedArchiveState;
-use find_content_store::{ContentStore, MultiContentStore, SqliteContentStore, ZipContentStore};
+use find_content_store::{ContentStore, MultiContentStore, open_backend};
 
 // ── Embedded web UI ────────────────────────────────────────────────────────────
 
@@ -100,38 +100,23 @@ pub struct AppState {
 
 /// Open the configured content store backend(s).
 ///
-/// - Single backend named "default" (or any single-entry list): opens directly
-///   under `data_dir` for backward compatibility with existing data.
+/// - Single backend: opens directly under `data_dir` for backward compatibility.
 /// - Multiple backends: each opens under `data_dir/stores/{name}/`.
-fn open_content_store(config: &ServerAppConfig, data_dir: &Path) -> Result<Arc<dyn ContentStore>> {
+pub(crate) fn open_content_store(config: &ServerAppConfig, data_dir: &Path) -> Result<Arc<dyn ContentStore>> {
     let backends = &config.storage.backends;
     anyhow::ensure!(!backends.is_empty(), "storage.backends must not be empty");
 
-    let open_one = |name: &str, b: &find_common::config::BackendInstanceConfig, dir: &Path| -> Result<Arc<dyn ContentStore>> {
-        match b.backend_type {
-            BackendType::Zip => {
-                Ok(Arc::new(ZipContentStore::open(dir).with_context(|| format!("opening zip store '{name}'"))?))
-            }
-            BackendType::Sqlite => {
-                Ok(Arc::new(SqliteContentStore::open(dir, b.chunk_size_kb).with_context(|| format!("opening sqlite store '{name}'"))?))
-            }
-        }
-    };
-
     if backends.len() == 1 {
-        // Single backend: use data_dir directly (backward compatible).
-        let b = &backends[0];
-        return open_one(&b.name, b, data_dir);
+        return open_backend(&backends[0], data_dir);
     }
 
-    // Multiple backends: each gets its own subdirectory.
     let stores_dir = data_dir.join("stores");
     let mut stores: Vec<Arc<dyn ContentStore>> = Vec::with_capacity(backends.len());
     for b in backends {
         let dir = stores_dir.join(&b.name);
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("creating store directory for '{}'", b.name))?;
-        stores.push(open_one(&b.name, b, &dir)?);
+        stores.push(open_backend(b, &dir)?);
     }
     Ok(Arc::new(MultiContentStore { stores }))
 }
