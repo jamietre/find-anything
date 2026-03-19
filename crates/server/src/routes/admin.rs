@@ -19,7 +19,6 @@ use find_common::api::{
     UpdateApplyResponse, UpdateCheckResponse, WorkerQueueSlot, LINE_CONTENT_START,
 };
 
-use crate::archive::ArchiveManager;
 use crate::{AppState, CachedUpdateCheck};
 use crate::db;
 
@@ -557,12 +556,12 @@ pub async fn compact(
         return (s, Json(serde_json::Value::Null)).into_response();
     }
 
-    let data_dir = state.data_dir.clone();
-    let shared   = Arc::clone(&state.archive_state);
-    let dry_run  = query.dry_run;
+    let data_dir      = state.data_dir.clone();
+    let content_store = Arc::clone(&state.content_store);
+    let dry_run       = query.dry_run;
 
     run_blocking("compact", move || -> anyhow::Result<_> {
-        let resp = crate::compaction::compact_archives(&data_dir, &shared, dry_run)?;
+        let resp = crate::compaction::compact_archives(&data_dir, &content_store, dry_run)?;
         if dry_run {
             tracing::info!(
                 "compact (dry-run): {} archives, {} orphaned chunks, {} would be freed",
@@ -605,39 +604,29 @@ pub async fn delete_source(
         return (StatusCode::NOT_FOUND, Json(serde_json::json!({ "error": "source not found" }))).into_response();
     }
 
-    let archive_state = Arc::clone(&state.archive_state);
     let source_name = query.source.clone();
     let source_stats_cache = Arc::clone(&state.source_stats_cache);
     let stats_watch = Arc::clone(&state.stats_watch);
 
     let resp = run_blocking("delete_source", move || -> anyhow::Result<_> {
         let conn = db::open(&db_path)?;
-
         let files_deleted = db::count_files(&conn)?;
-        let chunk_refs = db::collect_all_chunk_refs(&conn)?;
-        let chunks_removed = chunk_refs.len();
 
         tracing::warn!(
             source = %source_name,
             files = files_deleted,
-            chunks = chunks_removed,
-            "source deleted"
+            "source deleted — orphaned blobs reclaimed at next compaction"
         );
 
         // Close the DB before deleting it.
         drop(conn);
 
-        // Use the shared archive state so that rewrite locks are coordinated
-        // with any concurrent inbox workers.
-        let archive_mgr = ArchiveManager::new(archive_state);
-        if !chunk_refs.is_empty() {
-            archive_mgr.remove_chunks(chunk_refs)?;
-        }
-
         std::fs::remove_file(&db_path)
             .with_context(|| format!("removing {}", db_path.display()))?;
 
-        Ok(Json(SourceDeleteResponse { files_deleted, chunks_removed }))
+        // chunks_removed is 0: orphaned blobs in content.db are collected by
+        // the next scheduled compaction pass rather than eagerly removed here.
+        Ok(Json(SourceDeleteResponse { files_deleted, chunks_removed: 0 }))
     }).await;
 
     // Evict the deleted source from the stats cache so GET /api/v1/stats

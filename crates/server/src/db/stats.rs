@@ -2,6 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
+use find_content_store::{ContentKey, ContentStore};
 
 use find_common::api::{ExtStat, FileKind, IndexingError, IndexingFailure, KindStats, ScanHistoryPoint};
 
@@ -81,26 +82,31 @@ pub fn append_scan_history(conn: &Connection, scanned_at: i64) -> Result<()> {
     Ok(())
 }
 
-/// Count files whose content has not yet been written to a ZIP archive.
+/// Count files whose content has not yet been written to the content store.
 ///
 /// A file is "pending content" when it has a `content_hash` (i.e. content was
-/// extracted) but neither an inline `file_content` row nor any `content_chunks`
-/// row for its block exists yet.  This is the DB-level view of archive backlog,
+/// extracted) but neither an inline `file_content` row nor an entry in the
+/// content store exists yet.  This is the DB-level view of archive backlog,
 /// independent of how many `.gz` files remain in the `to-archive/` queue.
-pub fn get_files_pending_content(conn: &Connection) -> Result<usize> {
-    let n: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM files f
-         WHERE f.content_hash IS NOT NULL
-           AND NOT EXISTS (SELECT 1 FROM file_content fc WHERE fc.file_id = f.id)
-           AND NOT EXISTS (
-               SELECT 1 FROM content_blocks cb
-               JOIN content_chunks cc ON cc.block_id = cb.id
-               WHERE cb.content_hash = f.content_hash
-           )",
-        [],
-        |r| r.get(0),
-    )?;
-    Ok(n as usize)
+pub fn get_files_pending_content(conn: &Connection, content_store: &dyn ContentStore) -> Result<usize> {
+    // Collect all distinct content_hash values that have no inline content.
+    let hashes: Vec<String> = conn
+        .prepare(
+            "SELECT DISTINCT f.content_hash FROM files f
+             WHERE f.content_hash IS NOT NULL
+               AND NOT EXISTS (SELECT 1 FROM file_content fc WHERE fc.file_id = f.id)",
+        )?
+        .query_map([], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+
+    let mut pending = 0usize;
+    for hash in hashes {
+        let key = ContentKey::new(hash.as_str());
+        if !content_store.contains(&key).unwrap_or(true) {
+            pending += 1;
+        }
+    }
+    Ok(pending)
 }
 
 /// Return up to `limit` scan history points, oldest first.

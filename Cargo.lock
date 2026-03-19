@@ -1339,6 +1339,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "find-content-store"
+version = "0.6.2"
+dependencies = [
+ "anyhow",
+ "find-common",
+ "rusqlite",
+ "tempfile",
+ "tracing",
+ "zip 8.2.0",
+]
+
+[[package]]
 name = "find-extract-archive"
 version = "0.6.2"
 dependencies = [
@@ -1490,6 +1502,7 @@ dependencies = [
  "chrono",
  "clap",
  "find-common",
+ "find-content-store",
  "flate2",
  "form_urlencoded",
  "image",

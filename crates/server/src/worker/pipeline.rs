@@ -113,13 +113,7 @@ pub(super) fn process_file_phase1_fallback(
         |row| row.get(0),
     )?;
 
-    // If content_hash is set, ensure content_blocks row exists.
-    if let Some(hash) = &file.content_hash {
-        tx.execute(
-            "INSERT OR IGNORE INTO content_blocks(content_hash) VALUES(?1)",
-            rusqlite::params![hash],
-        )?;
-    }
+    // (content_hash is stored in files.content_hash; no separate content_blocks table in v4)
 
     // On re-index: delete old inline FTS entries before inserting new ones.
     // This keeps the contentless FTS5 index clean for inline files, where old
@@ -321,7 +315,7 @@ mod tests {
     fn test_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-        conn.execute_batch(include_str!("../schema_v3.sql")).unwrap();
+        conn.execute_batch(include_str!("../schema_v4.sql")).unwrap();
         crate::db::register_scalar_functions(&conn).unwrap();
         conn
     }
@@ -471,17 +465,17 @@ mod tests {
     }
 
     #[test]
-    fn deferred_storage_inserts_content_block() {
+    fn deferred_storage_stores_content_hash_in_files() {
         let mut conn = test_conn();
         let mut file = make_file("doc.txt", 1000, "content");
         file.content_hash = Some("myhash".to_string());
         process_file_phase1(&mut conn, &file, 0).unwrap();
 
-        let block_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM content_blocks WHERE content_hash = 'myhash'",
+        let stored_hash: Option<String> = conn.query_row(
+            "SELECT content_hash FROM files WHERE path = 'doc.txt'",
             [],
             |r| r.get(0),
-        ).unwrap();
-        assert_eq!(block_count, 1, "content_blocks row should exist for the hash");
+        ).ok();
+        assert_eq!(stored_hash.as_deref(), Some("myhash"));
     }
 }

@@ -26,6 +26,7 @@ use tower_http::trace::TraceLayer;
 use find_common::api::{RecentFile, WorkerStatus};
 use find_common::config::ServerAppConfig;
 use archive::SharedArchiveState;
+use find_content_store::{ContentStore, ZipContentStore};
 
 // ── Embedded web UI ────────────────────────────────────────────────────────────
 
@@ -79,6 +80,9 @@ pub struct AppState {
     pub config: ServerAppConfig,
     pub data_dir: PathBuf,
     pub worker_status: Arc<std::sync::Mutex<WorkerStatus>>,
+    /// New content store — the single source of truth for ZIP archive I/O.
+    pub content_store: Arc<dyn ContentStore>,
+    /// Kept for the archive worker transition; removed in step 15.
     pub archive_state: Arc<SharedArchiveState>,
     pub inbox_paused: Arc<AtomicBool>,
     pub compaction_stats: Arc<std::sync::RwLock<Option<compaction::CompactionStats>>>,
@@ -112,6 +116,8 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
     let inbox_paused = Arc::new(AtomicBool::new(false));
     let archive_state = SharedArchiveState::new(data_dir.clone())
         .context("initialising archive state")?;
+    let content_store: Arc<dyn ContentStore> =
+        Arc::new(ZipContentStore::open(&data_dir).context("opening content store")?);
     let initial_compaction_stats = compaction::load_cached_stats(&data_dir);
     let compaction_stats = Arc::new(std::sync::RwLock::new(initial_compaction_stats));
     let source_stats_cache = Arc::new(std::sync::RwLock::new(stats_cache::SourceStatsCache::default()));
@@ -128,6 +134,7 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
         config,
         data_dir: data_dir.clone(),
         worker_status: Arc::clone(&worker_status),
+        content_store: Arc::clone(&content_store),
         archive_state: Arc::clone(&archive_state),
         inbox_paused: Arc::clone(&inbox_paused),
         compaction_stats: Arc::clone(&compaction_stats),
@@ -155,6 +162,7 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
     let worker_handles = worker::WorkerHandles {
         status: worker_status,
         archive_state,
+        content_store: Arc::clone(&content_store),
         inbox_paused,
         recent_tx: state.recent_tx.clone(),
         source_stats_cache: Arc::clone(&source_stats_cache),
@@ -175,7 +183,7 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
     compaction::start_compaction_scanner(
         data_dir.clone(),
         compaction_stats,
-        Arc::clone(&state.archive_state),
+        Arc::clone(&content_store),
         state.config.compaction.clone(),
         Arc::clone(&source_stats_cache),
         Arc::clone(&stats_watch),
@@ -185,12 +193,13 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
     // worker settle before running expensive DB queries).
     {
         let cache = Arc::clone(&source_stats_cache);
-        let dd = data_dir.clone();
-        let sw = Arc::clone(&stats_watch);
+        let cs    = Arc::clone(&content_store);
+        let dd    = data_dir.clone();
+        let sw    = Arc::clone(&stats_watch);
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_secs(30)).await;
             tokio::task::spawn_blocking(move || {
-                stats_cache::full_rebuild(&dd, &cache);
+                stats_cache::full_rebuild(&dd, &cache, &cs);
             }).await.ok();
             sw.send_modify(|v| *v = v.wrapping_add(1));
         });

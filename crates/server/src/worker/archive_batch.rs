@@ -1,29 +1,18 @@
 /// Archive phase (phase 2) of the inbox worker.
 ///
-/// Reads `.gz` files from `inbox/to-archive/`, parses them, appends content
-/// chunks to ZIP archives, and inserts `content_chunks` rows in SQLite.
-/// Separated from the phase-1 indexing loop so neither phase blocks the other.
+/// Reads `.gz` files from `inbox/to-archive/`, parses them, and stores file
+/// content in the `ContentStore`.  No SQLite writes are made to source DBs
+/// here — all metadata is owned by the content store's internal database.
 ///
-/// # Two-phase design
+/// # Design
 ///
-/// Within `run_archive_batch` there are two sub-phases:
-///
-/// **Sub-phase A (ZIP I/O):** for each gz file, one at a time:
-///   - Stream-parse the `BulkRequest` (no intermediate buffers).
-///   - Read file metadata from SQLite (no write lock needed).
-///   - Append content chunks to ZIP archives via the shared `ArchiveManager`.
-///   - Collect lightweight `ArchivedFile` metadata (block IDs, chunk refs —
-///     no content strings).
-///   - Drop the `BulkRequest`; only metadata remains in memory.
-///
-/// **Sub-phase B (SQLite writes):** once all ZIP I/O is done, group results by
-/// source and issue **one** transaction per source covering all gz files in the
-/// batch. This preserves the original single-transaction efficiency regardless
-/// of how many gz files are in the batch.
-///
-/// gz files are deleted only after their source's SQLite write succeeds, so a
-/// write failure leaves them available for a future retry.
-use std::collections::{HashMap, HashSet};
+/// For each gz file:
+/// 1. Parse the `BulkRequest`.
+/// 2. For each `IndexFile`, check whether the `content_hash` in the gz matches
+///    what the source DB currently records.  If it doesn't match (stale gz),
+///    skip the file — a newer gz will archive the correct content.
+/// 3. If the content is not yet in the store, call `content_store.put(key, blob)`.
+/// 4. Delete the gz file.
 use std::ffi::OsStr;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -32,30 +21,10 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use rusqlite::OptionalExtension;
 
-use crate::archive::{self, ArchiveManager, ChunkRef, SharedArchiveState};
+use find_content_store::{ContentKey, ContentStore};
+
 use crate::db;
 use super::WorkerConfig;
-
-macro_rules! timed {
-    ($tag:expr, $label:expr, $body:expr) => {{
-        tracing::debug!("{} → {}", $tag, $label);
-        let __t = std::time::Instant::now();
-        let __r = $body;
-        tracing::debug!("{} ← {} ({:.1}ms)", $tag, $label, __t.elapsed().as_secs_f64() * 1000.0);
-        __r
-    }};
-}
-
-// ── Types ─────────────────────────────────────────────────────────────────────
-
-/// Lightweight record of one successfully ZIP-archived file.
-/// Contains only metadata (IDs and chunk location refs) — no content strings.
-/// Accumulated across all gz files in the batch and written to SQLite in bulk.
-struct ArchivedFile {
-    block_id: i64,
-    chunk_ranges: Vec<archive::ChunkRange>,
-    chunk_refs: Vec<ChunkRef>,
-}
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
@@ -65,13 +34,14 @@ pub(super) fn run_archive_batch(
     data_dir: &Path,
     to_archive_dir: &Path,
     cfg: WorkerConfig,
-    shared_archive_state: &Arc<SharedArchiveState>,
+    content_store: &Arc<dyn ContentStore>,
 ) -> Result<usize> {
     let mut gz_files: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     for entry in std::fs::read_dir(to_archive_dir)?.flatten() {
         let path = entry.path();
         if path.extension() == Some(OsStr::new("gz")) {
-            let mtime = entry.metadata()
+            let mtime = entry
+                .metadata()
                 .ok()
                 .and_then(|m| m.modified().ok())
                 .unwrap_or(std::time::UNIX_EPOCH);
@@ -84,76 +54,27 @@ pub(super) fn run_archive_batch(
         return Ok(0);
     }
 
-    let batch: Vec<PathBuf> = gz_files.into_iter()
+    let batch: Vec<PathBuf> = gz_files
+        .into_iter()
         .take(cfg.archive_batch_size)
         .map(|(_, p)| p)
         .collect();
     let n_processed = batch.len();
 
-    // One ArchiveManager per source, shared across all gz files so ZIP archives
-    // are packed efficiently (the current open archive carries over between
-    // requests for the same source).
-    let mut archive_managers: HashMap<String, ArchiveManager> = HashMap::new();
-
-    // --- Sub-phase A: ZIP I/O, one gz at a time ---
-    //
-    // Each entry is `(gz_path, source, archived_files)` for a successfully
-    // processed gz, or `None` for a failed one (left in to-archive/ for retry).
-    let mut phase_a_results: Vec<(PathBuf, String, Vec<ArchivedFile>)> = Vec::new();
-
-    for gz_path in batch {
-        match zip_phase_for_gz(data_dir, &gz_path, shared_archive_state, &mut archive_managers) {
-            Ok((source, archived_files)) => {
-                phase_a_results.push((gz_path, source, archived_files));
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Archive batch: ZIP phase failed for {}: {e:#}",
-                    gz_path.display()
-                );
-                // Leave the file in to-archive/ for the next batch tick.
-            }
+    for gz_path in &batch {
+        if let Err(e) = archive_gz(data_dir, gz_path, content_store) {
+            tracing::error!(
+                "Archive batch: failed to process {}: {e:#}",
+                gz_path.display()
+            );
+            // Leave the file in to-archive/ for the next batch tick.
+            continue;
         }
-    }
-
-    // --- Sub-phase B: SQLite writes, one transaction per source ---
-    //
-    // Group the phase-A results by source so we open one DB connection and
-    // acquire the source lock exactly once per source per batch, regardless of
-    // how many gz files that source had.
-    let mut by_source: HashMap<String, (Vec<PathBuf>, Vec<ArchivedFile>)> = HashMap::new();
-    for (gz_path, source, archived_files) in phase_a_results {
-        let entry = by_source.entry(source).or_default();
-        entry.0.push(gz_path);
-        entry.1.extend(archived_files);
-    }
-
-    for (source, (gz_paths, archived_files)) in by_source {
-        match write_content_chunks(data_dir, &source, &archived_files, shared_archive_state) {
-            Ok(()) => {
-                tracing::info!(
-                    "[archive:{source}] {} requests: archived {} files",
-                    gz_paths.len(),
-                    archived_files.len(),
-                );
-                for gz_path in &gz_paths {
-                    if let Err(e) = std::fs::remove_file(gz_path) {
-                        tracing::error!(
-                            "Archive batch: failed to delete {}: {e}",
-                            gz_path.display()
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                tracing::error!(
-                    "Archive batch: SQLite write failed for source {source}: {e:#}. \
-                     Leaving {} gz file(s) for retry.",
-                    gz_paths.len()
-                );
-                // gz files are left in to-archive/ — they will be reprocessed.
-                // The already_archived check prevents double-writing chunks.
-            }
+        if let Err(e) = std::fs::remove_file(gz_path) {
+            tracing::error!(
+                "Archive batch: failed to delete {}: {e}",
+                gz_path.display()
+            );
         }
     }
 
@@ -162,217 +83,112 @@ pub(super) fn run_archive_batch(
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-/// Sub-phase A for one gz file: stream-parse, check DB metadata, write chunks
-/// to ZIP archives, and return lightweight `ArchivedFile` metadata.
-///
-/// The `BulkRequest` is dropped before this function returns; only the metadata
-/// (`block_id`, chunk ranges and refs — no content strings) escapes.
-///
-/// **Stale-content check:** Phase 1 may have processed multiple requests for
-/// the same file path. The DB `files.content_hash` reflects the *latest*
-/// indexed version. If this request's `IndexFile.content_hash` differs, the
-/// content is stale — a later gz will archive the correct version.
-fn zip_phase_for_gz(
+/// Process one gz file: for each file whose content_hash matches the DB, store
+/// the blob in the content store if it isn't already present.
+fn archive_gz(
     data_dir: &Path,
     gz_path: &Path,
-    shared_archive_state: &Arc<SharedArchiveState>,
-    archive_managers: &mut HashMap<String, ArchiveManager>,
-) -> Result<(String, Vec<ArchivedFile>)> {
+    content_store: &Arc<dyn ContentStore>,
+) -> Result<()> {
     let request = parse_gz_request(gz_path)?;
     let source = request.source;
-    let files = request.files; // move out; request is now (mostly) dropped
     let tag = format!("[archive:{source}]");
 
     let db_path = data_dir.join("sources").join(format!("{source}.db"));
+    if !db_path.exists() {
+        // Source was deleted since this gz was queued — nothing to do.
+        return Ok(());
+    }
     let conn = db::open(&db_path)
         .with_context(|| format!("opening DB for source {source}"))?;
 
-    let archive_mgr = archive_managers
-        .entry(source.clone())
-        .or_insert_with(|| ArchiveManager::new(Arc::clone(shared_archive_state)));
+    let mut stored = 0usize;
+    let mut skipped = 0usize;
 
-    // Collect work items.  Consuming `files` lets us move `file.lines` into
-    // `line_data` without cloning the content strings.
-    struct ArchiveWork {
-        #[allow(dead_code)]
-        file_id: i64,
-        block_id: i64,
-        path: String,
-        line_data: Vec<(usize, String)>,
-    }
-    let mut archive_works: Vec<ArchiveWork> = Vec::new();
-    let mut seen_block_ids: HashSet<i64> = HashSet::new();
+    for file in request.files {
+        let Some(file_content_hash) = &file.content_hash else {
+            continue;
+        };
 
-    for file in files {
-        let file_row: Option<(i64, Option<String>)> = conn.query_row(
-            "SELECT id, content_hash FROM files WHERE path = ?1",
-            rusqlite::params![file.path],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional().unwrap_or(None);
+        // Read the current content_hash from the DB for this path.
+        let db_hash: Option<String> = conn
+            .query_row(
+                "SELECT content_hash FROM files WHERE path = ?1",
+                rusqlite::params![file.path],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap_or(None)
+            .flatten();
 
-        let Some((file_id, Some(db_content_hash))) = file_row else {
+        let Some(db_hash) = db_hash else {
             continue;
         };
 
         // Skip stale content: if this gz carries an older version of the file,
         // the newer gz will archive the correct content when it is processed.
-        if let Some(ref file_hash) = file.content_hash {
-            if file_hash != &db_content_hash {
-                tracing::debug!(
-                    "{tag} skipping {} (stale: gz={}, DB={})",
-                    file.path, file_hash, db_content_hash
-                );
-                continue;
-            }
+        if file_content_hash != &db_hash {
+            tracing::debug!(
+                "{tag} skipping {} (stale: gz={}, DB={})",
+                file.path,
+                file_content_hash,
+                db_hash
+            );
+            skipped += 1;
+            continue;
         }
 
-        let block_id: Option<i64> = conn.query_row(
-            "SELECT id FROM content_blocks WHERE content_hash = ?1",
-            rusqlite::params![&db_content_hash],
-            |row| row.get(0),
-        ).optional().unwrap_or(None);
+        let key = ContentKey::new(db_hash.as_str());
 
-        let Some(block_id) = block_id else { continue; };
-
-        let already_archived: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM content_chunks WHERE block_id = ?1",
-            rusqlite::params![block_id],
-            |row| row.get(0),
-        ).unwrap_or(0);
-        if already_archived > 0 { continue; }
-
-        let is_inline: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM file_content WHERE file_id = ?1",
-            rusqlite::params![file_id],
-            |row| row.get(0),
-        ).unwrap_or(0);
-        if is_inline > 0 { continue; }
-
-        // Move lines by value — no clone of content strings.
-        let line_data: Vec<(usize, String)> = file.lines.into_iter()
-            .map(|l| (l.line_number, l.content))
-            .collect();
-
-        if line_data.is_empty() { continue; }
-
-        if !seen_block_ids.insert(block_id) { continue; }
-
-        archive_works.push(ArchiveWork { file_id, block_id, path: file.path, line_data });
-    }
-    // `files` (and all content strings in it) is now fully consumed and dropped.
-
-    if archive_works.is_empty() {
-        return Ok((source, Vec::new()));
-    }
-
-    // Append chunks to ZIP archives; collect lightweight metadata.
-    let n_works = archive_works.len();
-    let mut archived_files: Vec<ArchivedFile> = Vec::new();
-
-    timed!(tag, format!("append chunks for {n_works} files"), {
-        for work in archive_works {
-            let chunk_result = archive::chunk_lines(work.block_id, &work.line_data);
-            // line_data content strings are freed after chunk_lines returns.
-            match archive_mgr.append_chunks(chunk_result.chunks) {
-                Ok(chunk_refs) => {
-                    archived_files.push(ArchivedFile {
-                        block_id: work.block_id,
-                        chunk_ranges: chunk_result.ranges,
-                        chunk_refs,
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("{tag} failed to append chunks for {}: {e:#}", work.path);
-                }
-            }
-            // work (and any remaining line_data) is dropped at end of iteration.
+        // Fast-path: content already stored.
+        if content_store.contains(&key)? {
+            continue;
         }
-    });
 
-    Ok((source, archived_files))
-}
-
-/// Sub-phase B for one source: open one DB connection, acquire the source lock
-/// once, and commit all `content_chunks` rows in a single transaction.
-fn write_content_chunks(
-    data_dir: &Path,
-    source: &str,
-    archived_files: &[ArchivedFile],
-    shared_archive_state: &Arc<SharedArchiveState>,
-) -> Result<()> {
-    if archived_files.is_empty() {
-        return Ok(());
-    }
-
-    let tag = format!("[archive:{source}]");
-    let db_path = data_dir.join("sources").join(format!("{source}.db"));
-    let conn = db::open(&db_path)
-        .with_context(|| format!("opening DB for source {source}"))?;
-    let source_lock = shared_archive_state.source_lock(source);
-
-    let _guard = timed!(tag, "acquire source lock for chunk insert", {
-        source_lock.lock()
-            .map_err(|_| anyhow::anyhow!("source lock poisoned for {source}"))?
-    });
-
-    timed!(tag, format!("insert content_chunks for {} files", archived_files.len()), {
-        let tx = conn.unchecked_transaction()?;
-        for af in archived_files {
-            // Re-check inside the transaction: a concurrent batch (e.g. from a
-            // parallel source) may have committed these chunks since the
-            // already_archived pre-scan check above.
-            let already_committed: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM content_chunks WHERE block_id = ?1",
-                rusqlite::params![af.block_id],
+        // Check for inline storage — these files don't need archive content.
+        let file_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![file.path],
                 |r| r.get(0),
-            )?;
-            if already_committed > 0 {
-                tracing::debug!(
-                    "block_id={} already committed by concurrent batch — skipping",
-                    af.block_id
-                );
+            )
+            .optional()
+            .unwrap_or(None);
+        if let Some(fid) = file_id {
+            let is_inline: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM file_content WHERE file_id = ?1",
+                    rusqlite::params![fid],
+                    |r| r.get(0),
+                )
+                .unwrap_or(0);
+            if is_inline > 0 {
                 continue;
             }
-
-            let chunk_ref_by_number: HashMap<usize, &ChunkRef> =
-                af.chunk_refs.iter().enumerate().collect();
-
-            for range in &af.chunk_ranges {
-                let Some(chunk_ref) = chunk_ref_by_number.get(&range.chunk_number) else {
-                    continue;
-                };
-
-                tx.execute(
-                    "INSERT OR IGNORE INTO content_archives(name) VALUES(?1)",
-                    rusqlite::params![chunk_ref.archive_name],
-                )?;
-                let archive_id: i64 = tx.query_row(
-                    "SELECT id FROM content_archives WHERE name = ?1",
-                    rusqlite::params![chunk_ref.archive_name],
-                    |r| r.get(0),
-                )?;
-
-                if let Err(e) = tx.execute(
-                    "INSERT INTO content_chunks(block_id, chunk_number, archive_id, start_line, end_line)
-                     VALUES(?1, ?2, ?3, ?4, ?5)",
-                    rusqlite::params![
-                        af.block_id,
-                        range.chunk_number as i64,
-                        archive_id,
-                        range.start_line as i64,
-                        range.end_line as i64,
-                    ],
-                ) {
-                    tracing::error!(
-                        "{tag} failed to insert content_chunk for block_id={}: {e}",
-                        af.block_id
-                    );
-                }
-            }
         }
-        tx.commit()?;
-    });
 
+        // Build blob: sort lines by line_number, join with '\n'.
+        let mut sorted_lines = file.lines.clone();
+        sorted_lines.sort_by_key(|l| l.line_number);
+        if sorted_lines.is_empty() {
+            continue;
+        }
+        let blob: String = sorted_lines
+            .into_iter()
+            .map(|l| l.content)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        match content_store.put(&key, &blob) {
+            Ok(true) => stored += 1,
+            Ok(false) => {} // concurrent put already stored it
+            Err(e) => tracing::error!("{tag} failed to store content for {}: {e:#}", file.path),
+        }
+    }
+
+    tracing::info!(
+        "{tag} archived {stored} files ({skipped} stale/skipped)"
+    );
     Ok(())
 }
 
@@ -389,9 +205,12 @@ pub(super) fn parse_gz_request(gz_path: &Path) -> Result<find_common::api::BulkR
 mod tests {
     use super::*;
     use std::io::Write;
+    use std::path::Path;
+    use std::sync::Arc;
 
     use find_common::api::{BulkRequest, FileKind, IndexFile, IndexLine};
     use find_common::config::NormalizationSettings;
+    use find_content_store::{ContentKey, ContentStore, ZipContentStore};
 
     use crate::db::encode_fts_rowid;
 
@@ -399,13 +218,8 @@ mod tests {
         std::fs::create_dir_all(data_dir.join("sources").join("content")).unwrap();
     }
 
-    fn read_chunk_ranges(conn: &rusqlite::Connection, block_id: i64) -> Vec<(i64, i64)> {
-        let mut stmt = conn.prepare(
-            "SELECT start_line, end_line FROM content_chunks WHERE block_id = ?1 ORDER BY chunk_number"
-        ).unwrap();
-        stmt.query_map(rusqlite::params![block_id], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-        }).unwrap().map(|r| r.unwrap()).collect()
+    fn open_content_store(data_dir: &Path) -> Arc<dyn ContentStore> {
+        Arc::new(ZipContentStore::open(data_dir).unwrap())
     }
 
     fn write_bulk_gz(path: &Path, req: &BulkRequest) {
@@ -436,8 +250,16 @@ mod tests {
                 kind: FileKind::Text,
                 scanner_version: 1,
                 lines: vec![
-                    IndexLine { archive_path: None, line_number: 0, content: path.to_string() },
-                    IndexLine { archive_path: None, line_number: 1, content: content.to_string() },
+                    IndexLine {
+                        archive_path: None,
+                        line_number: 0,
+                        content: path.to_string(),
+                    },
+                    IndexLine {
+                        archive_path: None,
+                        line_number: 1,
+                        content: content.to_string(),
+                    },
                 ],
                 extract_ms: None,
                 content_hash: Some("testhash".to_string()),
@@ -450,8 +272,8 @@ mod tests {
         }
     }
 
-    /// Seed the DB with a file + content_block + FTS entries (no content_chunks yet).
-    fn seed_db(data_dir: &Path, source: &str, path: &str) -> (rusqlite::Connection, i64, i64) {
+    /// Seed the source DB with a file that has `content_hash = 'testhash'`.
+    fn seed_db(data_dir: &Path, source: &str, path: &str) -> (rusqlite::Connection, i64) {
         let db_path = data_dir.join("sources").join(format!("{source}.db"));
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
         let conn = crate::db::open(&db_path).unwrap();
@@ -460,100 +282,108 @@ mod tests {
             "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, line_count)
              VALUES (?1, 1000, 100, 'text', 0, NULL, 'testhash', 2)",
             rusqlite::params![path],
-        ).unwrap();
+        )
+        .unwrap();
         let file_id = conn.last_insert_rowid();
-
-        conn.execute("INSERT OR IGNORE INTO content_blocks(content_hash) VALUES('testhash')", []).unwrap();
-        let block_id: i64 = conn.query_row(
-            "SELECT id FROM content_blocks WHERE content_hash = 'testhash'",
-            [], |r| r.get(0),
-        ).unwrap();
 
         conn.execute(
             "INSERT INTO lines_fts(rowid, content) VALUES (?1, ?2)",
             rusqlite::params![encode_fts_rowid(file_id, 0), path],
-        ).unwrap();
+        )
+        .unwrap();
         conn.execute(
             "INSERT INTO lines_fts(rowid, content) VALUES (?1, ?2)",
             rusqlite::params![encode_fts_rowid(file_id, 1), "hello world"],
-        ).unwrap();
+        )
+        .unwrap();
 
-        (conn, file_id, block_id)
+        (conn, file_id)
     }
 
     #[test]
-    fn chunks_written_and_content_chunks_inserted() {
+    fn content_stored_and_gz_deleted() {
         let data_tmp = tempfile::tempdir().unwrap();
         let to_archive_tmp = tempfile::tempdir().unwrap();
         let data_dir = data_tmp.path();
         let to_archive_dir = to_archive_tmp.path();
         setup_data_dir(data_dir);
 
-        let (conn, _file_id, block_id) = seed_db(data_dir, "test_source", "docs/readme.txt");
-        write_bulk_gz(&to_archive_dir.join("batch_001.gz"), &make_bulk_request("test_source", "docs/readme.txt", "hello world"));
+        seed_db(data_dir, "test_source", "docs/readme.txt");
+        write_bulk_gz(
+            &to_archive_dir.join("batch_001.gz"),
+            &make_bulk_request("test_source", "docs/readme.txt", "hello world"),
+        );
 
-        let processed = run_archive_batch(data_dir, to_archive_dir, make_worker_config(),
-            &crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap()).unwrap();
+        let cs = open_content_store(data_dir);
+        let processed = run_archive_batch(data_dir, to_archive_dir, make_worker_config(), &cs).unwrap();
         assert_eq!(processed, 1);
 
-        let gz_count = std::fs::read_dir(to_archive_dir).unwrap().flatten()
-            .filter(|e| e.path().extension().map_or(false, |x| x == "gz")).count();
+        let gz_count = std::fs::read_dir(to_archive_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().map_or(false, |x| x == "gz"))
+            .count();
         assert_eq!(gz_count, 0, "gz should be removed after processing");
 
-        let ranges = read_chunk_ranges(&conn, block_id);
-        assert!(!ranges.is_empty(), "content_chunks should have entries");
-
-        let content_dir = data_dir.join("sources").join("content");
-        let zip_count = std::fs::read_dir(&content_dir).unwrap().flatten()
-            .filter(|e| e.path().is_dir())
-            .flat_map(|d| std::fs::read_dir(d.path()).unwrap().flatten())
-            .filter(|e| e.path().extension().map_or(false, |x| x == "zip")).count();
-        assert!(zip_count > 0, "at least one ZIP archive should have been created");
+        let key = ContentKey::new("testhash");
+        assert!(cs.contains(&key).unwrap(), "content should be in store");
     }
 
     #[test]
-    fn gz_file_removed_after_processing() {
+    fn gz_deleted_when_no_source_db() {
         let data_tmp = tempfile::tempdir().unwrap();
         let to_archive_tmp = tempfile::tempdir().unwrap();
         let data_dir = data_tmp.path();
         let to_archive_dir = to_archive_tmp.path();
         setup_data_dir(data_dir);
-        // No DB — every file lookup returns nothing; gz is still deleted.
-        write_bulk_gz(&to_archive_dir.join("ghost_001.gz"), &make_bulk_request("ghost_source", "nonexistent.txt", "x"));
 
-        let processed = run_archive_batch(data_dir, to_archive_dir, make_worker_config(),
-            &crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap()).unwrap();
+        write_bulk_gz(
+            &to_archive_dir.join("ghost_001.gz"),
+            &make_bulk_request("ghost_source", "nonexistent.txt", "x"),
+        );
+
+        let cs = open_content_store(data_dir);
+        let processed =
+            run_archive_batch(data_dir, to_archive_dir, make_worker_config(), &cs).unwrap();
         assert_eq!(processed, 1);
 
-        let gz_count = std::fs::read_dir(to_archive_dir).unwrap().flatten()
-            .filter(|e| e.path().extension().map_or(false, |x| x == "gz")).count();
-        assert_eq!(gz_count, 0, "gz should be removed even when file has no DB entry");
+        let gz_count = std::fs::read_dir(to_archive_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().map_or(false, |x| x == "gz"))
+            .count();
+        assert_eq!(gz_count, 0, "gz should be removed even when source has no DB");
     }
 
     #[test]
-    fn already_archived_file_is_skipped() {
+    fn already_stored_content_is_skipped() {
         let data_tmp = tempfile::tempdir().unwrap();
         let to_archive_tmp = tempfile::tempdir().unwrap();
         let data_dir = data_tmp.path();
         let to_archive_dir = to_archive_tmp.path();
         setup_data_dir(data_dir);
 
-        let (conn, _file_id, block_id) = seed_db(data_dir, "test_source", "docs/readme.txt");
-        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
+        seed_db(data_dir, "test_source", "docs/readme.txt");
+        let cs = open_content_store(data_dir);
 
-        write_bulk_gz(&to_archive_dir.join("first_001.gz"), &make_bulk_request("test_source", "docs/readme.txt", "hello world"));
-        run_archive_batch(data_dir, to_archive_dir, make_worker_config(), &shared).unwrap();
-        let ranges_after_first = read_chunk_ranges(&conn, block_id);
-        assert!(!ranges_after_first.is_empty());
+        write_bulk_gz(
+            &to_archive_dir.join("first_001.gz"),
+            &make_bulk_request("test_source", "docs/readme.txt", "hello world"),
+        );
+        run_archive_batch(data_dir, to_archive_dir, make_worker_config(), &cs).unwrap();
 
-        write_bulk_gz(&to_archive_dir.join("second_001.gz"), &make_bulk_request("test_source", "docs/readme.txt", "hello world"));
-        run_archive_batch(data_dir, to_archive_dir, make_worker_config(), &shared).unwrap();
-        let ranges_after_second = read_chunk_ranges(&conn, block_id);
-        assert_eq!(ranges_after_first, ranges_after_second, "content_chunks should not change on second run");
+        // Pre-store: content already there, put should be a no-op.
+        write_bulk_gz(
+            &to_archive_dir.join("second_001.gz"),
+            &make_bulk_request("test_source", "docs/readme.txt", "hello world"),
+        );
+        run_archive_batch(data_dir, to_archive_dir, make_worker_config(), &cs).unwrap();
+
+        // Content store still intact.
+        let key = ContentKey::new("testhash");
+        assert!(cs.contains(&key).unwrap());
     }
 
-    /// Stale content (gz hash ≠ DB hash) must not be archived under the wrong
-    /// block_id. The gz is still deleted (it was processed without error).
     #[test]
     fn stale_content_hash_is_skipped() {
         let data_tmp = tempfile::tempdir().unwrap();
@@ -562,7 +392,7 @@ mod tests {
         let to_archive_dir = to_archive_tmp.path();
         setup_data_dir(data_dir);
 
-        // DB has "newhash" (simulating Phase 1 having processed a newer request).
+        // DB has "newhash" (a newer request was already indexed).
         let db_path = data_dir.join("sources").join("test_source.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
         let conn = crate::db::open(&db_path).unwrap();
@@ -570,117 +400,47 @@ mod tests {
             "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, line_count)
              VALUES ('docs/readme.txt', 2000, 100, 'text', 0, NULL, 'newhash', 1)",
             [],
-        ).unwrap();
-        conn.execute("INSERT OR IGNORE INTO content_blocks(content_hash) VALUES('newhash')", []).unwrap();
-        conn.execute("INSERT OR IGNORE INTO content_blocks(content_hash) VALUES('oldhash')", []).unwrap();
-        let block_id_new: i64 = conn.query_row(
-            "SELECT id FROM content_blocks WHERE content_hash = 'newhash'", [], |r| r.get(0),
-        ).unwrap();
+        )
+        .unwrap();
 
         // gz carries "oldhash" — stale.
         let stale_req = BulkRequest {
             source: "test_source".to_string(),
             files: vec![IndexFile {
                 path: "docs/readme.txt".to_string(),
-                mtime: 1000, size: Some(10), kind: FileKind::Text, scanner_version: 1,
-                lines: vec![IndexLine { archive_path: None, line_number: 1, content: "old content".to_string() }],
+                mtime: 1000,
+                size: Some(10),
+                kind: FileKind::Text,
+                scanner_version: 1,
+                lines: vec![IndexLine {
+                    archive_path: None,
+                    line_number: 1,
+                    content: "old content".to_string(),
+                }],
                 extract_ms: None,
                 content_hash: Some("oldhash".to_string()),
                 is_new: false,
             }],
-            delete_paths: vec![], rename_paths: vec![], scan_timestamp: None, indexing_failures: vec![],
+            delete_paths: vec![],
+            rename_paths: vec![],
+            scan_timestamp: None,
+            indexing_failures: vec![],
         };
         write_bulk_gz(&to_archive_dir.join("stale_001.gz"), &stale_req);
 
-        run_archive_batch(data_dir, to_archive_dir, make_worker_config(),
-            &crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap()).unwrap();
+        let cs = open_content_store(data_dir);
+        run_archive_batch(data_dir, to_archive_dir, make_worker_config(), &cs).unwrap();
 
-        let gz_count = std::fs::read_dir(to_archive_dir).unwrap().flatten()
-            .filter(|e| e.path().extension().map_or(false, |x| x == "gz")).count();
+        // gz deleted.
+        let gz_count = std::fs::read_dir(to_archive_dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().map_or(false, |x| x == "gz"))
+            .count();
         assert_eq!(gz_count, 0, "stale gz should be deleted");
 
-        let ranges = read_chunk_ranges(&conn, block_id_new);
-        assert!(ranges.is_empty(), "stale content must not be archived under newhash block_id");
-    }
-
-    /// Multiple gz files for the same source should use a single SQLite
-    /// transaction (sub-phase B). This test verifies both are archived correctly
-    /// and both gz files are deleted.
-    #[test]
-    fn multiple_gz_files_same_source_both_archived() {
-        let data_tmp = tempfile::tempdir().unwrap();
-        let to_archive_tmp = tempfile::tempdir().unwrap();
-        let data_dir = data_tmp.path();
-        let to_archive_dir = to_archive_tmp.path();
-        setup_data_dir(data_dir);
-
-        let db_path = data_dir.join("sources").join("src.db");
-        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
-        let conn = crate::db::open(&db_path).unwrap();
-
-        // Seed two files with different hashes.
-        for (path, hash, fid_offset) in [("a.txt", "hash_a", 0i64), ("b.txt", "hash_b", 1)] {
-            conn.execute(
-                "INSERT INTO files (path, mtime, size, kind, indexed_at, extract_ms, content_hash, line_count)
-                 VALUES (?1, 1000, 50, 'text', 0, NULL, ?2, 2)",
-                rusqlite::params![path, hash],
-            ).unwrap();
-            let file_id = conn.last_insert_rowid();
-            conn.execute("INSERT OR IGNORE INTO content_blocks(content_hash) VALUES(?1)", rusqlite::params![hash]).unwrap();
-            conn.execute(
-                "INSERT INTO lines_fts(rowid, content) VALUES (?1, ?2)",
-                rusqlite::params![encode_fts_rowid(file_id, 0), path],
-            ).unwrap();
-            let _ = fid_offset; // suppress warning
-        }
-
-        let block_id_a: i64 = conn.query_row(
-            "SELECT id FROM content_blocks WHERE content_hash = 'hash_a'", [], |r| r.get(0)).unwrap();
-        let block_id_b: i64 = conn.query_row(
-            "SELECT id FROM content_blocks WHERE content_hash = 'hash_b'", [], |r| r.get(0)).unwrap();
-
-        // Two separate gz files for the same source.
-        let req_a = BulkRequest {
-            source: "src".to_string(),
-            files: vec![IndexFile {
-                path: "a.txt".to_string(), mtime: 1000, size: Some(50), kind: FileKind::Text,
-                scanner_version: 1,
-                lines: vec![
-                    IndexLine { archive_path: None, line_number: 0, content: "a.txt".to_string() },
-                    IndexLine { archive_path: None, line_number: 1, content: "content of a".to_string() },
-                ],
-                extract_ms: None, content_hash: Some("hash_a".to_string()), is_new: true,
-            }],
-            delete_paths: vec![], rename_paths: vec![], scan_timestamp: None, indexing_failures: vec![],
-        };
-        let req_b = BulkRequest {
-            source: "src".to_string(),
-            files: vec![IndexFile {
-                path: "b.txt".to_string(), mtime: 1000, size: Some(50), kind: FileKind::Text,
-                scanner_version: 1,
-                lines: vec![
-                    IndexLine { archive_path: None, line_number: 0, content: "b.txt".to_string() },
-                    IndexLine { archive_path: None, line_number: 1, content: "content of b".to_string() },
-                ],
-                extract_ms: None, content_hash: Some("hash_b".to_string()), is_new: true,
-            }],
-            delete_paths: vec![], rename_paths: vec![], scan_timestamp: None, indexing_failures: vec![],
-        };
-        write_bulk_gz(&to_archive_dir.join("req_a.gz"), &req_a);
-        write_bulk_gz(&to_archive_dir.join("req_b.gz"), &req_b);
-
-        run_archive_batch(data_dir, to_archive_dir, make_worker_config(),
-            &crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap()).unwrap();
-
-        // Both gz files deleted.
-        let gz_count = std::fs::read_dir(to_archive_dir).unwrap().flatten()
-            .filter(|e| e.path().extension().map_or(false, |x| x == "gz")).count();
-        assert_eq!(gz_count, 0, "both gz files should be deleted");
-
-        // Both files archived.
-        let ranges_a = read_chunk_ranges(&conn, block_id_a);
-        let ranges_b = read_chunk_ranges(&conn, block_id_b);
-        assert!(!ranges_a.is_empty(), "a.txt should have content_chunks");
-        assert!(!ranges_b.is_empty(), "b.txt should have content_chunks");
+        // Stale content was NOT stored.
+        let stale_key = ContentKey::new("oldhash");
+        assert!(!cs.contains(&stale_key).unwrap());
     }
 }

@@ -9,18 +9,16 @@
 //! returns the cached size without decompressing any content.
 
 use std::collections::HashSet;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use zip::ZipArchive;
 
 use find_common::api::CompactResponse;
 use find_common::config::CompactionConfig;
+use find_content_store::{ContentKey, ContentStore};
 
-use crate::archive::SharedArchiveState;
 use crate::db;
 
 // ── Persistent stats store ────────────────────────────────────────────────────
@@ -87,78 +85,51 @@ fn save_stats(data_dir: &Path, stats: &CompactionStats) -> Result<()> {
 
 // ── Core scan ─────────────────────────────────────────────────────────────────
 
-/// Build the set of every `(archive_name, chunk_name)` pair that is
-/// referenced by at least one `lines` row across all source databases.
-fn build_referenced_set(sources_dir: &Path) -> HashSet<(String, String)> {
-    let mut set = HashSet::new();
-    let rd = match std::fs::read_dir(sources_dir) {
+/// Collect all distinct `content_hash` values from every source DB.
+/// These are the live keys that the content store must keep.
+fn collect_live_keys(data_dir: &Path) -> HashSet<ContentKey> {
+    let sources_dir = data_dir.join("sources");
+    let mut keys = HashSet::new();
+    let rd = match std::fs::read_dir(&sources_dir) {
         Ok(rd) => rd,
-        Err(_) => return set,
+        Err(_) => return keys,
     };
     for entry in rd.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("db") {
             continue;
         }
-        let conn = match db::open(&path) {
+        let conn = match db::open_for_stats(&path) {
             Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("compaction scan: skipping {}: {e:#}", path.display());
-                continue;
-            }
+            Err(_) => continue,
         };
-        match db::collect_all_chunk_refs(&conn) {
-            Ok(refs) => {
-                for r in refs {
-                    set.insert((r.archive_name, r.chunk_name));
-                }
-            }
-            Err(e) => tracing::warn!("compaction scan: collect_all_chunk_refs failed for {}: {e:#}", path.display()),
-        }
+        let mut stmt = match conn.prepare(
+            "SELECT DISTINCT content_hash FROM files WHERE content_hash IS NOT NULL",
+        ) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let _ = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map(|rows| rows.flatten().for_each(|h| { keys.insert(ContentKey::new(h)); }));
     }
-    set
+    keys
 }
 
 /// Scan all ZIP archives and compute orphaned vs total compressed bytes.
 /// Does not modify any files.
-pub fn scan_wasted_space(data_dir: &Path) -> Result<CompactionStats> {
-    let sources_dir = data_dir.join("sources");
-    let content_dir = sources_dir.join("content");
+pub fn scan_wasted_space(
+    data_dir: &Path,
+    content_store: &dyn ContentStore,
+) -> Result<CompactionStats> {
+    let live_keys = collect_live_keys(data_dir);
 
-    let referenced = build_referenced_set(&sources_dir);
+    // Dry-run compact gives us orphaned bytes without touching any files.
+    let result = content_store.compact(&live_keys, true /* dry_run */)?;
+    let orphaned_bytes = result.bytes_freed;
 
-    let mut total_bytes:    u64 = 0;
-    let mut orphaned_bytes: u64 = 0;
-
-    for subdir_entry in std::fs::read_dir(&content_dir).into_iter().flatten().flatten() {
-        let subdir = subdir_entry.path();
-        if !subdir.is_dir() { continue; }
-        for file_entry in std::fs::read_dir(&subdir).into_iter().flatten().flatten() {
-            let path = file_entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("zip") { continue; }
-            let archive_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) => n.to_string(),
-                None => continue,
-            };
-            let file = match File::open(&path) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            let mut zip = match ZipArchive::new(file) {
-                Ok(z) => z,
-                Err(_) => continue,
-            };
-            for i in 0..zip.len() {
-                if let Ok(entry) = zip.by_index_raw(i) {
-                    let size = entry.compressed_size();
-                    total_bytes += size;
-                    if !referenced.contains(&(archive_name.clone(), entry.name().to_string())) {
-                        orphaned_bytes += size;
-                    }
-                }
-            }
-        }
-    }
+    // Total bytes from the content store's incremental counter.
+    let total_bytes = content_store.archive_stats().map(|(_, b)| b).unwrap_or(0);
 
     let scanned_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -170,153 +141,26 @@ pub fn scan_wasted_space(data_dir: &Path) -> Result<CompactionStats> {
 
 // ── Compaction ────────────────────────────────────────────────────────────────
 
-/// Remove orphaned chunks from all archives.
+/// Remove orphaned chunks from all archives via the content store.
 ///
-/// Acquires the per-archive `rewrite_lock` before each rewrite, so compaction
-/// is safe to run while the inbox worker pool is processing requests.
-/// If `dry_run` is `true`, reports what would be freed without modifying files.
+/// Collects live keys from all source DBs, then delegates to
+/// `content_store.compact()`.  If `dry_run` is `true`, reports what would be
+/// freed without modifying any files.
 pub fn compact_archives(
     data_dir: &Path,
-    shared: &Arc<SharedArchiveState>,
+    content_store: &Arc<dyn ContentStore>,
     dry_run: bool,
 ) -> Result<CompactResponse> {
-    let sources_dir = data_dir.join("sources");
-    let content_dir = sources_dir.join("content");
-
-    let referenced = build_referenced_set(&sources_dir);
-
-    let mut archives_scanned:   usize = 0;
-    let mut archives_rewritten: usize = 0;
-    let mut archives_deleted:   usize = 0;
-    let mut chunks_removed:     usize = 0;
-    let mut bytes_freed:        u64   = 0;
-
-    for subdir_entry in std::fs::read_dir(&content_dir).into_iter().flatten().flatten() {
-        let subdir = subdir_entry.path();
-        if !subdir.is_dir() { continue; }
-        for file_entry in std::fs::read_dir(&subdir).into_iter().flatten().flatten() {
-            let path = file_entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("zip") { continue; }
-            let archive_name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) => n.to_string(),
-                None => continue,
-            };
-            archives_scanned += 1;
-
-            // Catalog scan: identify orphaned entries, total entry count, and sizes.
-            let mut orphaned: HashSet<String> = HashSet::new();
-            let mut orphaned_size: u64 = 0;
-            let total_entries: usize;
-            {
-                let file = match File::open(&path) { Ok(f) => f, Err(_) => continue };
-                let mut zip = match ZipArchive::new(file) { Ok(z) => z, Err(_) => continue };
-                total_entries = zip.len();
-                for i in 0..zip.len() {
-                    if let Ok(entry) = zip.by_index_raw(i) {
-                        let name = entry.name().to_string();
-                        if !referenced.contains(&(archive_name.clone(), name.clone())) {
-                            orphaned_size += entry.compressed_size();
-                            orphaned.insert(name);
-                        }
-                    }
-                }
-            }
-
-            // Case 1: nothing to do — all entries are referenced.
-            if orphaned.is_empty() && total_entries > 0 { continue; }
-
-            // Case 2: archive is already empty (e.g. left over from a previous
-            // compaction pass that rewrote all chunks out but didn't delete).
-            if total_entries == 0 {
-                archives_deleted += 1;
-                if !dry_run {
-                    let lock = shared.rewrite_lock_for(&path);
-                    let _guard = lock.lock().unwrap();
-                    if let Err(e) = std::fs::remove_file(&path) {
-                        tracing::error!("compaction: failed to delete empty archive {}: {e:#}", archive_name);
-                        archives_deleted -= 1;
-                    } else {
-                        tracing::info!("compaction: deleted empty archive {}", archive_name);
-                    }
-                }
-                continue;
-            }
-
-            // Case 3: some or all entries are orphaned.
-            chunks_removed += orphaned.len();
-            bytes_freed    += orphaned_size;
-
-            if orphaned.len() == total_entries {
-                // All entries orphaned — delete the whole file, no rewrite needed.
-                archives_deleted += 1;
-                if !dry_run {
-                    let lock = shared.rewrite_lock_for(&path);
-                    let _guard = lock.lock().unwrap();
-                    if let Err(e) = std::fs::remove_file(&path) {
-                        tracing::error!("compaction: failed to delete {}: {e:#}", archive_name);
-                        archives_deleted -= 1;
-                        chunks_removed   -= orphaned.len();
-                        bytes_freed      -= orphaned_size;
-                    } else {
-                        tracing::info!(
-                            "compaction: deleted {} — all {} chunks orphaned ({})",
-                            archive_name, orphaned.len(), find_common::mem::fmt_bytes(orphaned_size),
-                        );
-                    }
-                }
-            } else {
-                // Partial — rewrite, keeping the referenced entries.
-                archives_rewritten += 1;
-                if !dry_run {
-                    let lock = shared.rewrite_lock_for(&path);
-                    let _guard = lock.lock().unwrap();
-                    if let Err(e) = rewrite_without(&path, &orphaned) {
-                        tracing::error!("compaction: failed to rewrite {}: {e:#}", path.display());
-                        archives_rewritten -= 1;
-                        chunks_removed     -= orphaned.len();
-                        bytes_freed        -= orphaned_size;
-                    } else {
-                        tracing::info!(
-                            "compaction: rewrote {} — removed {} orphaned chunks ({})",
-                            archive_name, orphaned.len(), find_common::mem::fmt_bytes(orphaned_size),
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(CompactResponse { archives_scanned, archives_rewritten, archives_deleted, chunks_removed, bytes_freed, dry_run })
-}
-
-/// Rewrite `archive_path` omitting the named entries.
-fn rewrite_without(archive_path: &Path, to_remove: &HashSet<String>) -> Result<()> {
-    use zip::write::{FullFileOptions, SimpleFileOptions};
-    use zip::{CompressionMethod, ZipWriter};
-
-    let temp_path = archive_path.with_extension("zip.tmp");
-    {
-        let src_file = File::open(archive_path)?;
-        let mut old_zip = ZipArchive::new(src_file)?;
-        let tmp_file = File::create(&temp_path)?;
-        let mut new_zip = ZipWriter::new(tmp_file);
-        let base_opts: FullFileOptions<'_> = SimpleFileOptions::default()
-            .compression_method(CompressionMethod::Deflated)
-            .compression_level(Some(6))
-            .into_full_options();
-        for i in 0..old_zip.len() {
-            let mut entry = old_zip.by_index(i)?;
-            if !to_remove.contains(entry.name()) {
-                let comment = entry.comment().to_string();
-                let entry_opts = base_opts.clone().with_file_comment(comment.as_str());
-                new_zip.start_file(entry.name(), entry_opts)?;
-                std::io::copy(&mut entry, &mut new_zip)?;
-            }
-        }
-        new_zip.finish()?;
-    }
-    std::fs::rename(&temp_path, archive_path)?;
-    Ok(())
+    let live_keys = collect_live_keys(data_dir);
+    let r = content_store.compact(&live_keys, dry_run)?;
+    Ok(CompactResponse {
+        archives_scanned:   r.archives_scanned,
+        archives_rewritten: r.archives_rewritten,
+        archives_deleted:   r.archives_deleted,
+        chunks_removed:     r.chunks_removed,
+        bytes_freed:        r.bytes_freed,
+        dry_run,
+    })
 }
 
 // ── Background scanner / scheduler ───────────────────────────────────────────
@@ -363,7 +207,7 @@ fn duration_until_next(hour: u32, minute: u32) -> std::time::Duration {
 pub fn start_compaction_scanner(
     data_dir: PathBuf,
     stats_slot: Arc<std::sync::RwLock<Option<CompactionStats>>>,
-    shared: Arc<SharedArchiveState>,
+    content_store: Arc<dyn ContentStore>,
     cfg: CompactionConfig,
     source_stats_cache: Arc<std::sync::RwLock<crate::stats_cache::SourceStatsCache>>,
     stats_watch: Arc<tokio::sync::watch::Sender<u64>>,
@@ -379,7 +223,7 @@ pub fn start_compaction_scanner(
     tokio::spawn(async move {
         // Initial startup scan: let the server settle first.
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
-        run_scan_and_log(&data_dir, &stats_slot).await;
+        run_scan_and_log(&data_dir, &stats_slot, &content_store).await;
 
         // Daily loop: wait until the configured time, scan, then compact if needed.
         loop {
@@ -391,7 +235,7 @@ pub fn start_compaction_scanner(
             );
             tokio::time::sleep(wait).await;
 
-            let stats = run_scan_and_log(&data_dir, &stats_slot).await;
+            let stats = run_scan_and_log(&data_dir, &stats_slot, &content_store).await;
 
             if let Some(stats) = stats {
                 let pct = if stats.total_bytes > 0 {
@@ -406,10 +250,10 @@ pub fn start_compaction_scanner(
                         pct, cfg.threshold_pct,
                     );
                     let data = data_dir.clone();
-                    let sh = Arc::clone(&shared);
+                    let cs = Arc::clone(&content_store);
                     let t0 = std::time::Instant::now();
                     let result = tokio::task::spawn_blocking(move || {
-                        compact_archives(&data, &sh, false)
+                        compact_archives(&data, &cs, false)
                     }).await;
                     match result {
                         Ok(Ok(resp)) => tracing::info!(
@@ -433,9 +277,10 @@ pub fn start_compaction_scanner(
             // Daily stats cache rebuild after compaction completes.
             {
                 let cache = Arc::clone(&source_stats_cache);
+                let cs    = Arc::clone(&content_store);
                 let dd    = data_dir.clone();
                 tokio::task::spawn_blocking(move || {
-                    crate::stats_cache::full_rebuild(&dd, &cache);
+                    crate::stats_cache::full_rebuild(&dd, &cache, &cs);
                 }).await.ok();
                 tracing::debug!("stats_cache: daily full rebuild complete");
                 stats_watch.send_modify(|v| *v = v.wrapping_add(1));
@@ -450,6 +295,7 @@ pub fn start_compaction_scanner(
 mod tests {
     use super::*;
     use find_common::config::CompactionConfig;
+    use find_content_store::ContentStore;
 
     // ── parse_hhmm ────────────────────────────────────────────────────────────
 
@@ -516,66 +362,21 @@ mod tests {
         }
     }
 
-    // ── scan_wasted_space ─────────────────────────────────────────────────────
+    // ── scan_wasted_space / compact_archives ─────────────────────────────────
 
-    fn write_test_zip(path: &std::path::Path, entries: &[(&str, &[u8])]) {
-        use std::io::Write;
-        use zip::ZipWriter;
-        use zip::write::SimpleFileOptions;
-
-        let file = std::fs::File::create(path).unwrap();
-        let mut zip = ZipWriter::new(file);
-        let options = SimpleFileOptions::default();
-        for (name, data) in entries {
-            zip.start_file(*name, options).unwrap();
-            zip.write_all(data).unwrap();
-        }
-        zip.finish().unwrap();
+    fn open_store(data_dir: &std::path::Path) -> std::sync::Arc<dyn ContentStore> {
+        std::fs::create_dir_all(data_dir.join("sources").join("content")).unwrap();
+        std::sync::Arc::new(find_content_store::ZipContentStore::open(data_dir).unwrap())
     }
 
-    fn seed_db_with_chunk_ref(
-        conn: &rusqlite::Connection,
-        archive_name: &str,
-        block_id: i64,
-        chunk_number: i64,
-        start_line: i64,
-        end_line: i64,
-    ) {
+    fn seed_source_db(data_dir: &std::path::Path, source: &str, hash: &str) {
+        let db_path = data_dir.join("sources").join(format!("{source}.db"));
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let conn = crate::db::open(&db_path).unwrap();
         conn.execute(
-            "INSERT INTO files (path, mtime, size, kind, indexed_at, content_hash, line_count) \
-             VALUES ('test.txt', 1000, 100, 'text', 0, 'hash', 2)",
-            [],
-        )
-        .unwrap();
-        let file_id: i64 = conn.last_insert_rowid();
-
-        // Insert content_block with explicit id.
-        conn.execute(
-            "INSERT OR IGNORE INTO content_blocks(id, content_hash) VALUES(?1, 'hash')",
-            rusqlite::params![block_id],
-        ).unwrap();
-
-        // Upsert content_archives.
-        conn.execute(
-            "INSERT OR IGNORE INTO content_archives(name) VALUES(?1)",
-            rusqlite::params![archive_name],
-        ).unwrap();
-        let archive_id: i64 = conn.query_row(
-            "SELECT id FROM content_archives WHERE name = ?1",
-            rusqlite::params![archive_name],
-            |r| r.get(0),
-        ).unwrap();
-
-        conn.execute(
-            "INSERT INTO content_chunks(block_id, chunk_number, archive_id, start_line, end_line) \
-             VALUES(?1, ?2, ?3, ?4, ?5)",
-            rusqlite::params![block_id, chunk_number, archive_id, start_line, end_line],
-        ).unwrap();
-
-        let rowid = crate::db::encode_fts_rowid(file_id, 1);
-        conn.execute(
-            "INSERT INTO lines_fts(rowid, content) VALUES (?1, 'hello')",
-            rusqlite::params![rowid],
+            "INSERT INTO files (path, mtime, size, kind, indexed_at, content_hash, line_count)
+             VALUES ('test.txt', 1000, 100, 'text', 0, ?1, 1)",
+            rusqlite::params![hash],
         ).unwrap();
     }
 
@@ -583,124 +384,69 @@ mod tests {
     fn all_chunks_referenced_no_orphans() {
         let tmp = tempfile::TempDir::new().unwrap();
         let data_dir = tmp.path();
-        std::fs::create_dir_all(data_dir.join("sources/content/0000")).unwrap();
+        let cs = open_store(data_dir);
 
-        // Create a ZIP archive with one chunk entry.
-        // In v3, chunk_name format is "{block_id}.{chunk_number}" = "42.0"
-        let zip_path = data_dir.join("sources/content/0000/content_00001.zip");
-        write_test_zip(&zip_path, &[("42.0", b"hello world")]);
+        // Put a blob and record its hash in a source DB.
+        let hash = "aabbccddeeff00112233445566778899";
+        cs.put(&find_content_store::ContentKey::new(hash), "hello world").unwrap();
+        seed_source_db(data_dir, "src", hash);
 
-        // Open source DB and insert rows referencing that chunk.
-        let db_path = data_dir.join("sources/test_source.db");
-        let conn = crate::db::open(&db_path).unwrap();
-        seed_db_with_chunk_ref(&conn, "content_00001.zip", 42, 0, 0, 10);
-
-        let stats = scan_wasted_space(data_dir).unwrap();
+        let stats = scan_wasted_space(data_dir, cs.as_ref()).unwrap();
         assert!(stats.total_bytes > 0, "expected total_bytes > 0");
-        assert_eq!(stats.orphaned_bytes, 0, "expected no orphaned bytes");
+        assert_eq!(stats.orphaned_bytes, 0, "live content should not be orphaned");
     }
 
     #[test]
-    fn unreferenced_chunks_counted_as_orphaned() {
+    fn unreferenced_content_counted_as_orphaned() {
         let tmp = tempfile::TempDir::new().unwrap();
         let data_dir = tmp.path();
-        std::fs::create_dir_all(data_dir.join("sources/content/0000")).unwrap();
+        let cs = open_store(data_dir);
 
-        // Create a ZIP archive with one chunk entry.
-        let zip_path = data_dir.join("sources/content/0000/content_00001.zip");
-        write_test_zip(&zip_path, &[("test.txt.chunk0.txt", b"hello world")]);
+        // Put a blob but DON'T add its hash to any source DB.
+        let hash = "aabbccddeeff00112233445566778899";
+        cs.put(&find_content_store::ContentKey::new(hash), "hello world").unwrap();
 
-        // No DB entries referencing those chunks — everything should be orphaned.
+        // No source DB → no live keys → everything is orphaned.
+        let stats = scan_wasted_space(data_dir, cs.as_ref()).unwrap();
+        // orphaned_bytes counts compressed chunk bytes; total_bytes is the full
+        // archive on-disk size (includes ZIP headers). orphaned_bytes > 0 is
+        // sufficient to confirm the content is considered orphaned.
+        assert!(stats.orphaned_bytes > 0, "unreferenced content should contribute orphaned bytes");
+    }
 
-        let stats = scan_wasted_space(data_dir).unwrap();
-        assert!(stats.total_bytes > 0, "expected total_bytes > 0");
-        assert_eq!(
-            stats.orphaned_bytes, stats.total_bytes,
-            "all bytes should be orphaned when no DB references exist"
+    #[test]
+    fn orphaned_content_is_removed_by_compact() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let data_dir = tmp.path();
+        let cs = open_store(data_dir);
+
+        let hash_live   = "aabbccddeeff00112233445566778899";
+        let hash_orphan = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+        cs.put(&find_content_store::ContentKey::new(hash_live),   "live content").unwrap();
+        cs.put(&find_content_store::ContentKey::new(hash_orphan), "orphan content").unwrap();
+
+        // Only live hash recorded in a source DB.
+        seed_source_db(data_dir, "src", hash_live);
+
+        let resp = compact_archives(data_dir, &cs, false).unwrap();
+        assert!(
+            resp.chunks_removed > 0 || resp.archives_deleted > 0 || resp.archives_rewritten > 0,
+            "expected at least some compaction work"
         );
-    }
-
-    /// When every entry in an archive is orphaned, the whole file should be
-    /// deleted (not rewritten to an empty ZIP).
-    #[test]
-    fn all_orphaned_archive_is_deleted() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let data_dir = tmp.path();
-        std::fs::create_dir_all(data_dir.join("sources/content/0000")).unwrap();
-
-        let zip_path = data_dir.join("sources/content/0000/content_00001.zip");
-        write_test_zip(&zip_path, &[("42.0", b"some content"), ("42.1", b"more content")]);
-
-        // No DB entries — both chunks are orphaned.
-        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
-        let resp = compact_archives(data_dir, &shared, false).unwrap();
-
-        assert_eq!(resp.archives_deleted, 1, "fully-orphaned archive should be deleted");
-        assert_eq!(resp.archives_rewritten, 0, "should not rewrite a fully-orphaned archive");
-        assert_eq!(resp.chunks_removed, 2);
-        assert!(!zip_path.exists(), "archive file should be gone");
-    }
-
-    /// Archives that are already empty (22-byte ZIP footer, no entries) should
-    /// be deleted by compaction — these are left over when a previous pass
-    /// rewrote all chunks out but didn't delete the file.
-    #[test]
-    fn pre_existing_empty_archive_is_deleted() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let data_dir = tmp.path();
-        std::fs::create_dir_all(data_dir.join("sources/content/0000")).unwrap();
-
-        // Write an empty ZIP (no entries).
-        let zip_path = data_dir.join("sources/content/0000/content_00001.zip");
-        write_test_zip(&zip_path, &[]);
-
-        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
-        let resp = compact_archives(data_dir, &shared, false).unwrap();
-
-        assert_eq!(resp.archives_deleted, 1, "pre-existing empty archive should be deleted");
-        assert_eq!(resp.archives_rewritten, 0);
-        assert_eq!(resp.chunks_removed, 0, "no chunks to remove from empty archive");
-        assert!(!zip_path.exists(), "empty archive file should be gone");
-    }
-
-    /// When only some entries are orphaned the archive should be rewritten
-    /// (not deleted), and the referenced entry must survive.
-    #[test]
-    fn partial_orphan_archive_is_rewritten_not_deleted() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let data_dir = tmp.path();
-        std::fs::create_dir_all(data_dir.join("sources/content/0000")).unwrap();
-
-        let zip_path = data_dir.join("sources/content/0000/content_00001.zip");
-        write_test_zip(&zip_path, &[("42.0", b"referenced"), ("99.0", b"orphaned")]);
-
-        // DB references only "42.0".
-        let db_path = data_dir.join("sources/test_source.db");
-        let conn = crate::db::open(&db_path).unwrap();
-        seed_db_with_chunk_ref(&conn, "content_00001.zip", 42, 0, 0, 10);
-
-        let shared = crate::archive::SharedArchiveState::new(data_dir.to_path_buf()).unwrap();
-        let resp = compact_archives(data_dir, &shared, false).unwrap();
-
-        assert_eq!(resp.archives_rewritten, 1, "partial archive should be rewritten");
-        assert_eq!(resp.archives_deleted, 0, "partial archive must not be deleted");
-        assert_eq!(resp.chunks_removed, 1);
-        assert!(zip_path.exists(), "archive file should still exist after partial rewrite");
-
-        // Verify the surviving entry is still present.
-        let file = File::open(&zip_path).unwrap();
-        let mut zip = ZipArchive::new(file).unwrap();
-        assert_eq!(zip.len(), 1, "rewritten archive should have exactly 1 entry");
-        assert!(zip.by_name("42.0").is_ok(), "referenced chunk must survive rewrite");
+        // Orphan should be gone.
+        assert!(!cs.contains(&find_content_store::ContentKey::new(hash_orphan)).unwrap());
+        // Live content should remain.
+        assert!(cs.contains(&find_content_store::ContentKey::new(hash_live)).unwrap());
     }
 
     #[test]
     fn empty_content_dir_returns_zero() {
         let tmp = tempfile::TempDir::new().unwrap();
         let data_dir = tmp.path();
-        std::fs::create_dir_all(data_dir.join("sources/content")).unwrap();
+        let cs = open_store(data_dir);
 
-        let stats = scan_wasted_space(data_dir).unwrap();
+        let stats = scan_wasted_space(data_dir, cs.as_ref()).unwrap();
         assert_eq!(stats.total_bytes, 0, "expected total_bytes == 0 for empty content dir");
         assert_eq!(stats.orphaned_bytes, 0, "expected orphaned_bytes == 0 for empty content dir");
     }
@@ -724,10 +470,12 @@ pub fn save_stats_to_slot(
 async fn run_scan_and_log(
     data_dir: &Path,
     stats_slot: &Arc<std::sync::RwLock<Option<CompactionStats>>>,
+    content_store: &Arc<dyn ContentStore>,
 ) -> Option<CompactionStats> {
     let data_dir2 = data_dir.to_path_buf();
+    let cs = Arc::clone(content_store);
     let t0 = std::time::Instant::now();
-    let result = tokio::task::spawn_blocking(move || scan_wasted_space(&data_dir2)).await;
+    let result = tokio::task::spawn_blocking(move || scan_wasted_space(&data_dir2, cs.as_ref())).await;
     let elapsed = t0.elapsed();
     match result {
         Ok(Ok(stats)) => {

@@ -13,7 +13,7 @@ use find_common::path::split_composite;
 
 use rusqlite::OptionalExtension;
 
-use crate::{archive::ArchiveManager, db, AppState};
+use crate::{db, AppState};
 
 use super::{check_auth, check_link_code_auth, composite_path, run_blocking, source_db_path};
 
@@ -56,6 +56,7 @@ pub async fn get_file(
     // Build composite path from path + optional archive_path (backward compat).
     let full_path = composite_path(&params.path, params.archive_path.as_deref());
     let data_dir = state.data_dir.clone();
+    let content_store = Arc::clone(&state.content_store);
     let link_code = params.link_code.clone();
     let source = params.source.clone();
     let offset = params.offset.unwrap_or(0);
@@ -70,7 +71,6 @@ pub async fn get_file(
         }
 
         let conn = db::open(&db_path)?;
-        let archive_mgr = ArchiveManager::new_for_reading(data_dir);
 
         let (kind, mtime, size): (FileKind, Option<i64>, Option<i64>) = conn
             .query_row(
@@ -82,7 +82,7 @@ pub async fn get_file(
             .unwrap_or_else(|_| (FileKind::Text, None, None));
 
         let (all_lines, total_lines, content_unavailable) =
-            db::get_file_lines_paged(&conn, &archive_mgr, &full_path, offset, limit)?;
+            db::get_file_lines_paged(&conn, content_store.as_ref(), &full_path, offset, limit)?;
 
         let metadata: Vec<String> = all_lines.iter()
             .filter(|l| l.line_number < LINE_CONTENT_START)

@@ -1,0 +1,57 @@
+use std::collections::HashSet;
+
+use crate::key::ContentKey;
+
+/// Statistics returned by a `compact` call.
+pub struct CompactResult {
+    pub archives_scanned:   usize,
+    pub archives_rewritten: usize,
+    pub archives_deleted:   usize,
+    pub chunks_removed:     usize,
+    pub bytes_freed:        u64,
+}
+
+/// Content-addressable blob storage abstraction.
+///
+/// Implementors own all ZIP archive I/O.  Consumers (`find-server`) only see
+/// `ContentKey`, `ContentStore`, and `ZipContentStore`.
+pub trait ContentStore: Send + Sync {
+    /// Store a blob of text keyed by `key`.
+    ///
+    /// The blob is all lines of a file joined with `'\n'`; line positions are
+    /// 0-based (position 0 = first element).
+    ///
+    /// Idempotent: returns `Ok(false)` if the key already exists (no re-write).
+    fn put(&self, key: &ContentKey, blob: &str) -> anyhow::Result<bool>;
+
+    /// Remove all stored data for `key`. No-op if the key does not exist.
+    fn delete(&self, key: &ContentKey) -> anyhow::Result<()>;
+
+    /// Return lines in the range `lo..=hi` (inclusive, 0-based positions).
+    ///
+    /// Returns `None` if the key is not found.
+    /// Returns `Some(vec)` where each element is `(pos, content)` for lines
+    /// that exist within `[lo, hi]`.
+    fn get_lines(
+        &self,
+        key: &ContentKey,
+        lo: usize,
+        hi: usize,
+    ) -> anyhow::Result<Option<Vec<(usize, String)>>>;
+
+    /// Return `true` if a complete blob is stored for `key`.
+    fn contains(&self, key: &ContentKey) -> anyhow::Result<bool>;
+
+    /// Remove blobs not in `live_keys` and compact ZIP archives.
+    fn compact(
+        &self,
+        live_keys: &HashSet<ContentKey>,
+        dry_run: bool,
+    ) -> anyhow::Result<CompactResult>;
+
+    /// Optional stats hook for monitoring (archive count, bytes on disk).
+    /// Default impl returns `None`; `ZipContentStore` overrides.
+    fn archive_stats(&self) -> Option<(u64 /* count */, u64 /* bytes */)> {
+        None
+    }
+}

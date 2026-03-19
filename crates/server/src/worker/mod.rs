@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use find_common::api::{RecentFile, WorkerStatus};
 use find_common::config::NormalizationSettings;
+use find_content_store::ContentStore;
 
 use crate::archive::SharedArchiveState;
 
@@ -66,6 +67,7 @@ type StatusHandle = std::sync::Arc<std::sync::Mutex<WorkerStatus>>;
 pub struct WorkerHandles {
     pub status: StatusHandle,
     pub archive_state: Arc<SharedArchiveState>,
+    pub content_store: Arc<dyn ContentStore>,
     pub inbox_paused: Arc<AtomicBool>,
     /// Broadcast channel for live activity events sent to SSE subscribers.
     pub recent_tx: tokio::sync::broadcast::Sender<RecentFile>,
@@ -121,7 +123,7 @@ pub async fn start_inbox_worker(
     cfg: WorkerConfig,
     handles: WorkerHandles,
 ) -> anyhow::Result<()> {
-    let WorkerHandles { status, archive_state: shared_archive_state, inbox_paused, recent_tx, source_stats_cache, stats_watch } = handles;
+    let WorkerHandles { status, archive_state: shared_archive_state, content_store, inbox_paused, recent_tx, source_stats_cache, stats_watch } = handles;
     let stats_watch_archive = Arc::clone(&stats_watch);
     let source_stats_cache_archive = Arc::clone(&source_stats_cache);
     let inbox_dir = data_dir.join("inbox");
@@ -182,7 +184,7 @@ pub async fn start_inbox_worker(
     {
         let data_dir = data_dir.clone();
         let to_archive_dir = to_archive_dir.clone();
-        let shared = Arc::clone(&shared_archive_state);
+        let cs = Arc::clone(&content_store);
         let archive_notify = Arc::clone(&archive_notify);
         let stats_watch = stats_watch_archive;
         let source_stats_cache = source_stats_cache_archive;
@@ -206,10 +208,10 @@ pub async fn start_inbox_worker(
                 loop {
                     let to_archive = to_archive_dir.clone();
                     let data = data_dir.clone();
-                    let sh = Arc::clone(&shared);
+                    let cs_batch = Arc::clone(&cs);
                     let cfg_clone = cfg.clone();
                     let batch_result = tokio::task::spawn_blocking(move || {
-                        archive_batch::run_archive_batch(&data, &to_archive, cfg_clone, &sh)
+                        archive_batch::run_archive_batch(&data, &to_archive, cfg_clone, &cs_batch)
                     })
                     .await;
 
@@ -239,9 +241,10 @@ pub async fn start_inbox_worker(
                 // When the queue drains, rebuild stats so files_pending_content updates.
                 if any_processed {
                     let cache = Arc::clone(&source_stats_cache);
+                    let cs2 = Arc::clone(&cs);
                     let dd = data_dir.clone();
                     tokio::task::spawn_blocking(move || {
-                        crate::stats_cache::full_rebuild(&dd, &cache);
+                        crate::stats_cache::full_rebuild(&dd, &cache, &cs2);
                     }).await.ok();
                     stats_watch.send_modify(|v| *v = v.wrapping_add(1));
                 }

@@ -2,6 +2,7 @@
 members = [
     "crates/common",
     "crates/extract-types",
+    "crates/content-store",
     "crates/server",
     "crates/client",
     "crates/extractors/text",

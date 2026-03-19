@@ -415,23 +415,23 @@ async fn test_delete_source_removes_chunk_refs() {
     let db_path = srv.data_dir_path().join("sources/del-src.db");
     assert!(db_path.exists(), "source DB should exist after indexing");
 
-    // Delete the source — the response should report chunks_removed > 0,
-    // proving the archive worker wrote chunks and delete_source cleaned them up.
+    // Delete the source. chunks_removed is now always 0 — orphaned blobs in
+    // the content store are deferred to the next compaction pass rather than
+    // removed eagerly by delete_source.
     let del_resp: SourceDeleteResponse = srv.client
         .delete(srv.url("/api/v1/admin/source?source=del-src"))
         .send().await.unwrap().json().await.unwrap();
     assert_eq!(del_resp.files_deleted, 1, "should report one file deleted");
-    assert!(del_resp.chunks_removed > 0,
-        "delete_source should report chunks_removed > 0 (got {})", del_resp.chunks_removed);
+    assert_eq!(del_resp.chunks_removed, 0,
+        "chunks_removed is 0 — orphaned content cleaned up at next compaction");
 
     // Source DB should be gone.
     assert!(!db_path.exists(), "source DB should be removed after delete_source");
 
-    // After delete_source physically cleaned up the ZIP, compact should find nothing to do
-    // (or at most an empty archive to delete) — confirming chunks were already removed.
+    // After delete_source, compact should now reclaim the orphaned content.
     let resp: CompactResponse = srv.client
         .post(srv.url("/api/v1/admin/compact"))
         .send().await.unwrap().json().await.unwrap();
-    assert_eq!(resp.chunks_removed, 0,
-        "compact should find no orphaned chunks because delete_source already cleaned them up");
+    assert!(resp.chunks_removed > 0 || resp.archives_deleted > 0 || resp.archives_rewritten > 0,
+        "compact should reclaim orphaned content after delete_source");
 }

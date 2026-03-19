@@ -11,7 +11,7 @@ use tokio::task::spawn_blocking;
 use find_common::api::{ContextLine, FileKind, SearchMode, SearchResponse, SearchResult};
 
 use crate::fuzzy::FuzzyScorer;
-use crate::{archive::ArchiveManager, db, db::search::{CandidateRow, DocumentGroup}, db::DateFilter, AppState};
+use crate::{db, db::search::{CandidateRow, DocumentGroup}, db::DateFilter, AppState};
 
 /// A scored search result paired with its `file_id` for alias lookup.
 struct ScoredResult {
@@ -210,7 +210,7 @@ pub async fn search(
         }).collect()
     };
 
-    let data_dir = state.data_dir.clone();
+    let content_store = Arc::clone(&state.content_store);
     let offset = params.offset;
     let date_filter = DateFilter { from: params.date_from, to: params.date_to, kinds: params.kinds.into_iter().map(|s| FileKind::from(s.as_str())).collect(), filename_only: false };
     let case_sensitive = params.case_sensitive;
@@ -226,12 +226,11 @@ pub async fn search(
         .map(|(source_name, db_path)| {
             let query = query.clone();
             let mode = mode.clone();
-            let data_dir = data_dir.clone();
+            let cs = Arc::clone(&content_store);
             let date_filter = date_filter.clone();
             spawn_blocking(move || -> anyhow::Result<(usize, Vec<SearchResult>)> {
                 if !db_path.exists() { return Ok((0, vec![])); }
                 let conn = db::open(&db_path)?;
-                let archive_mgr = ArchiveManager::new_for_reading(data_dir);
 
                 // Document-family modes: one result per file.
                 match mode {
@@ -284,8 +283,7 @@ pub async fn search(
                         let mut candidates = db::fts_candidates(&conn, &fts_terms, scoring_limit, false, date_filter)?;
                         // Read content for regex post-filtering (ZIP reads needed for regex correctness).
                         let pairs: Vec<(i64, i64)> = candidates.iter().map(|c| (c.file_id, c.line_number as i64)).collect();
-                        let mut chunk_cache = std::collections::HashMap::new();
-                        let content_map = db::read_content_batch(&mut chunk_cache, &conn, &archive_mgr, &pairs);
+                        let content_map = db::read_content_batch(&conn, cs.as_ref(), &pairs);
                         candidates.retain_mut(|c| {
                             let content = content_map.get(&(c.file_id, c.line_number as i64)).cloned().unwrap_or_default();
                             if re.is_match(&content) { c.content = content; true } else { false }
@@ -347,8 +345,7 @@ pub async fn search(
                         let re = regex::RegexBuilder::new(&query).case_insensitive(!case_sensitive).build()?;
                         // Read content for regex post-filtering (ZIP reads needed for correctness).
                         let pairs: Vec<(i64, i64)> = candidates.iter().map(|c| (c.file_id, c.line_number as i64)).collect();
-                        let mut chunk_cache = std::collections::HashMap::new();
-                        let content_map = db::read_content_batch(&mut chunk_cache, &conn, &archive_mgr, &pairs);
+                        let content_map = db::read_content_batch(&conn, cs.as_ref(), &pairs);
                         candidates.into_iter()
                             .filter_map(|mut c| {
                                 let content = content_map.get(&(c.file_id, c.line_number as i64)).cloned().unwrap_or_default();

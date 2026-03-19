@@ -54,9 +54,12 @@ pub async fn get_stats(
     let failed_requests = count_gz(&failed_dir);
     let archive_queue = count_gz(&to_archive_dir);
 
-    // Archive totals are maintained incrementally — instant reads, no I/O.
-    let total_archives = state.archive_state.total_archives() as usize;
-    let archive_size_bytes = state.archive_state.archive_size_bytes();
+    // Archive totals from content store.
+    let (total_archives, archive_size_bytes) = state
+        .content_store
+        .archive_stats()
+        .map(|(c, b)| (c as usize, b))
+        .unwrap_or((0, 0));
 
     let worker_status = state.worker_status
         .lock()
@@ -70,9 +73,10 @@ pub async fn get_stats(
         let cache        = Arc::clone(&state.source_stats_cache);
         let compact_slot = Arc::clone(&state.compaction_stats);
         let data_dir     = state.data_dir.clone();
+        let cs           = Arc::clone(&state.content_store);
         tokio::task::spawn_blocking(move || {
-            crate::stats_cache::full_rebuild(&data_dir, &cache);
-            if let Ok(compact) = crate::compaction::scan_wasted_space(&data_dir) {
+            crate::stats_cache::full_rebuild(&data_dir, &cache, &cs);
+            if let Ok(compact) = crate::compaction::scan_wasted_space(&data_dir, cs.as_ref()) {
                 crate::compaction::save_stats_to_slot(&compact_slot, &data_dir, compact);
             }
         }).await.ok();
@@ -213,8 +217,8 @@ fn build_stream_event(state: &AppState) -> StatsStreamEvent {
         inbox_pending:           count_gz(&inbox_dir),
         failed_requests:         count_gz(&failed_dir),
         archive_queue:           count_gz(&to_archive_dir),
-        total_archives:          state.archive_state.total_archives() as usize,
-        archive_size_bytes:      state.archive_state.archive_size_bytes(),
+        total_archives:          state.content_store.archive_stats().map(|(c, _)| c as usize).unwrap_or(0),
+        archive_size_bytes:      state.content_store.archive_stats().map(|(_, b)| b).unwrap_or(0),
         db_size_bytes,
         worker_status,
         inbox_paused,

@@ -12,7 +12,8 @@ name = "find_server"
 path = "src/lib.rs"
 
 [dependencies]
-find-common   = { path = "../common" }
+find-common         = { path = "../common" }
+find-content-store  = { path = "../content-store" }
 anyhow        = { workspace = true }
 clap          = { version = "4", features = ["derive", "env"] }
 serde         = { workspace = true }

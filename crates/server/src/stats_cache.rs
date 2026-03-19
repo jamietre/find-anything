@@ -2,8 +2,10 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use find_common::api::{ExtStat, FileKind, KindStats};
+use find_content_store::ContentStore;
 
 /// In-memory cache of per-source stats.  Wrapped in Arc<RwLock<...>> in AppState.
 #[derive(Default, Clone)]
@@ -29,7 +31,11 @@ pub struct CachedSourceStats {
 
 /// Run all expensive queries for every source DB and store results in `cache`.
 /// Called at startup, daily, and on `?refresh=true`.
-pub fn full_rebuild(data_dir: &Path, cache: &std::sync::RwLock<SourceStatsCache>) {
+pub fn full_rebuild(
+    data_dir: &Path,
+    cache: &std::sync::RwLock<SourceStatsCache>,
+    content_store: &Arc<dyn ContentStore>,
+) {
     let sources_dir = data_dir.join("sources");
     let mut sources: Vec<CachedSourceStats> = Vec::new();
 
@@ -52,7 +58,7 @@ pub fn full_rebuild(data_dir: &Path, cache: &std::sync::RwLock<SourceStatsCache>
         let (total_files, total_size, by_kind) = crate::db::get_stats(&conn).unwrap_or_default();
         let by_ext     = crate::db::get_stats_by_ext(&conn).unwrap_or_default();
         let fts_row_count = crate::db::get_fts_row_count(&conn).unwrap_or(0);
-        let files_pending_content = crate::db::get_files_pending_content(&conn).unwrap_or(0);
+        let files_pending_content = crate::db::get_files_pending_content(&conn, content_store.as_ref()).unwrap_or(0);
         sources.push(CachedSourceStats { name: source_name, total_files, total_size, by_kind, by_ext, fts_row_count, files_pending_content });
     }
 

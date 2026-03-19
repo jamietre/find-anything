@@ -9,7 +9,7 @@ use rusqlite::{Connection, OptionalExtension, functions::FunctionFlags, params};
 use find_common::api::{ContextLine, FileKind, FileRecord, IndexFile, PathRename, LINE_CONTENT_START};
 use find_common::path::{composite_like_prefix, is_composite};
 
-use crate::archive::{ArchiveManager, ChunkRef};
+use find_content_store::{ContentKey, ContentStore};
 
 pub mod constants;
 pub mod links;
@@ -35,8 +35,9 @@ pub use tree::{list_dir, split_composite_path};
 
 /// The current schema version. Stored in SQLite's built-in `user_version` pragma.
 /// Increment this whenever the schema changes incompatibly.
-/// v12: reserved line number scheme (line 0 = path, line 1 = metadata, line 2+ = content).
-pub const SCHEMA_VERSION: i64 = 12;
+/// v13: content_blocks / content_archives / content_chunks removed from source
+///      DBs; chunk metadata now lives in data_dir/content.db (find-content-store).
+pub const SCHEMA_VERSION: i64 = 13;
 
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
@@ -58,7 +59,7 @@ pub fn open(db_path: &Path) -> Result<Connection> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version == 0 {
         // Brand-new database — initialise the full current schema and stamp the version.
-        conn.execute_batch(include_str!("../schema_v3.sql"))
+        conn.execute_batch(include_str!("../schema_v4.sql"))
             .context("initialising schema")?;
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("stamping schema version")?;
@@ -72,8 +73,7 @@ pub fn open(db_path: &Path) -> Result<Connection> {
 
     // Idempotent index additions — safe to run on existing databases at any version.
     conn.execute_batch(
-        "CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime);
-         CREATE INDEX IF NOT EXISTS idx_content_chunks_block_start ON content_chunks(block_id, start_line);"
+        "CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime);"
     ).context("creating indexes")?;
 
     Ok(conn)
@@ -134,40 +134,17 @@ pub fn check_all_sources(sources_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-// ── Chunk-read helper ─────────────────────────────────────────────────────────
+// ── Chunk-read helpers ────────────────────────────────────────────────────────
 
-/// Look up `(chunk_archive, chunk_name)` in `cache`; on miss, read the chunk
-/// from `archive_mgr`, split into lines, and store it.
-/// Returns a reference to the cached line vector.
-/// This variant is for ZIP-stored chunks only (both archive and name are non-null).
-pub(crate) fn read_chunk_lines_zip<'a>(
-    cache: &'a mut HashMap<(String, String), Vec<String>>,
-    archive_mgr: &ArchiveManager,
-    chunk_archive: &str,
-    chunk_name: &str,
-) -> &'a Vec<String> {
-    let key = (chunk_archive.to_owned(), chunk_name.to_owned());
-    cache.entry(key).or_insert_with(|| {
-        let chunk_ref = ChunkRef {
-            archive_name: chunk_archive.to_owned(),
-            chunk_name: chunk_name.to_owned(),
-        };
-        let text = archive_mgr.read_chunk(&chunk_ref).unwrap_or_default();
-        text.lines().map(|l| l.to_string()).collect()
-    })
-}
-
-/// Read a single line's content for a file, using content-addressable storage.
+/// Read a single line's content for a file via `ContentStore`.
 ///
-/// 1. Checks `file_content` (inline) first — splits on `\n`, indexes by line_number.
-/// 2. Otherwise, queries `content_blocks` + `content_chunks` + `content_archives`
-///    to find which ZIP chunk contains `line_number`, then reads and caches it.
+/// 1. Checks `file_content` (inline) first.
+/// 2. Otherwise, looks up `files.content_hash` and calls `content_store.get_lines`.
 ///
-/// Returns `None` if the file or line cannot be found (stale FTS entry, pending archive).
+/// Returns `None` if the file or line cannot be found (stale FTS, pending archive).
 pub fn read_chunk_for_file(
-    cache: &mut HashMap<(String, String), Vec<String>>,
     conn: &Connection,
-    archive_mgr: &ArchiveManager,
+    content_store: &dyn ContentStore,
     file_id: i64,
     line_number: i64,
 ) -> Option<String> {
@@ -181,46 +158,35 @@ pub fn read_chunk_for_file(
         return content.split('\n').nth(line_number as usize).map(|s| s.to_string());
     }
 
-    // 2. Lookup chunk via content_blocks + content_chunks + content_archives.
-    let row: Option<(i64, i64, String, i64)> = conn.query_row(
-        "SELECT cb.id, cc.chunk_number, ca.name, cc.start_line
-         FROM files f
-         JOIN content_blocks cb ON cb.content_hash = f.content_hash
-         JOIN content_chunks cc ON cc.block_id = cb.id
-           AND cc.start_line <= ?2 AND cc.end_line >= ?2
-         JOIN content_archives ca ON ca.id = cc.archive_id
-         WHERE f.id = ?1",
-        params![file_id, line_number],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-    ).optional().ok().flatten();
+    // 2. Look up content_hash from files table.
+    let hash: String = conn.query_row(
+        "SELECT content_hash FROM files WHERE id = ?1",
+        params![file_id],
+        |r| r.get(0),
+    ).optional().ok().flatten()?;
 
-    let (block_id, chunk_number, archive_name, start_line) = row?;
-    let chunk_name = format!("{}.{}", block_id, chunk_number);
-    let lines = read_chunk_lines_zip(cache, archive_mgr, &archive_name, &chunk_name);
-    let offset = (line_number - start_line) as usize;
-    lines.get(offset).cloned()
+    let key = ContentKey::new(hash.as_str());
+    let lo = line_number as usize;
+    let lines = content_store.get_lines(&key, lo, lo).ok()??;
+    lines.into_iter().find(|(pos, _)| *pos == lo).map(|(_, c)| c)
 }
 
-/// Batch-resolve line content for multiple `(file_id, line_number)` pairs.
+/// Batch-resolve line content for multiple `(file_id, line_number)` pairs
+/// using `ContentStore`.
 ///
-/// Uses two SQL queries regardless of the number of pairs:
-/// 1. One query to fetch inline content for all file IDs.
-/// 2. One query to fetch all chunk metadata for non-inline file IDs.
-///
-/// This is the preferred entry point for bulk lookups (e.g. the FTS search
-/// path); `read_chunk_for_file` remains for single-item callers (context,
-/// file retrieval, etc.).
+/// 1. Batch-fetch inline content for all file IDs.
+/// 2. Batch-fetch `content_hash` for non-inline file IDs.
+/// 3. For each unique hash, call `content_store.get_lines` with the full range.
 pub fn read_content_batch(
-    chunk_cache: &mut HashMap<(String, String), Vec<String>>,
     conn: &Connection,
-    archive_mgr: &ArchiveManager,
+    content_store: &dyn ContentStore,
     pairs: &[(i64, i64)], // (file_id, line_number)
 ) -> HashMap<(i64, i64), String> {
     if pairs.is_empty() {
         return HashMap::new();
     }
 
-    // Deduplicate file_ids while preserving insertion order for determinism.
+    // Deduplicate file_ids.
     let mut seen = std::collections::HashSet::new();
     let file_ids: Vec<i64> = pairs
         .iter()
@@ -228,58 +194,75 @@ pub fn read_content_batch(
         .filter(|id| seen.insert(*id))
         .collect();
 
-    // ── 1. Batch: inline storage ──────────────────────────────────────────
+    // ── 1. Inline storage ─────────────────────────────────────────────────
     let ph: String = (1..=file_ids.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
     let sql = format!("SELECT file_id, content FROM file_content WHERE file_id IN ({ph})");
-    let params_refs: Vec<&dyn rusqlite::ToSql> = file_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+    let params_refs: Vec<&dyn rusqlite::ToSql> =
+        file_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
     let mut inline_map: HashMap<i64, String> = HashMap::new();
     if let Ok(mut stmt) = conn.prepare(&sql) {
         let _ = stmt
-            .query_map(params_refs.as_slice(), |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)))
-            .map(|rows| rows.flatten().for_each(|(fid, content)| { inline_map.insert(fid, content); }));
+            .query_map(params_refs.as_slice(), |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })
+            .map(|rows| {
+                rows.flatten()
+                    .for_each(|(fid, content)| { inline_map.insert(fid, content); })
+            });
     }
 
-    // ── 2. Batch: chunk metadata for non-inline files ─────────────────────
-    struct ChunkMeta {
-        block_id:     i64,
-        archive_name: String,
-        chunk_number: i64,
-        start_line:   i64,
-        end_line:     i64,
-    }
+    // ── 2. content_hash for non-inline files ──────────────────────────────
+    let non_inline: Vec<i64> = file_ids
+        .iter()
+        .filter(|id| !inline_map.contains_key(*id))
+        .copied()
+        .collect();
 
-    let non_inline: Vec<i64> = file_ids.iter().filter(|id| !inline_map.contains_key(*id)).copied().collect();
-    let mut chunk_map: HashMap<i64, Vec<ChunkMeta>> = HashMap::new();
-
+    // file_id → content_hash
+    let mut hash_map: HashMap<i64, String> = HashMap::new();
     if !non_inline.is_empty() {
-        let ph: String = (1..=non_inline.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
-        let sql = format!(
-            "SELECT f.id, cb.id, ca.name, cc.chunk_number, cc.start_line, cc.end_line
-             FROM files f
-             JOIN content_blocks cb ON cb.content_hash = f.content_hash
-             JOIN content_chunks cc ON cc.block_id = cb.id
-             JOIN content_archives ca ON ca.id = cc.archive_id
-             WHERE f.id IN ({ph})"
+        let ph2: String = (1..=non_inline.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
+        let sql2 = format!(
+            "SELECT id, content_hash FROM files WHERE id IN ({ph2}) AND content_hash IS NOT NULL"
         );
-        let params_refs: Vec<&dyn rusqlite::ToSql> = non_inline.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
-        if let Ok(mut stmt) = conn.prepare(&sql) {
+        let params2: Vec<&dyn rusqlite::ToSql> =
+            non_inline.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+        if let Ok(mut stmt) = conn.prepare(&sql2) {
             let _ = stmt
-                .query_map(params_refs.as_slice(), |row| {
-                    Ok((row.get::<_, i64>(0)?, ChunkMeta {
-                        block_id:     row.get(1)?,
-                        archive_name: row.get(2)?,
-                        chunk_number: row.get(3)?,
-                        start_line:   row.get(4)?,
-                        end_line:     row.get(5)?,
-                    }))
+                .query_map(params2.as_slice(), |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
                 })
-                .map(|rows| rows.flatten().for_each(|(fid, meta)| {
-                    chunk_map.entry(fid).or_default().push(meta);
-                }));
+                .map(|rows| {
+                    rows.flatten().for_each(|(fid, hash)| { hash_map.insert(fid, hash); })
+                });
         }
     }
 
-    // ── 3. Resolve each (file_id, line_number) pair ───────────────────────
+    // ── 3. Group needed line positions by hash ────────────────────────────
+    // hash → Vec<(file_id, line_number)>
+    let mut by_hash: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
+    for &(file_id, line_number) in pairs {
+        if inline_map.contains_key(&file_id) {
+            continue;
+        }
+        if let Some(hash) = hash_map.get(&file_id) {
+            by_hash.entry(hash.clone()).or_default().push((file_id, line_number));
+        }
+    }
+
+    // ── 4. Fetch lines from ContentStore, one call per hash ───────────────
+    // hash → Vec<(pos, content)>
+    let mut content_cache: HashMap<String, Vec<(usize, String)>> = HashMap::new();
+    for (hash, pairs_for_hash) in &by_hash {
+        let lo = pairs_for_hash.iter().map(|(_, ln)| *ln as usize).min().unwrap_or(0);
+        let hi = pairs_for_hash.iter().map(|(_, ln)| *ln as usize).max().unwrap_or(0);
+        let key = ContentKey::new(hash.as_str());
+        if let Ok(Some(lines)) = content_store.get_lines(&key, lo, hi) {
+            content_cache.insert(hash.clone(), lines);
+        }
+    }
+
+    // ── 5. Resolve each pair ──────────────────────────────────────────────
     let mut result = HashMap::new();
     for &(file_id, line_number) in pairs {
         if let Some(inline) = inline_map.get(&file_id) {
@@ -288,14 +271,11 @@ pub fn read_content_batch(
                     result.insert((file_id, line_number), line.to_string());
                 }
             }
-        } else if let Some(chunks) = chunk_map.get(&file_id) {
-            if let Some(chunk) = chunks.iter().find(|c| c.start_line <= line_number && c.end_line >= line_number) {
-                let chunk_name = format!("{}.{}", chunk.block_id, chunk.chunk_number);
-                let lines = read_chunk_lines_zip(chunk_cache, archive_mgr, &chunk.archive_name, &chunk_name);
-                let offset = (line_number - chunk.start_line) as usize;
-                if let Some(line) = lines.get(offset) {
-                    if !line.is_empty() {
-                        result.insert((file_id, line_number), line.clone());
+        } else if let Some(hash) = hash_map.get(&file_id) {
+            if let Some(lines) = content_cache.get(hash) {
+                if let Some((_, content)) = lines.iter().find(|(pos, _)| *pos == line_number as usize) {
+                    if !content.is_empty() {
+                        result.insert((file_id, line_number), content.clone());
                     }
                 }
             }
@@ -305,23 +285,6 @@ pub fn read_content_batch(
 }
 
 // ── Source-level helpers ──────────────────────────────────────────────────────
-
-/// Collect all chunk refs from this source database.
-/// Used by compaction and the source-delete route to identify live ZIP entries.
-pub fn collect_all_chunk_refs(conn: &Connection) -> Result<Vec<ChunkRef>> {
-    let mut stmt = conn.prepare(
-        "SELECT ca.name, CAST(cb.id AS TEXT) || '.' || CAST(cc.chunk_number AS TEXT)
-         FROM content_chunks cc
-         JOIN content_blocks cb ON cb.id = cc.block_id
-         JOIN content_archives ca ON ca.id = cc.archive_id",
-    )?;
-    let refs = stmt
-        .query_map([], |row| {
-            Ok(ChunkRef { archive_name: row.get(0)?, chunk_name: row.get(1)? })
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(refs)
-}
 
 /// Delete singleton entries from the `duplicates` table.
 /// A singleton is a content_hash that appears only once — meaning the file
@@ -521,9 +484,8 @@ pub fn upsert_files(conn: &Connection, files: &[IndexFile]) -> Result<()> {
 /// delete-only requests never need a second write on the same connection.
 pub fn delete_files(
     conn: &Connection,
-    _archive_mgr: &crate::archive::ArchiveManager,
     paths: &[String],
-) -> Result<Vec<ChunkRef>> {
+) -> Result<()> {
     let tx = conn.unchecked_transaction()?;
 
     for path in paths {
@@ -541,8 +503,8 @@ pub fn delete_files(
     cleanup_singleton_duplicates_tx(&tx)?;
 
     tx.commit()?;
-    // Chunk refs returned empty — compaction handles orphan cleanup.
-    Ok(vec![])
+    // Orphaned blobs in the content store are reclaimed by the next compaction pass.
+    Ok(())
 }
 
 /// Delete one path (outer + inner archive members). No canonical promotion in v3.
@@ -741,14 +703,14 @@ fn resolve_file_id(conn: &Connection, path: &str) -> rusqlite::Result<Option<i64
 /// Returns every indexed line for a file, ordered by line number, plus a flag
 /// indicating whether content is pending archive processing.
 ///
-/// `content_unavailable` is `true` when the file has a content_hash (meaning it
-/// was indexed) but no content_chunks rows and no inline content yet —
-/// i.e. phase 1 is done but the archive worker has not yet run.
+/// `content_unavailable` is `true` when the file has a content_hash but the
+/// content store does not yet contain that blob — i.e. phase 1 is done but
+/// the archive worker has not yet run.
 ///
 /// `path` may be a composite path ("archive.zip::member.txt") or a plain path.
 pub fn get_file_lines(
     conn: &Connection,
-    archive_mgr: &ArchiveManager,
+    content_store: &dyn ContentStore,
     path: &str,
 ) -> Result<(Vec<ContextLine>, bool)> {
     let Some(file_id) = resolve_file_id(conn, path)? else {
@@ -763,27 +725,11 @@ pub fn get_file_lines(
     let (line_count, content_hash) = file_info.unwrap_or((None, None));
     let line_count = line_count.unwrap_or(0);
 
-    // Detect pending-archive state.
-    let is_inline = conn.query_row(
-        "SELECT COUNT(*) FROM file_content WHERE file_id = ?1",
-        params![file_id],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
-    let has_chunks = if let Some(ref hash) = content_hash {
-        conn.query_row(
-            "SELECT COUNT(*) FROM content_blocks cb
-             JOIN content_chunks cc ON cc.block_id = cb.id
-             WHERE cb.content_hash = ?1",
-            params![hash],
-            |r| r.get::<_, i64>(0),
-        ).unwrap_or(0) > 0
-    } else { false };
-    let content_unavailable = !is_inline && !has_chunks && content_hash.is_some();
+    let content_unavailable = content_unavailable(conn, content_store, file_id, &content_hash);
 
-    let mut cache: HashMap<(String, String), Vec<String>> = HashMap::new();
     let lines: Vec<ContextLine> = (0..line_count)
         .filter_map(|ln| {
-            let content = read_chunk_for_file(&mut cache, conn, archive_mgr, file_id, ln)?;
+            let content = read_chunk_for_file(conn, content_store, file_id, ln)?;
             Some(ContextLine { line_number: ln as usize, content })
         })
         .collect();
@@ -803,7 +749,7 @@ pub fn get_file_lines(
 /// `total_content_count` is the true total regardless of `offset`/`limit`.
 pub fn get_file_lines_paged(
     conn: &Connection,
-    archive_mgr: &ArchiveManager,
+    content_store: &dyn ContentStore,
     path: &str,
     offset: usize,
     limit: Option<usize>,
@@ -819,40 +765,20 @@ pub fn get_file_lines_paged(
     ).optional()?;
     let (line_count, content_hash) = file_info.unwrap_or((None, None));
     let line_count = line_count.unwrap_or(0) as usize;
-
-    // total_count = all content lines (excluding lines 0 and 1 which are path/metadata)
     let total_count = line_count.saturating_sub(LINE_CONTENT_START);
 
-    // Detect pending-archive state.
-    let is_inline = conn.query_row(
-        "SELECT COUNT(*) FROM file_content WHERE file_id = ?1",
-        params![file_id],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
-    let has_chunks = if let Some(ref hash) = content_hash {
-        conn.query_row(
-            "SELECT COUNT(*) FROM content_blocks cb
-             JOIN content_chunks cc ON cc.block_id = cb.id
-             WHERE cb.content_hash = ?1",
-            params![hash],
-            |r| r.get::<_, i64>(0),
-        ).unwrap_or(0) > 0
-    } else { false };
-    let content_unavailable = !is_inline && !has_chunks && content_hash.is_some();
-
-    let mut cache: HashMap<(String, String), Vec<String>> = HashMap::new();
+    let content_unavail = content_unavailable(conn, content_store, file_id, &content_hash);
 
     // Lines 0 (path) and 1 (metadata) always included.
     let mut lines: Vec<ContextLine> = Vec::new();
     for meta_ln in 0..LINE_CONTENT_START {
-        if let Some(content) = read_chunk_for_file(&mut cache, conn, archive_mgr, file_id, meta_ln as i64) {
+        if let Some(content) = read_chunk_for_file(conn, content_store, file_id, meta_ln as i64) {
             lines.push(ContextLine { line_number: meta_ln, content });
         }
     }
 
     // Content lines (line_number >= LINE_CONTENT_START):
-    // - When limit is None: offset is ignored, return all content lines.
-    //   (backward-compatible behaviour — older clients never send offset without limit).
+    // - When limit is None: return all content lines (backward-compat).
     // - When limit is Some: paginate with offset.
     let (content_start, content_end) = match limit {
         Some(lim) => {
@@ -860,23 +786,23 @@ pub fn get_file_lines_paged(
             let end = (start + lim).min(line_count);
             (start, end)
         }
-        None => (LINE_CONTENT_START, line_count), // all content lines
+        None => (LINE_CONTENT_START, line_count),
     };
 
     for ln in content_start..content_end {
-        if let Some(content) = read_chunk_for_file(&mut cache, conn, archive_mgr, file_id, ln as i64) {
+        if let Some(content) = read_chunk_for_file(conn, content_store, file_id, ln as i64) {
             lines.push(ContextLine { line_number: ln, content });
         }
     }
 
-    Ok((lines, total_count, content_unavailable))
+    Ok((lines, total_count, content_unavail))
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────
 
 pub fn get_context(
     conn: &Connection,
-    archive_mgr: &ArchiveManager,
+    content_store: &dyn ContentStore,
     file_path: &str,
     center: usize,
     window: usize,
@@ -884,8 +810,8 @@ pub fn get_context(
     let kind = get_file_kind(conn, file_path)?;
 
     match kind {
-        FileKind::Image | FileKind::Audio => get_metadata_context(conn, archive_mgr, file_path),
-        _ => get_line_context(conn, archive_mgr, file_path, center, window),
+        FileKind::Image | FileKind::Audio => get_metadata_context(conn, content_store, file_path),
+        _ => get_line_context(conn, content_store, file_path, center, window),
     }
 }
 
@@ -901,23 +827,19 @@ fn get_file_kind(conn: &Connection, file_path: &str) -> Result<FileKind> {
 
 fn get_metadata_context(
     conn: &Connection,
-    archive_mgr: &ArchiveManager,
+    content_store: &dyn ContentStore,
     file_path: &str,
 ) -> Result<Vec<ContextLine>> {
     let Some(file_id) = resolve_file_id(conn, file_path)? else {
         return Ok(vec![]);
     };
-
-    // For metadata files (image/audio), only line 0 is relevant.
-    let mut cache: HashMap<(String, String), Vec<String>> = HashMap::new();
-    let content = read_chunk_for_file(&mut cache, conn, archive_mgr, file_id, 0)
-        .unwrap_or_default();
+    let content = read_chunk_for_file(conn, content_store, file_id, 0).unwrap_or_default();
     Ok(vec![ContextLine { line_number: 0, content }])
 }
 
 fn get_line_context(
     conn: &Connection,
-    archive_mgr: &ArchiveManager,
+    content_store: &dyn ContentStore,
     file_path: &str,
     center: usize,
     window: usize,
@@ -929,15 +851,37 @@ fn get_line_context(
     let lo = center.saturating_sub(window);
     let hi = center + window;
 
-    let mut cache: HashMap<(String, String), Vec<String>> = HashMap::new();
     let lines: Vec<ContextLine> = (lo..=hi)
         .filter_map(|ln| {
-            let content = read_chunk_for_file(&mut cache, conn, archive_mgr, file_id, ln as i64)?;
+            let content = read_chunk_for_file(conn, content_store, file_id, ln as i64)?;
             Some(ContextLine { line_number: ln, content })
         })
         .collect();
 
     Ok(lines)
+}
+
+/// Returns `true` when the file has a `content_hash` but neither inline
+/// content nor an entry in the content store — i.e. archive phase is pending.
+fn content_unavailable(
+    conn: &Connection,
+    content_store: &dyn ContentStore,
+    file_id: i64,
+    content_hash: &Option<String>,
+) -> bool {
+    let is_inline = conn
+        .query_row(
+            "SELECT COUNT(*) FROM file_content WHERE file_id = ?1",
+            params![file_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0) > 0;
+    if is_inline {
+        return false;
+    }
+    let Some(ref hash) = content_hash else { return false; };
+    let key = ContentKey::new(hash.as_str());
+    !content_store.contains(&key).unwrap_or(false)
 }
 
 // ── Unit tests ─────────────────────────────────────────────────────────────────
