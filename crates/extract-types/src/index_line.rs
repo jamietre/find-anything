@@ -4,7 +4,23 @@ use serde::{Deserialize, Serialize};
 /// that `find-scan --upgrade` can selectively re-index files that were indexed
 /// by an older version of the client. Increment this when extraction logic
 /// changes in a way that produces meaningfully different output.
-pub const SCANNER_VERSION: u32 = 1;
+pub const SCANNER_VERSION: u32 = 2;
+
+// ── Reserved line number slots ────────────────────────────────────────────────
+
+/// Line 0 — always present, exactly one per file.
+/// Content: `[PATH] relative/path`  (added by `build_index_files`).
+pub const LINE_PATH: usize = 0;
+
+/// Line 1 — always present, exactly one per file.
+/// Content: all metadata fields concatenated into a single searchable string
+/// (EXIF tags, audio tags, document title/author, etc.).
+/// Empty string `""` when the extractor produced no metadata.
+pub const LINE_METADATA: usize = 1;
+
+/// Line 2 — first content line.
+/// All content extracted from the file body starts at this offset.
+pub const LINE_CONTENT_START: usize = 2;
 
 /// A single extracted line sent from client → server.
 #[derive(Debug, Clone, Serialize, Deserialize)]

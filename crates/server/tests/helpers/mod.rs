@@ -162,15 +162,23 @@ pub fn write_fake_gz(path: &std::path::Path) {
 /// Build a BulkRequest that indexes a single plain-text file.
 /// line_number=0 is the filename; content lines start at 1.
 pub fn make_text_bulk(source: &str, path: &str, content: &str) -> BulkRequest {
-    let mut lines = vec![IndexLine {
-        archive_path: None,
-        line_number: 0,
-        content: format!("[PATH] {path}"),
-    }];
+    use find_common::api::{LINE_PATH, LINE_METADATA, LINE_CONTENT_START};
+    let mut lines = vec![
+        IndexLine {
+            archive_path: None,
+            line_number: LINE_PATH,
+            content: format!("[PATH] {path}"),
+        },
+        IndexLine {
+            archive_path: None,
+            line_number: LINE_METADATA,
+            content: String::new(),
+        },
+    ];
     for (i, line) in content.lines().enumerate() {
         lines.push(IndexLine {
             archive_path: None,
-            line_number: i + 1,
+            line_number: i + LINE_CONTENT_START,
             content: line.to_string(),
         });
     }

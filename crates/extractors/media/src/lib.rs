@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use find_extract_types::IndexLine;
+use find_extract_types::{IndexLine, LINE_METADATA};
 use find_extract_types::ExtractorConfig;
 
 /// Extract metadata from media files (images, audio, video).
@@ -73,42 +73,46 @@ fn extract_image(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
     let file = File::open(path)?;
     let mut bufreader = BufReader::new(file);
 
-    let lines = match exif::Reader::new().read_from_container(&mut bufreader) {
-        Ok(exif) => {
-            let mut lines = Vec::new();
-            for field in exif.fields() {
+    let parts: Vec<String> = match exif::Reader::new().read_from_container(&mut bufreader) {
+        Ok(exif) => exif.fields()
+            .filter_map(|field| {
                 let tag = field.tag.to_string();
                 let value = field.display_value().to_string();
-                if !value.is_empty() && !value.starts_with("[") {
-                    lines.push(IndexLine {
-                        archive_path: None,
-                        line_number: 0,
-                        content: format!("[EXIF:{}] {}", tag, value),
-                    });
+                if !value.is_empty() && !value.starts_with('[') {
+                    Some(format!("[EXIF:{}] {}", tag, value))
+                } else {
+                    None
                 }
-            }
-            lines
-        }
+            })
+            .collect(),
         Err(_) => vec![],
     };
 
-    if !lines.is_empty() {
-        return Ok(lines);
+    if !parts.is_empty() {
+        return Ok(vec![IndexLine {
+            archive_path: None,
+            line_number: LINE_METADATA,
+            content: parts.join(" "),
+        }]);
     }
 
     // Fallback: read native image header for basic dimensions/color info.
-    if let Some(basic) = extract_image_basic(path) {
-        return Ok(basic);
+    if let Some(parts) = extract_image_basic_parts(path) {
+        return Ok(vec![IndexLine {
+            archive_path: None,
+            line_number: LINE_METADATA,
+            content: parts.join(" "),
+        }]);
     }
 
     Ok(vec![IndexLine {
         archive_path: None,
-        line_number: 0,
+        line_number: LINE_METADATA,
         content: "[IMAGE] no metadata available".to_string(),
     }])
 }
 
-fn extract_image_basic(path: &Path) -> Option<Vec<IndexLine>> {
+fn extract_image_basic_parts(path: &Path) -> Option<Vec<String>> {
     let mut f = File::open(path).ok()?;
     let mut buf = [0u8; 34];
     let n = f.read(&mut buf).ok()?;
@@ -118,7 +122,7 @@ fn extract_image_basic(path: &Path) -> Option<Vec<IndexLine>> {
 
     // JPEG: FF D8 — scan for SOF marker to get dimensions
     if buf[0] == 0xFF && buf[1] == 0xD8 {
-        return extract_jpeg_basic(&mut f);
+        return extract_jpeg_basic_parts(&mut f);
     }
 
     if n < 8 {
@@ -140,9 +144,9 @@ fn extract_image_basic(path: &Path) -> Option<Vec<IndexLine>> {
             _ => "Unknown",
         };
         return Some(vec![
-            make_image_line("dimensions", &format!("{}x{}", width, height)),
-            make_image_line("bit_depth",  &bit_depth.to_string()),
-            make_image_line("color",      color_name),
+            image_part("dimensions", &format!("{}x{}", width, height)),
+            image_part("bit_depth",  &bit_depth.to_string()),
+            image_part("color",      color_name),
         ]);
     }
 
@@ -151,7 +155,7 @@ fn extract_image_basic(path: &Path) -> Option<Vec<IndexLine>> {
         let width  = u16::from_le_bytes([buf[6], buf[7]]);
         let height = u16::from_le_bytes([buf[8], buf[9]]);
         return Some(vec![
-            make_image_line("dimensions", &format!("{}x{}", width, height)),
+            image_part("dimensions", &format!("{}x{}", width, height)),
         ]);
     }
 
@@ -165,7 +169,7 @@ fn extract_image_basic(path: &Path) -> Option<Vec<IndexLine>> {
                     let width  = u16::from_le_bytes([buf[26], buf[27]]) & 0x3FFF;
                     let height = u16::from_le_bytes([buf[28], buf[29]]) & 0x3FFF;
                     return Some(vec![
-                        make_image_line("dimensions", &format!("{}x{}", width, height)),
+                        image_part("dimensions", &format!("{}x{}", width, height)),
                     ]);
                 }
             } else if sub_chunk == b"VP8L" && n >= 25 && buf[20] == 0x2F {
@@ -173,17 +177,17 @@ fn extract_image_basic(path: &Path) -> Option<Vec<IndexLine>> {
                 let width  = (packed & 0x3FFF) + 1;
                 let height = ((packed >> 14) & 0x3FFF) + 1;
                 return Some(vec![
-                    make_image_line("dimensions", &format!("{}x{}", width, height)),
+                    image_part("dimensions", &format!("{}x{}", width, height)),
                 ]);
             } else if sub_chunk == b"VP8X" && n >= 30 {
                 let width  = (buf[24] as u32) | ((buf[25] as u32) << 8) | ((buf[26] as u32) << 16);
                 let height = (buf[27] as u32) | ((buf[28] as u32) << 8) | ((buf[29] as u32) << 16);
                 return Some(vec![
-                    make_image_line("dimensions", &format!("{}x{}", width + 1, height + 1)),
+                    image_part("dimensions", &format!("{}x{}", width + 1, height + 1)),
                 ]);
             }
         }
-        return Some(vec![make_image_line("format", "WebP")]);
+        return Some(vec![image_part("format", "WebP")]);
     }
 
     // BMP: BM
@@ -192,17 +196,21 @@ fn extract_image_basic(path: &Path) -> Option<Vec<IndexLine>> {
         let height    = i32::from_le_bytes([buf[22], buf[23], buf[24], buf[25]]).unsigned_abs();
         let bit_count = u16::from_le_bytes([buf[28], buf[29]]);
         return Some(vec![
-            make_image_line("dimensions", &format!("{}x{}", width, height)),
-            make_image_line("bit_depth",  &bit_count.to_string()),
+            image_part("dimensions", &format!("{}x{}", width, height)),
+            image_part("bit_depth",  &bit_count.to_string()),
         ]);
     }
 
     None
 }
 
+fn image_part(key: &str, value: &str) -> String {
+    format!("[IMAGE:{}] {}", key, value)
+}
+
 /// Scan a JPEG file for the SOF (Start of Frame) marker and extract dimensions.
 /// Reads up to 64 KB, which is more than enough to find any JPEG SOF header.
-fn extract_jpeg_basic(f: &mut File) -> Option<Vec<IndexLine>> {
+fn extract_jpeg_basic_parts(f: &mut File) -> Option<Vec<String>> {
     f.seek(SeekFrom::Start(0)).ok()?;
     let mut data = vec![0u8; 65536];
     let n = f.read(&mut data).ok()?;
@@ -234,9 +242,9 @@ fn extract_jpeg_basic(f: &mut File) -> Option<Vec<IndexLine>> {
                     _ => "Unknown",
                 };
                 return Some(vec![
-                    make_image_line("dimensions", &format!("{}x{}", width, height)),
-                    make_image_line("bit_depth",  &precision.to_string()),
-                    make_image_line("color",      color),
+                    image_part("dimensions", &format!("{}x{}", width, height)),
+                    image_part("bit_depth",  &precision.to_string()),
+                    image_part("color",      color),
                 ]);
             }
         }
@@ -253,14 +261,6 @@ fn extract_jpeg_basic(f: &mut File) -> Option<Vec<IndexLine>> {
     }
 
     None
-}
-
-fn make_image_line(key: &str, value: &str) -> IndexLine {
-    IndexLine {
-        archive_path: None,
-        line_number: 0,
-        content: format!("[IMAGE:{}] {}", key, value),
-    }
 }
 
 pub fn is_image_ext(ext: &str) -> bool {
@@ -302,7 +302,7 @@ fn extract_audio(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
 
     let mut format = probed.format;
     let mut probed_meta = probed.metadata;
-    let mut lines: Vec<IndexLine> = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
 
     // ── Tags ──────────────────────────────────────────────────────────────────
     // Pre-container metadata (e.g. ID3v2 prepended to MP3) lives in probed_meta;
@@ -310,13 +310,13 @@ fn extract_audio(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
     // in format.metadata(). Check both and merge.
     if let Some(meta) = probed_meta.get() {
         if let Some(rev) = meta.current() {
-            collect_audio_tags(rev.tags(), &mut lines);
+            collect_audio_tags(rev.tags(), &mut parts);
         }
     }
     {
         let meta = format.metadata();
         if let Some(rev) = meta.current() {
-            collect_audio_tags(rev.tags(), &mut lines);
+            collect_audio_tags(rev.tags(), &mut parts);
         }
     }
 
@@ -326,11 +326,11 @@ fn extract_audio(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
 
         let codec = audio_codec_name(params.codec);
         if !codec.is_empty() {
-            lines.push(make_audio_line("codec", codec));
+            parts.push(audio_part("codec", codec));
         }
 
         if let Some(sr) = params.sample_rate {
-            lines.push(make_audio_line("sample_rate", &format!("{sr} Hz")));
+            parts.push(audio_part("sample_rate", &format!("{sr} Hz")));
         }
 
         if let Some(ch) = params.channels {
@@ -339,25 +339,33 @@ fn extract_audio(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
                 2 => "2 (stereo)".to_string(),
                 n => n.to_string(),
             };
-            lines.push(make_audio_line("channels", &label));
+            parts.push(audio_part("channels", &label));
         }
 
         if let Some(bps) = params.bits_per_sample {
-            lines.push(make_audio_line("bit_depth", &format!("{bps} bit")));
+            parts.push(audio_part("bit_depth", &format!("{bps} bit")));
         }
 
         if let (Some(n_frames), Some(tb)) = (params.n_frames, params.time_base) {
             let secs = (n_frames * tb.numer as u64) / tb.denom as u64;
             if secs > 0 {
-                lines.push(make_audio_line("duration", &format!("{}:{:02}", secs / 60, secs % 60)));
+                parts.push(audio_part("duration", &format!("{}:{:02}", secs / 60, secs % 60)));
             }
         }
     }
 
-    Ok(lines)
+    if parts.is_empty() {
+        return Ok(vec![]);
+    }
+
+    Ok(vec![IndexLine {
+        archive_path: None,
+        line_number: LINE_METADATA,
+        content: parts.join(" "),
+    }])
 }
 
-fn collect_audio_tags(tags: &[symphonia::core::meta::Tag], lines: &mut Vec<IndexLine>) {
+fn collect_audio_tags(tags: &[symphonia::core::meta::Tag], parts: &mut Vec<String>) {
     use symphonia::core::meta::{StandardTagKey, Value};
     for tag in tags {
         let key = if let Some(std_key) = tag.std_key {
@@ -386,7 +394,7 @@ fn collect_audio_tags(tags: &[symphonia::core::meta::Tag], lines: &mut Vec<Index
             _                     => continue, // skip binary (album art) and flags
         };
         if !value.is_empty() {
-            lines.push(make_tag_line(key, &value));
+            parts.push(tag_part(key, &value));
         }
     }
 }
@@ -415,20 +423,12 @@ fn audio_codec_name(codec: symphonia::core::codecs::CodecType) -> &'static str {
     }
 }
 
-fn make_tag_line(key: &str, value: &str) -> IndexLine {
-    IndexLine {
-        archive_path: None,
-        line_number: 0,
-        content: format!("[TAG:{}] {}", key, value),
-    }
+fn tag_part(key: &str, value: &str) -> String {
+    format!("[TAG:{}] {}", key, value)
 }
 
-fn make_audio_line(key: &str, value: &str) -> IndexLine {
-    IndexLine {
-        archive_path: None,
-        line_number: 0,
-        content: format!("[AUDIO:{}] {}", key, value),
-    }
+fn audio_part(key: &str, value: &str) -> String {
+    format!("[AUDIO:{}] {}", key, value)
 }
 
 pub fn is_audio_ext(ext: &str) -> bool {
@@ -468,11 +468,11 @@ fn extract_video_nom_exif(path: &Path, ext: &str) -> anyhow::Result<Vec<IndexLin
 
     let ms = match MediaSource::file_path(path) {
         Ok(ms) => ms,
-        Err(_) => return Ok(vec![make_meta_line("format", ext)]),
+        Err(_) => return Ok(vec![make_meta_line(ext)]),
     };
 
     if !ms.has_track() {
-        return Ok(vec![make_meta_line("format", ext)]);
+        return Ok(vec![make_meta_line(ext)]);
     }
 
     let info: Option<TrackInfo> = MEDIA_PARSER.with(|p| {
@@ -480,26 +480,42 @@ fn extract_video_nom_exif(path: &Path, ext: &str) -> anyhow::Result<Vec<IndexLin
     });
 
     let Some(info) = info else {
-        return Ok(vec![make_meta_line("format", ext)]);
+        return Ok(vec![make_meta_line(ext)]);
     };
 
-    let mut lines = vec![make_meta_line("format", ext)];
+    let mut parts = vec![video_part("format", ext)];
 
     if let (Some(w), Some(h)) = (
         info.get(TrackInfoTag::ImageWidth).and_then(|v| v.as_u32()),
         info.get(TrackInfoTag::ImageHeight).and_then(|v| v.as_u32()),
     ) {
-        lines.push(make_meta_line("resolution", &format!("{}x{}", w, h)));
+        parts.push(video_part("resolution", &format!("{}x{}", w, h)));
     }
 
     if let Some(ms) = info.get(TrackInfoTag::DurationMs).and_then(|v| v.as_u64()) {
         let total_secs = ms / 1000;
         let mins = total_secs / 60;
         let secs = total_secs % 60;
-        lines.push(make_meta_line("duration", &format!("{}:{:02}", mins, secs)));
+        parts.push(video_part("duration", &format!("{}:{:02}", mins, secs)));
     }
 
-    Ok(lines)
+    Ok(vec![IndexLine {
+        archive_path: None,
+        line_number: LINE_METADATA,
+        content: parts.join(" "),
+    }])
+}
+
+fn video_part(key: &str, value: &str) -> String {
+    format!("[VIDEO:{}] {}", key, value)
+}
+
+fn make_meta_line(ext: &str) -> IndexLine {
+    IndexLine {
+        archive_path: None,
+        line_number: LINE_METADATA,
+        content: video_part("format", ext),
+    }
 }
 
 /// For formats nom-exif doesn't support (AVI, WMV, FLV, etc.): detect the
@@ -518,35 +534,27 @@ fn extract_video_header_only(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
 
     // AVI: RIFF....AVI
     if &buf[..4] == b"RIFF" && n >= 12 && &buf[8..12] == b"AVI " {
-        return Ok(vec![make_meta_line("format", "avi")]);
+        return Ok(vec![make_meta_line("avi")]);
     }
     // ASF / WMV / WMA: ASF Header Object GUID
     if n >= 16 && buf == [0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11,
                           0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C] {
-        return Ok(vec![make_meta_line("format", "wmv")]);
+        return Ok(vec![make_meta_line("wmv")]);
     }
     // FLV
     if n >= 3 && &buf[..3] == b"FLV" {
-        return Ok(vec![make_meta_line("format", "flv")]);
+        return Ok(vec![make_meta_line("flv")]);
     }
     // MPEG-PS pack header or video sequence header
     if &buf[..4] == b"\x00\x00\x01\xBA" || &buf[..4] == b"\x00\x00\x01\xB3" {
-        return Ok(vec![make_meta_line("format", "mpeg")]);
+        return Ok(vec![make_meta_line("mpeg")]);
     }
     // OGG (covers OGV)
     if &buf[..4] == b"OggS" {
-        return Ok(vec![make_meta_line("format", "ogv")]);
+        return Ok(vec![make_meta_line("ogv")]);
     }
 
     Ok(vec![])
-}
-
-fn make_meta_line(key: &str, value: &str) -> IndexLine {
-    IndexLine {
-        archive_path: None,
-        line_number: 0,
-        content: format!("[VIDEO:{}] {}", key, value),
-    }
 }
 
 pub fn is_video_ext(ext: &str) -> bool {
@@ -582,10 +590,6 @@ mod tests {
         f.write_all(bytes).unwrap();
         f.flush().unwrap();
         f
-    }
-
-    fn has(lines: &[IndexLine], s: &str) -> bool {
-        lines.iter().any(|l| l.content == s)
     }
 
     fn has_containing(lines: &[IndexLine], s: &str) -> bool {
@@ -624,54 +628,59 @@ mod tests {
     fn wav_mono_16bit_44khz() {
         let f = write_fixture(&minimal_wav(44100, 1, 16), ".wav");
         let lines = extract_audio(f.path()).unwrap();
-        assert!(has(&lines, "[AUDIO:codec] PCM"),        "lines: {lines:?}");
-        assert!(has(&lines, "[AUDIO:sample_rate] 44100 Hz"));
-        assert!(has(&lines, "[AUDIO:channels] 1 (mono)"));
-        assert!(has(&lines, "[AUDIO:bit_depth] 16 bit"));
+        assert_eq!(lines.len(), 1, "audio produces one metadata line");
+        assert!(has_containing(&lines, "[AUDIO:codec] PCM"),        "lines: {lines:?}");
+        assert!(has_containing(&lines, "[AUDIO:sample_rate] 44100 Hz"));
+        assert!(has_containing(&lines, "[AUDIO:channels] 1 (mono)"));
+        assert!(has_containing(&lines, "[AUDIO:bit_depth] 16 bit"));
     }
 
     #[test]
     fn wav_stereo_24bit_48khz() {
         let f = write_fixture(&minimal_wav(48000, 2, 24), ".wav");
         let lines = extract_audio(f.path()).unwrap();
-        assert!(has(&lines, "[AUDIO:sample_rate] 48000 Hz"), "lines: {lines:?}");
-        assert!(has(&lines, "[AUDIO:channels] 2 (stereo)"));
-        assert!(has(&lines, "[AUDIO:bit_depth] 24 bit"));
+        assert!(has_containing(&lines, "[AUDIO:sample_rate] 48000 Hz"), "lines: {lines:?}");
+        assert!(has_containing(&lines, "[AUDIO:channels] 2 (stereo)"));
+        assert!(has_containing(&lines, "[AUDIO:bit_depth] 24 bit"));
     }
 
     #[test]
     fn mp3_extracts_id3v2_tags_and_stream_info() {
         let f = write_fixture(MP3_ID3V2, ".mp3");
         let lines = extract_audio(f.path()).unwrap();
+        assert_eq!(lines.len(), 1, "audio produces one metadata line");
+        let content = &lines[0].content;
         // Tags
-        assert!(has_containing(&lines, "[TAG:title]"),       "lines: {lines:?}");
-        assert!(has_containing(&lines, "[TAG:artist]"));
-        assert!(has_containing(&lines, "[TAG:album]"));
-        assert!(has(&lines,            "[TAG:year] 2015"));
-        assert!(has_containing(&lines, "[TAG:track]"));
-        assert!(has_containing(&lines, "[TAG:comment]"));
-        assert!(has_containing(&lines, "[TAG:composer]"));
-        assert!(has_containing(&lines, "[TAG:album_artist]"));
+        assert!(content.contains("[TAG:title]"),       "content: {content}");
+        assert!(content.contains("[TAG:artist]"));
+        assert!(content.contains("[TAG:album]"));
+        assert!(content.contains("[TAG:year] 2015"));
+        assert!(content.contains("[TAG:track]"));
+        assert!(content.contains("[TAG:comment]"));
+        assert!(content.contains("[TAG:composer]"));
+        assert!(content.contains("[TAG:album_artist]"));
         // Stream info
-        assert!(has(&lines, "[AUDIO:codec] MP3"));
-        assert!(has(&lines, "[AUDIO:sample_rate] 44100 Hz"));
-        assert!(has(&lines, "[AUDIO:channels] 1 (mono)"));
+        assert!(content.contains("[AUDIO:codec] MP3"));
+        assert!(content.contains("[AUDIO:sample_rate] 44100 Hz"));
+        assert!(content.contains("[AUDIO:channels] 1 (mono)"));
     }
 
     #[test]
     fn flac_extracts_vorbis_comment_tags_and_stream_info() {
         let f = write_fixture(FLAC_TAGGED, ".flac");
         let lines = extract_audio(f.path()).unwrap();
+        assert_eq!(lines.len(), 1, "audio produces one metadata line");
+        let content = &lines[0].content;
         // Vorbis comment tags
-        assert!(has(&lines, "[TAG:title] Test FLAC"),    "lines: {lines:?}");
-        assert!(has(&lines, "[TAG:artist] FLAC Artist"));
-        assert!(has(&lines, "[TAG:album] Test Album"));
-        assert!(has(&lines, "[TAG:year] 2024"));
+        assert!(content.contains("[TAG:title] Test FLAC"),    "content: {content}");
+        assert!(content.contains("[TAG:artist] FLAC Artist"));
+        assert!(content.contains("[TAG:album] Test Album"));
+        assert!(content.contains("[TAG:year] 2024"));
         // Stream info
-        assert!(has(&lines, "[AUDIO:codec] FLAC"));
-        assert!(has(&lines, "[AUDIO:sample_rate] 44100 Hz"));
-        assert!(has(&lines, "[AUDIO:channels] 1 (mono)"));
-        assert!(has(&lines, "[AUDIO:bit_depth] 16 bit"));
+        assert!(content.contains("[AUDIO:codec] FLAC"));
+        assert!(content.contains("[AUDIO:sample_rate] 44100 Hz"));
+        assert!(content.contains("[AUDIO:channels] 1 (mono)"));
+        assert!(content.contains("[AUDIO:bit_depth] 16 bit"));
     }
 
     #[test]

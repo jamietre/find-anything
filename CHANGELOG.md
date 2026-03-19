@@ -11,6 +11,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **Reserved line number scheme (plan 079)** — line 0 = `[PATH]` (always present), line 1 = concatenated metadata (EXIF tags, audio tags, document title/author, MIME type, all in one searchable line), line 2+ = file content; eliminates the shadowing bug where multiple metadata entries at line 0 made EXIF/audio fields unsearchable in context retrieval; `content_line_start: 2` added to `GET /api/v1/settings` so clients can compute display line numbers; `SCHEMA_VERSION` bumped to 12 (full re-index required); `SCANNER_VERSION` bumped to 2
+- **Search regression fix (plan 080 follow-up)** — fuzzy content search and line-family regex search were broken after the ZIP-read removal: `Fuzzy` mode now accepts FTS-validated matches (scoring by file path as a proxy when content is unavailable), and `Regex` mode restores content reads for the post-filter; all 11 scan integration tests now pass
+
 - **Search performance: batch content lookups + missing index** — `fts_candidates` and `document_candidates` no longer do N×2 per-row SQL queries; content for all candidates is resolved in 2 batch queries regardless of candidate count; new `idx_content_chunks_block_start` index on `content_chunks(block_id, start_line)` applied at DB open for existing databases
 - **Search skips ZIP reads entirely for all non-regex modes** — `fts_candidates` and `document_candidates` return `content: ""` without touching ZIP archives; ZIP reads now only happen for regex mode (which must apply the post-filter to content) and explicit context/file requests; eliminates the dominant source of disk I/O on the search path
 - **Request logger now records response status and elapsed time** — log format changes from a single `API request` line to `→ API` on start and `← API {N}ms status={S}` on finish, both at DEBUG; the INFO escalation for destructive admin ops is removed in favour of consistent DEBUG timing

@@ -345,8 +345,17 @@ pub async fn search(
                     }
                     SearchMode::Regex | SearchMode::FileRegex => {
                         let re = regex::RegexBuilder::new(&query).case_insensitive(!case_sensitive).build()?;
+                        // Read content for regex post-filtering (ZIP reads needed for correctness).
+                        let pairs: Vec<(i64, i64)> = candidates.iter().map(|c| (c.file_id, c.line_number as i64)).collect();
+                        let mut chunk_cache = std::collections::HashMap::new();
+                        let content_map = db::read_content_batch(&mut chunk_cache, &conn, &archive_mgr, &pairs);
                         candidates.into_iter()
-                            .filter(|c| re.is_match(&c.content))
+                            .filter_map(|mut c| {
+                                let content = content_map.get(&(c.file_id, c.line_number as i64)).cloned().unwrap_or_default();
+                                // For filename-only regex: match against the file path.
+                                let text = if filename_only { c.file_path.as_str() } else { content.as_str() };
+                                if re.is_match(text) { c.content = content; Some(c) } else { None }
+                            })
                             .map(|c| ScoredResult { result: make_result(&source_name, &c, 0, vec![]), file_id: c.file_id })
                             .collect()
                     }
@@ -359,19 +368,36 @@ pub async fn search(
                         let mut scorer = FuzzyScorer::new(&query, case_sensitive);
                         candidates.into_iter()
                             .filter_map(|c| {
+                                // After plan 080, content is not populated for non-regex modes.
+                                // For FileFuzzy (filename search): score against the file path.
+                                // For Fuzzy (content search): FTS already validated the match;
+                                //   score against the path for ranking, or accept with score=1.
+                                let score_text: &str = if !c.content.is_empty() {
+                                    &c.content
+                                } else if filename_only {
+                                    // FileFuzzy: path is the right thing to score against.
+                                    &c.file_path
+                                } else {
+                                    // Fuzzy content search: FTS validated match; score by path
+                                    // for relative ranking (files whose path matches score higher).
+                                    &c.file_path
+                                };
                                 // In case-sensitive mode, require every query term to appear
-                                // as a literal substring. Nucleo's subsequence algorithm can
-                                // match scattered lowercase letters inside capitalised words
-                                // (e.g. "monhegan" matching "Monhegan" via 'm' in a prior word
-                                // + 'onhegan' from the capital-M word), which is not the
-                                // user-expected behaviour for case-sensitive search.
+                                // as a literal substring.
                                 if !query_terms.is_empty()
-                                    && !query_terms.iter().all(|t| c.content.contains(*t))
+                                    && !query_terms.iter().all(|t| c.content.contains(*t) || c.file_path.contains(*t))
                                 {
                                     return None;
                                 }
-                                scorer.score(&c.content)
-                                    .map(|score| ScoredResult { result: make_result(&source_name, &c, score, vec![]), file_id: c.file_id })
+                                let score = if filename_only || !c.content.is_empty() {
+                                    // Use real fuzzy score when content is available or for filename search.
+                                    scorer.score(score_text)?
+                                } else {
+                                    // Content search without content: FTS validated it, use path score
+                                    // or default score=1 so all FTS matches are included.
+                                    scorer.score(score_text).unwrap_or(1)
+                                };
+                                Some(ScoredResult { result: make_result(&source_name, &c, score, vec![]), file_id: c.file_id })
                             })
                             .collect()
                     }

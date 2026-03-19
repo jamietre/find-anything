@@ -16,7 +16,7 @@ use std::sync::atomic::Ordering;
 use find_common::api::{
     InboxDeleteResponse, InboxItem, InboxPauseResponse, InboxResumeResponse, InboxRetryResponse,
     InboxShowFile, InboxShowResponse, InboxStatusResponse, SourceDeleteResponse,
-    UpdateApplyResponse, UpdateCheckResponse, WorkerQueueSlot,
+    UpdateApplyResponse, UpdateCheckResponse, WorkerQueueSlot, LINE_CONTENT_START,
 };
 
 use crate::archive::ArchiveManager;
@@ -273,7 +273,7 @@ pub async fn inbox_show(
             .map(|f| InboxShowFile {
                 path: f.path.clone(),
                 kind: f.kind.clone(),
-                content_lines: f.lines.iter().filter(|l| l.line_number != 0).count(),
+                content_lines: f.lines.iter().filter(|l| l.line_number >= LINE_CONTENT_START).count(),
             })
             .collect();
 

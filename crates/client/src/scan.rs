@@ -9,7 +9,7 @@ use globset::GlobSet;
 use tracing::{info, warn};
 
 use find_common::{
-    api::{FileKind, IndexFile, IndexLine, IndexingFailure, SCANNER_VERSION},
+    api::{FileKind, IndexFile, IndexLine, IndexingFailure, SCANNER_VERSION, LINE_METADATA, LINE_CONTENT_START},
     config::{extractor_config_from_scan, load_dir_override, ExternalExtractorMode, ScanConfig},
     path::is_composite,
 };
@@ -403,10 +403,10 @@ async fn push_non_archive_files(
     // - Text content lines (line_number > 0) present → promote to Text.
     // - Neither → keep as-is.
     let kind = if file.kind == FileKind::Text || file.kind == FileKind::Unknown {
-        if let Some(mime_line) = file.lines.iter().find(|l| l.line_number == 0 && l.content.starts_with("[FILE:mime] ")) {
+        if let Some(mime_line) = file.lines.iter().find(|l| l.line_number == LINE_METADATA && l.content.starts_with("[FILE:mime] ")) {
             let mime = &mime_line.content["[FILE:mime] ".len()..];
             FileKind::from(find_extract_dispatch::mime_to_kind(mime))
-        } else if file.lines.iter().any(|l| l.line_number > 0) {
+        } else if file.lines.iter().any(|l| l.line_number >= LINE_CONTENT_START) {
             FileKind::Text
         } else {
             file.kind.clone()

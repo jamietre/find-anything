@@ -71,6 +71,17 @@ pub const SQL_FTS_LINE_NUMBER: &str = "(lines_fts.rowid % 1000000)";
 /// to filename-only / path-index matches (used by `filename_only` search mode).
 pub const SQL_FTS_FILENAME_ONLY: &str = "(lines_fts.rowid % 1000000) = 0";
 
+/// SQL predicate that restricts FTS5 results to line_number = 1.
+///
+/// Line 1 is the concatenated metadata slot (EXIF tags, audio tags, MIME type,
+/// document title/author, etc.). Used to target metadata-only searches.
+pub const SQL_FTS_METADATA_ONLY: &str = "(lines_fts.rowid % 1000000) = 1";
+
+/// SQL predicate that restricts FTS5 results to content lines (line_number >= 2).
+///
+/// Lines 2+ are extracted file content (text, PDF paragraphs, etc.).
+pub const SQL_FTS_CONTENT_ONLY: &str = "(lines_fts.rowid % 1000000) >= 2";
+
 pub fn encode_fts_rowid(file_id: i64, line_number: i64) -> i64 {
     debug_assert!(line_number < MAX_LINES_PER_FILE, "line_number {line_number} would overflow FTS rowid");
     file_id * MAX_LINES_PER_FILE + line_number
@@ -104,5 +115,9 @@ mod tests {
             "SQL_FTS_LINE_NUMBER {SQL_FTS_LINE_NUMBER:?} doesn't use {n}");
         assert!(SQL_FTS_FILENAME_ONLY.contains(&n),
             "SQL_FTS_FILENAME_ONLY {SQL_FTS_FILENAME_ONLY:?} doesn't use {n}");
+        assert!(SQL_FTS_METADATA_ONLY.contains(&n),
+            "SQL_FTS_METADATA_ONLY {SQL_FTS_METADATA_ONLY:?} doesn't use {n}");
+        assert!(SQL_FTS_CONTENT_ONLY.contains(&n),
+            "SQL_FTS_CONTENT_ONLY {SQL_FTS_CONTENT_ONLY:?} doesn't use {n}");
     }
 }

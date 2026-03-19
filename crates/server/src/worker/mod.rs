@@ -366,12 +366,14 @@ mod tests {
     }
 
     #[test]
-    fn filename_only_has_single_path_line() {
+    fn filename_only_has_path_and_metadata_lines() {
         let f = make_file("docs/report.pdf", FileKind::Pdf);
         let fallback = filename_only_file(&f);
-        assert_eq!(fallback.lines.len(), 1);
+        assert_eq!(fallback.lines.len(), 2);
         assert_eq!(fallback.lines[0].line_number, 0);
         assert_eq!(fallback.lines[0].content, "docs/report.pdf");
+        assert_eq!(fallback.lines[1].line_number, 1);
+        assert!(fallback.lines[1].content.is_empty());
     }
 
     #[test]
@@ -397,11 +399,13 @@ mod tests {
     }
 
     #[test]
-    fn outer_archive_stub_has_single_path_line() {
+    fn outer_archive_stub_has_path_and_metadata_lines() {
         let f = make_file("backups/big.tar.gz", FileKind::Archive);
         let stub = outer_archive_stub(&f);
-        assert_eq!(stub.lines.len(), 1);
+        assert_eq!(stub.lines.len(), 2);
         assert_eq!(stub.lines[0].line_number, 0);
         assert_eq!(stub.lines[0].content, "backups/big.tar.gz");
+        assert_eq!(stub.lines[1].line_number, 1);
+        assert!(stub.lines[1].content.is_empty());
     }
 }

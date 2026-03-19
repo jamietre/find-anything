@@ -6,7 +6,7 @@ use anyhow::Result;
 use rusqlite::Connection;
 use rusqlite::OptionalExtension;
 
-use find_common::api::{FileKind, IndexFile, IndexLine};
+use find_common::api::{FileKind, IndexFile, IndexLine, LINE_PATH, LINE_METADATA};
 use find_common::path::{composite_like_prefix, is_composite};
 
 use crate::db::{encode_fts_rowid, MAX_LINES_PER_FILE};
@@ -266,11 +266,18 @@ pub(super) fn filename_only_file(file: &IndexFile) -> IndexFile {
         mtime: file.mtime,
         size: file.size,
         kind: if file.kind == FileKind::Archive { FileKind::Unknown } else { file.kind.clone() },
-        lines: vec![IndexLine {
-            archive_path: None,
-            line_number: 0,
-            content: file.path.clone(),
-        }],
+        lines: vec![
+            IndexLine {
+                archive_path: None,
+                line_number: LINE_PATH,
+                content: file.path.clone(),
+            },
+            IndexLine {
+                archive_path: None,
+                line_number: LINE_METADATA,
+                content: String::new(),
+            },
+        ],
         extract_ms: None,
         content_hash: None,
         scanner_version: file.scanner_version,
@@ -286,11 +293,18 @@ pub(super) fn outer_archive_stub(file: &IndexFile) -> IndexFile {
         mtime: 0,
         size: file.size,
         kind: FileKind::Archive,
-        lines: vec![IndexLine {
-            archive_path: None,
-            line_number: 0,
-            content: file.path.clone(),
-        }],
+        lines: vec![
+            IndexLine {
+                archive_path: None,
+                line_number: LINE_PATH,
+                content: file.path.clone(),
+            },
+            IndexLine {
+                archive_path: None,
+                line_number: LINE_METADATA,
+                content: String::new(),
+            },
+        ],
         extract_ms: None,
         content_hash: None,
         scanner_version: file.scanner_version,
@@ -313,6 +327,7 @@ mod tests {
     }
 
     fn make_file(path: &str, mtime: i64, content: &str) -> IndexFile {
+        use find_common::api::{LINE_PATH, LINE_METADATA, LINE_CONTENT_START};
         IndexFile {
             path: path.to_string(),
             mtime,
@@ -320,8 +335,9 @@ mod tests {
             kind: FileKind::Text,
             scanner_version: 1,
             lines: vec![
-                IndexLine { archive_path: None, line_number: 0, content: path.to_string() },
-                IndexLine { archive_path: None, line_number: 1, content: content.to_string() },
+                IndexLine { archive_path: None, line_number: LINE_PATH, content: path.to_string() },
+                IndexLine { archive_path: None, line_number: LINE_METADATA, content: String::new() },
+                IndexLine { archive_path: None, line_number: LINE_CONTENT_START, content: content.to_string() },
             ],
             extract_ms: None,
             content_hash: None,
@@ -352,8 +368,8 @@ mod tests {
         let outcome = process_file_phase1(&mut conn, &file, 0).unwrap();
         assert!(matches!(outcome, Phase1Outcome::New));
         assert_eq!(stored_mtime(&conn, "docs/readme.txt"), Some(1000));
-        // 2 FTS entries (line 0 + line 1)
-        assert_eq!(fts_row_count(&conn), 2);
+        // 3 FTS entries (line 0 path + line 1 metadata + line 2 content)
+        assert_eq!(fts_row_count(&conn), 3);
     }
 
     #[test]
@@ -450,8 +466,8 @@ mod tests {
             |r| r.get(0),
         ).ok();
         assert!(inline.is_none(), "deferred file should not be stored inline");
-        // FTS entries should still be there (2 lines)
-        assert_eq!(fts_row_count(&conn), 2);
+        // FTS entries should still be there (3 lines)
+        assert_eq!(fts_row_count(&conn), 3);
     }
 
     #[test]

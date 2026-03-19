@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use find_common::api::{FileKind, FileResponse};
+use find_common::api::{FileKind, FileResponse, LINE_CONTENT_START};
 use find_common::path::split_composite;
 
 use rusqlite::OptionalExtension;
@@ -85,17 +85,17 @@ pub async fn get_file(
             db::get_file_lines_paged(&conn, &archive_mgr, &full_path, offset, limit)?;
 
         let metadata: Vec<String> = all_lines.iter()
-            .filter(|l| l.line_number == 0)
+            .filter(|l| l.line_number < LINE_CONTENT_START)
             .map(|l| l.content.strip_prefix("[PATH] ").map(|s| s.to_string()).unwrap_or_else(|| l.content.clone()))
             .collect();
 
         let content_lines: Vec<_> = all_lines.into_iter()
-            .filter(|l| l.line_number > 0)
+            .filter(|l| l.line_number >= LINE_CONTENT_START)
             .collect();
 
-        // Only emit line_offsets when lines aren't a contiguous 1-based sequence.
+        // Only emit line_offsets when lines aren't a contiguous sequence from LINE_CONTENT_START.
         let is_sequential = content_lines.iter().enumerate()
-            .all(|(i, l)| l.line_number == i + 1);
+            .all(|(i, l)| l.line_number == i + LINE_CONTENT_START);
         let line_offsets: Vec<usize> = if is_sequential {
             vec![]
         } else {

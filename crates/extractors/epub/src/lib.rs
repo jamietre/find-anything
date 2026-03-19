@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::path::Path;
 
-use find_extract_types::IndexLine;
+use find_extract_types::{IndexLine, LINE_METADATA, LINE_CONTENT_START};
 use find_extract_types::ExtractorConfig;
 use quick_xml::events::Event;
 
@@ -58,7 +58,7 @@ pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexL
     };
 
     let mut lines = metadata_lines;
-    let mut content_line = 0usize;
+    let mut content_line = LINE_CONTENT_START - 1;
 
     // Step 3: extract text from each spine item
     for href in &spine_hrefs {
@@ -116,11 +116,11 @@ fn find_opf_path(xml: &str) -> anyhow::Result<String> {
 /// Parse the OPF package document.
 ///
 /// Returns:
-///   - metadata IndexLines (line_number = 0)
+///   - metadata IndexLines (single line at LINE_METADATA, or empty vec)
 ///   - ordered list of content file paths (resolved relative to OPF dir)
 fn parse_opf(xml: &str, opf_dir: &str) -> (Vec<IndexLine>, Vec<String>) {
     let mut reader = quick_xml::Reader::from_str(xml);
-    let mut metadata = Vec::new();
+    let mut parts: Vec<String> = Vec::new();
     let mut manifest: HashMap<String, String> = HashMap::new();
     let mut spine_idrefs: Vec<String> = Vec::new();
 
@@ -170,11 +170,7 @@ fn parse_opf(xml: &str, opf_dir: &str) -> (Vec<IndexLine>, Vec<String>) {
                     if let Ok(text) = e.unescape() {
                         let text = text.trim().to_string();
                         if !text.is_empty() {
-                            metadata.push(IndexLine {
-                                archive_path: None,
-                                line_number: 0,
-                                content: format!("[EPUB:{}] {}", field, text),
-                            });
+                            parts.push(format!("[EPUB:{}] {}", field, text));
                         }
                     }
                     current_field = None;
@@ -185,6 +181,16 @@ fn parse_opf(xml: &str, opf_dir: &str) -> (Vec<IndexLine>, Vec<String>) {
         }
         buf.clear();
     }
+
+    let metadata = if parts.is_empty() {
+        vec![]
+    } else {
+        vec![IndexLine {
+            archive_path: None,
+            line_number: LINE_METADATA,
+            content: parts.join(" "),
+        }]
+    };
 
     let spine_hrefs = spine_idrefs
         .into_iter()
@@ -307,11 +313,13 @@ mod tests {
 
         let (meta, hrefs) = parse_opf(xml, "OEBPS");
 
-        assert!(meta.iter().any(|l| l.content == "[EPUB:title] The Great Novel"));
-        assert!(meta.iter().any(|l| l.content == "[EPUB:creator] Jane Author"));
-        assert!(meta.iter().any(|l| l.content == "[EPUB:publisher] Big Press"));
-        assert!(meta.iter().any(|l| l.content == "[EPUB:language] en"));
-        assert!(meta.iter().all(|l| l.line_number == 0));
+        assert_eq!(meta.len(), 1, "expected one consolidated metadata line");
+        let m = &meta[0];
+        assert_eq!(m.line_number, LINE_METADATA);
+        assert!(m.content.contains("[EPUB:title] The Great Novel"), "content: {}", m.content);
+        assert!(m.content.contains("[EPUB:creator] Jane Author"), "content: {}", m.content);
+        assert!(m.content.contains("[EPUB:publisher] Big Press"), "content: {}", m.content);
+        assert!(m.content.contains("[EPUB:language] en"), "content: {}", m.content);
 
         assert_eq!(hrefs, vec!["OEBPS/chapter1.xhtml"]);
     }

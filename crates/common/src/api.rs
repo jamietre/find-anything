@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-pub use find_extract_types::index_line::{detect_kind_from_ext, IndexLine, SCANNER_VERSION};
+pub use find_extract_types::index_line::{
+    detect_kind_from_ext, IndexLine, SCANNER_VERSION,
+    LINE_PATH, LINE_METADATA, LINE_CONTENT_START,
+};
 
 /// Typed representation of a file's kind — replaces the stringly-typed `kind: String`
 /// pattern throughout the codebase.
@@ -420,9 +423,16 @@ pub struct AppSettingsResponse {
     /// 0 = no limit (older servers). Default: 2000.
     #[serde(default)]
     pub file_view_page_size: usize,
+    /// The line_number of the first content line.
+    /// 2 for servers that use the reserved-slot scheme (line 0 = path, line 1 = metadata).
+    /// Clients compute display line as `line_number - (content_line_start - 1)`.
+    /// Defaults to 1 for backwards compatibility with older servers.
+    #[serde(default = "default_content_line_start")]
+    pub content_line_start: usize,
 }
 
 fn default_max_markdown_render_kb() -> usize { 512 }
+fn default_content_line_start() -> usize { 1 }
 
 // ── Stats types ───────────────────────────────────────────────────────────────
 

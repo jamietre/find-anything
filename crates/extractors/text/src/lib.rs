@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
-use find_extract_types::IndexLine;
+use find_extract_types::{IndexLine, LINE_METADATA, LINE_CONTENT_START};
 use find_extract_types::ExtractorConfig;
 use gray_matter::{engine::YAML, Matter, Pod};
 
@@ -46,7 +46,7 @@ pub fn extract(path: &Path, cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLi
         .filter_map(|(i, line)| {
             line.ok().map(|content| IndexLine {
                 archive_path: None,
-                line_number: i + 1,
+                line_number: i + LINE_CONTENT_START,
                 content,
             })
         })
@@ -126,7 +126,7 @@ pub fn lines_from_str(content: &str, archive_path: Option<String>) -> Vec<IndexL
         .enumerate()
         .map(|(i, line)| IndexLine {
             archive_path: archive_path.clone(),
-            line_number: i + 1,
+            line_number: i + LINE_CONTENT_START,
             content: line.to_string(),
         })
         .collect()
@@ -202,10 +202,10 @@ fn extract_markdown_with_frontmatter(content: &str) -> Vec<IndexLine> {
     let matter = Matter::<YAML>::new();
     let parsed = matter.parse(content);
 
-    // If frontmatter exists, add it as line_number=0
+    // If frontmatter exists, concatenate all fields into the metadata slot (LINE_METADATA).
     if let Some(data) = parsed.data {
-        if let Some(frontmatter_lines) = extract_frontmatter_fields(&data) {
-            lines.extend(frontmatter_lines);
+        if let Some(meta) = extract_frontmatter_metadata(&data) {
+            lines.push(meta);
         }
     }
 
@@ -215,7 +215,7 @@ fn extract_markdown_with_frontmatter(content: &str) -> Vec<IndexLine> {
     for (i, line) in parsed.content.lines().enumerate() {
         lines.push(IndexLine {
             archive_path: None,
-            line_number: i + 1,
+            line_number: i + LINE_CONTENT_START,
             content: line.trim().to_string(),
         });
     }
@@ -223,23 +223,25 @@ fn extract_markdown_with_frontmatter(content: &str) -> Vec<IndexLine> {
     lines
 }
 
-/// Convert frontmatter Pod to IndexLines at line_number=0.
-fn extract_frontmatter_fields(data: &Pod) -> Option<Vec<IndexLine>> {
+/// Convert frontmatter Pod to a single concatenated IndexLine at LINE_METADATA.
+fn extract_frontmatter_metadata(data: &Pod) -> Option<IndexLine> {
     if let Pod::Hash(mapping) = data {
-        let mut lines = Vec::new();
+        let parts: Vec<String> = mapping
+            .iter()
+            .filter_map(|(key, value)| {
+                pod_to_string(value).map(|v| format!("[FRONTMATTER:{}] {}", key, v))
+            })
+            .collect();
 
-        for (key, value) in mapping {
-            if let Some(value_str) = pod_to_string(value) {
-                let content = format!("[FRONTMATTER:{}] {}", key, value_str);
-                lines.push(IndexLine {
-                    archive_path: None,
-                    line_number: 0,
-                    content,
-                });
-            }
+        if parts.is_empty() {
+            return None;
         }
 
-        Some(lines)
+        Some(IndexLine {
+            archive_path: None,
+            line_number: LINE_METADATA,
+            content: parts.join(" "),
+        })
     } else {
         None
     }
@@ -290,33 +292,24 @@ More content
 
         let lines = extract_markdown_with_frontmatter(content);
 
-        // Check frontmatter fields are at line 0
-        let frontmatter_lines: Vec<_> = lines
+        // Check frontmatter is consolidated into the metadata slot (LINE_METADATA = 1).
+        let meta_lines: Vec<_> = lines
             .iter()
-            .filter(|l| l.line_number == 0 && l.content.starts_with("[FRONTMATTER:"))
+            .filter(|l| l.line_number == LINE_METADATA)
             .collect();
 
-        assert_eq!(frontmatter_lines.len(), 5);
+        assert_eq!(meta_lines.len(), 1);
+        let meta = &meta_lines[0].content;
 
-        // Check specific fields
-        assert!(frontmatter_lines
-            .iter()
-            .any(|l| l.content == "[FRONTMATTER:title] Test Document"));
-        assert!(frontmatter_lines
-            .iter()
-            .any(|l| l.content == "[FRONTMATTER:author] John Doe"));
-        assert!(frontmatter_lines
-            .iter()
-            .any(|l| l.content == "[FRONTMATTER:tags] rust, indexing"));
-        assert!(frontmatter_lines
-            .iter()
-            .any(|l| l.content == "[FRONTMATTER:count] 42"));
-        assert!(frontmatter_lines
-            .iter()
-            .any(|l| l.content == "[FRONTMATTER:active] true"));
+        // All fields should appear in the single concatenated metadata line.
+        assert!(meta.contains("[FRONTMATTER:title] Test Document"), "meta={meta}");
+        assert!(meta.contains("[FRONTMATTER:author] John Doe"), "meta={meta}");
+        assert!(meta.contains("[FRONTMATTER:tags] rust, indexing"), "meta={meta}");
+        assert!(meta.contains("[FRONTMATTER:count] 42"), "meta={meta}");
+        assert!(meta.contains("[FRONTMATTER:active] true"), "meta={meta}");
 
-        // Check content is indexed
-        let content_lines: Vec<_> = lines.iter().filter(|l| l.line_number > 0).collect();
+        // Check content is indexed starting at LINE_CONTENT_START (2).
+        let content_lines: Vec<_> = lines.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(content_lines.len() > 0);
         assert!(content_lines
             .iter()
@@ -343,11 +336,11 @@ No frontmatter here.
 
         assert_eq!(frontmatter_lines.len(), 0);
 
-        // Content should still be indexed
-        assert!(lines.iter().any(|l| l.content == "# Regular Markdown"));
+        // Content should still be indexed (starting at LINE_CONTENT_START)
+        assert!(lines.iter().any(|l| l.line_number >= LINE_CONTENT_START && l.content == "# Regular Markdown"));
         assert!(lines
             .iter()
-            .any(|l| l.content == "No frontmatter here."));
+            .any(|l| l.line_number >= LINE_CONTENT_START && l.content == "No frontmatter here."));
     }
 
     #[test]
@@ -385,8 +378,8 @@ invalid yaml: [unclosed
 
         assert_eq!(frontmatter_lines.len(), 0);
 
-        // Content should be indexed
-        assert!(lines.iter().any(|l| l.content == "# Content"));
+        // Content should be indexed (starting at LINE_CONTENT_START)
+        assert!(lines.iter().any(|l| l.line_number >= LINE_CONTENT_START && l.content == "# Content"));
     }
 
     #[test]
@@ -402,18 +395,16 @@ metadata:
 
         let lines = extract_markdown_with_frontmatter(content);
 
-        // Nested objects should be serialized
-        let frontmatter_lines: Vec<_> = lines
+        // Nested objects should be serialized into the single metadata line.
+        let meta_lines: Vec<_> = lines
             .iter()
-            .filter(|l| l.content.starts_with("[FRONTMATTER:"))
+            .filter(|l| l.line_number == LINE_METADATA)
             .collect();
 
-        assert_eq!(frontmatter_lines.len(), 1);
-        assert!(frontmatter_lines[0]
-            .content
-            .starts_with("[FRONTMATTER:metadata]"));
+        assert_eq!(meta_lines.len(), 1);
+        assert!(meta_lines[0].content.starts_with("[FRONTMATTER:metadata]"));
         // Should contain nested data
-        assert!(frontmatter_lines[0].content.contains("author"));
-        assert!(frontmatter_lines[0].content.contains("John"));
+        assert!(meta_lines[0].content.contains("author"));
+        assert!(meta_lines[0].content.contains("John"));
     }
 }

@@ -476,54 +476,59 @@ mod tests {
     #[test]
     fn fts_candidates_finds_matching_content() {
         let conn = test_conn();
-        let (_dir, mgr) = dummy_mgr();
+
 
         insert_inline_file(&conn, "docs/readme.txt", 1000, "text", &[
             (0, "[PATH] docs/readme.txt"),
-            (1, "hello world information here"),
+            (1, ""),
+            (2, "hello world information here"),
         ]);
         insert_inline_file(&conn, "docs/other.txt", 1000, "text", &[
             (0, "[PATH] docs/other.txt"),
-            (1, "unrelated content"),
+            (1, ""),
+            (2, "unrelated content"),
         ]);
 
-        let results = fts_candidates(&conn, &mgr, "hello world", 100, false, DateFilter::default()).unwrap();
+        let results = fts_candidates(&conn, "hello world", 100, false, DateFilter::default()).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].file_path, "docs/readme.txt");
-        assert_eq!(results[0].line_number, 1);
-        assert!(results[0].content.contains("hello"));
+        assert_eq!(results[0].line_number, 2);
+        // content is not populated by fts_candidates (plan 080: no ZIP reads for non-regex modes)
     }
 
     #[test]
     fn fts_candidates_no_match_returns_empty() {
         let conn = test_conn();
-        let (_dir, mgr) = dummy_mgr();
+
 
         insert_inline_file(&conn, "file.txt", 1000, "text", &[
             (0, "[PATH] file.txt"),
-            (1, "some content here"),
+            (1, ""),
+            (2, "some content here"),
         ]);
 
-        let results = fts_candidates(&conn, &mgr, "xyznonexistent", 100, false, DateFilter::default()).unwrap();
+        let results = fts_candidates(&conn, "xyznonexistent", 100, false, DateFilter::default()).unwrap();
         assert!(results.is_empty());
     }
 
     #[test]
     fn fts_count_matches_candidate_count() {
         let conn = test_conn();
-        let (_dir, mgr) = dummy_mgr();
+
 
         insert_inline_file(&conn, "a.txt", 1000, "text", &[
             (0, "[PATH] a.txt"),
-            (1, "searchable term here"),
+            (1, ""),
+            (2, "searchable term here"),
         ]);
         insert_inline_file(&conn, "b.txt", 1000, "text", &[
             (0, "[PATH] b.txt"),
-            (1, "searchable term there"),
+            (1, ""),
+            (2, "searchable term there"),
         ]);
 
         let count = fts_count(&conn, "searchable term", 100, false, DateFilter::default()).unwrap();
-        let candidates = fts_candidates(&conn, &mgr, "searchable term", 100, false, DateFilter::default()).unwrap();
+        let candidates = fts_candidates(&conn, "searchable term", 100, false, DateFilter::default()).unwrap();
         assert_eq!(count, candidates.len());
         assert_eq!(count, 2);
     }
@@ -531,19 +536,21 @@ mod tests {
     #[test]
     fn fts_candidates_date_filter_restricts_by_mtime() {
         let conn = test_conn();
-        let (_dir, mgr) = dummy_mgr();
+
 
         insert_inline_file(&conn, "old.txt", 100, "text", &[
             (0, "[PATH] old.txt"),
-            (1, "matching content here"),
+            (1, ""),
+            (2, "matching content here"),
         ]);
         insert_inline_file(&conn, "new.txt", 9000, "text", &[
             (0, "[PATH] new.txt"),
-            (1, "matching content here"),
+            (1, ""),
+            (2, "matching content here"),
         ]);
 
         let filter = DateFilter { from: Some(5000), to: Some(i64::MAX), ..Default::default() };
-        let results = fts_candidates(&conn, &mgr, "matching content", 100, false, filter).unwrap();
+        let results = fts_candidates(&conn, "matching content", 100, false, filter).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].file_path, "new.txt");
     }
@@ -551,19 +558,21 @@ mod tests {
     #[test]
     fn fts_candidates_kind_filter() {
         let conn = test_conn();
-        let (_dir, mgr) = dummy_mgr();
+
 
         insert_inline_file(&conn, "doc.pdf", 1000, "pdf", &[
             (0, "[PATH] doc.pdf"),
-            (1, "common search term"),
+            (1, ""),
+            (2, "common search term"),
         ]);
         insert_inline_file(&conn, "note.txt", 1000, "text", &[
             (0, "[PATH] note.txt"),
-            (1, "common search term"),
+            (1, ""),
+            (2, "common search term"),
         ]);
 
         let filter = DateFilter { kinds: vec![FileKind::Pdf], ..Default::default() };
-        let results = fts_candidates(&conn, &mgr, "common search", 100, false, filter).unwrap();
+        let results = fts_candidates(&conn, "common search", 100, false, filter).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].file_kind, FileKind::Pdf);
     }
@@ -571,15 +580,16 @@ mod tests {
     #[test]
     fn fts_candidates_filename_only_restricts_to_line_zero() {
         let conn = test_conn();
-        let (_dir, mgr) = dummy_mgr();
+
 
         insert_inline_file(&conn, "docs/needle.txt", 1000, "text", &[
             (0, "[PATH] docs/needle.txt"),
-            (1, "content that also has needle"),
+            (1, ""),
+            (2, "content that also has needle"),
         ]);
 
         let filter = DateFilter { filename_only: true, ..Default::default() };
-        let results = fts_candidates(&conn, &mgr, "needle", 100, false, filter).unwrap();
+        let results = fts_candidates(&conn, "needle", 100, false, filter).unwrap();
         // filename_only=true restricts to line_number=0; the content line is excluded.
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].line_number, 0);
@@ -588,16 +598,17 @@ mod tests {
     #[test]
     fn fts_candidates_respects_limit() {
         let conn = test_conn();
-        let (_dir, mgr) = dummy_mgr();
+
 
         for i in 0..10i64 {
             insert_inline_file(&conn, &format!("file_{i}.txt"), 1000 + i, "text", &[
                 (0, &format!("[PATH] file_{i}.txt")),
-                (1, "common content term here"),
+                (1, ""),
+                (2, "common content term here"),
             ]);
         }
 
-        let results = fts_candidates(&conn, &mgr, "common content", 3, false, DateFilter::default()).unwrap();
+        let results = fts_candidates(&conn, "common content", 3, false, DateFilter::default()).unwrap();
         assert_eq!(results.len(), 3);
     }
 

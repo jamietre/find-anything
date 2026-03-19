@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::Result;
-use find_extract_types::IndexLine;
+use find_extract_types::{IndexLine, LINE_METADATA};
 use find_extract_types::ExtractorConfig;
 use tracing::warn;
 
@@ -97,7 +97,7 @@ pub fn dispatch_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> V
             .unwrap_or("application/octet-stream");
         lines.push(IndexLine {
             archive_path: None,
-            line_number: 0,
+            line_number: LINE_METADATA,
             content: format!("[FILE:mime] {}", mime),
         });
     }

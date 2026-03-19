@@ -444,7 +444,7 @@ fn process_request_phase1(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use find_common::api::{BulkRequest, FileKind, IndexFile, IndexLine, PathRename};
+    use find_common::api::{BulkRequest, FileKind, IndexFile, IndexLine, PathRename, LINE_CONTENT_START};
     use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
 
@@ -862,7 +862,8 @@ mod tests {
                 scanner_version: 1,
                 lines: vec![
                     IndexLine { archive_path: None, line_number: 0, content: "[PATH] src/main.js".to_string() },
-                    IndexLine { archive_path: None, line_number: 1, content: long_line.clone() },
+                    IndexLine { archive_path: None, line_number: 1, content: String::new() }, // metadata (empty)
+                    IndexLine { archive_path: None, line_number: LINE_CONTENT_START, content: long_line.clone() },
                 ],
                 extract_ms: None,
                 content_hash: None,
@@ -895,7 +896,7 @@ mod tests {
         // Read the normalized gz and verify lines were wrapped.
         let normalized = read_to_archive_gz(&to_archive_dir);
         let file = &normalized.files[0];
-        let content_lines: Vec<_> = file.lines.iter().filter(|l| l.line_number > 0).collect();
+        let content_lines: Vec<_> = file.lines.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(
             content_lines.len() > 1,
             "long line should have been wrapped into multiple lines, got: {:?}",
@@ -934,6 +935,7 @@ mod tests {
                 scanner_version: 1,
                 lines: vec![
                     IndexLine { archive_path: None, line_number: 0, content: "[PATH] photo.jpg".to_string() },
+                    // Line 1 = metadata slot: EXIF data for this image.
                     IndexLine { archive_path: None, line_number: 1, content: exif_line.to_string() },
                 ],
                 extract_ms: None,
@@ -965,9 +967,12 @@ mod tests {
 
         let normalized = read_to_archive_gz(&to_archive_dir);
         let file = &normalized.files[0];
-        let content_lines: Vec<_> = file.lines.iter().filter(|l| l.line_number > 0).collect();
-        assert_eq!(content_lines.len(), 1, "image file should have exactly one content line");
-        assert_eq!(content_lines[0].content, exif_line, "image line must be unchanged by normalization");
+        // Images have no content lines (>= LINE_CONTENT_START); metadata (line 1) is unchanged.
+        let content_lines: Vec<_> = file.lines.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
+        assert_eq!(content_lines.len(), 0, "image file should have no content lines (>= LINE_CONTENT_START)");
+        let meta_line = file.lines.iter().find(|l| l.line_number == 1);
+        assert!(meta_line.is_some(), "image file should have a metadata line (line 1)");
+        assert_eq!(meta_line.unwrap().content, exif_line, "metadata line must be unchanged by normalization");
     }
 }
 

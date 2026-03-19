@@ -11,7 +11,7 @@
 	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { getToken, setToken } from '$lib/token';
 	import { startLiveUpdates, liveEvent } from '$lib/liveUpdates';
-	import { contextWindow, maxMarkdownRenderKb, fileViewPageSize } from '$lib/settingsStore';
+	import { contextWindow, maxMarkdownRenderKb, fileViewPageSize, contentLineStart } from '$lib/settingsStore';
 	import { formatHash } from '$lib/lineSelection';
 	import type { LineSelection } from '$lib/lineSelection';
 	import { FilePath } from '$lib/filePath';
@@ -132,6 +132,7 @@
 			contextWindow.set(profileWindow ?? s.context_window);
 			maxMarkdownRenderKb.set(s.max_markdown_render_kb ?? 512);
 			fileViewPageSize.set(s.file_view_page_size ?? 2000);
+			contentLineStart.set(s.content_line_start ?? 1);
 		} catch { /* silent */ }
 	}
 
@@ -386,9 +387,10 @@
 	function openFile(e: CustomEvent<SearchResult>) {
 		const r = e.detail;
 		const file = FilePath.fromParts(r.path, r.archive_path ?? null);
+		const cls = get(contentLineStart);
 		const extraLines = (r.extra_matches ?? [])
 			.map((m) => m.line_number)
-			.filter((n) => n > 0 && n !== r.line_number);
+			.filter((n) => n >= cls && n !== r.line_number);
 		const selection: LineSelection = r.line_number
 			? [r.line_number, ...extraLines]
 			: extraLines.length ? extraLines : [];

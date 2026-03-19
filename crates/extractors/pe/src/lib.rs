@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use find_extract_types::IndexLine;
+use find_extract_types::{IndexLine, LINE_METADATA};
 use find_extract_types::ExtractorConfig;
 
 /// Extract version information from PE bytes.
@@ -10,15 +10,19 @@ use find_extract_types::ExtractorConfig;
 /// filename line — the caller adds that.
 pub fn extract_from_bytes(bytes: &[u8], _name: &str, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     let version_info = extract_version_info(bytes)?;
-    Ok(version_info
+    let combined: String = version_info
         .lines()
         .filter(|l| !l.is_empty())
-        .map(|line| IndexLine {
-            line_number: 0,
-            content: line.to_string(),
-            archive_path: None,
-        })
-        .collect())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if combined.is_empty() {
+        return Ok(vec![]);
+    }
+    Ok(vec![IndexLine {
+        line_number: LINE_METADATA,
+        content: combined,
+        archive_path: None,
+    }])
 }
 
 /// Extract version information from PE files (EXE, DLL, etc.).
@@ -28,20 +32,10 @@ pub fn extract_from_bytes(bytes: &[u8], _name: &str, _cfg: &ExtractorConfig) -> 
 /// - Version info resources (product, version, company, copyright, etc.)
 ///
 /// # Returns
-/// Vector of IndexLine objects with metadata at line_number=0
+/// Vector of IndexLine objects with all metadata at LINE_METADATA (1).
 pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexLine>> {
     let data = fs::read(path)?;
-    let version_info = extract_version_info(&data)?;
-    // The caller (build_index_files) adds the [PATH] line; we only emit PE metadata.
-    Ok(version_info
-        .lines()
-        .filter(|l| !l.is_empty())
-        .map(|line| IndexLine {
-            line_number: 0,
-            content: line.to_string(),
-            archive_path: None,
-        })
-        .collect())
+    extract_from_bytes(&data, "", _cfg)
 }
 
 /// Check if a file is a PE executable based on extension.

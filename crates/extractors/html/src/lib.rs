@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use find_extract_types::IndexLine;
+use find_extract_types::{IndexLine, LINE_METADATA, LINE_CONTENT_START};
 use find_extract_types::ExtractorConfig;
 use scraper::{ElementRef, Html, Selector};
 
@@ -44,6 +44,7 @@ const EXCLUDED_TAGS: &[&str] = &["nav", "header", "footer", "script", "style"];
 fn extract_from_str(src: &str) -> Vec<IndexLine> {
     let document = Html::parse_document(src);
     let mut lines = Vec::new();
+    let mut meta_parts = Vec::new();
 
     // ── Metadata: <title> ────────────────────────────────────────────────────
     let title_sel = Selector::parse("title").unwrap();
@@ -51,11 +52,7 @@ fn extract_from_str(src: &str) -> Vec<IndexLine> {
         let text = el.text().collect::<Vec<_>>().join(" ");
         let text = text.trim();
         if !text.is_empty() {
-            lines.push(IndexLine {
-                archive_path: None,
-                line_number: 0,
-                content: format!("[HTML:title] {}", text),
-            });
+            meta_parts.push(format!("[HTML:title] {}", text));
         }
     }
 
@@ -65,13 +62,18 @@ fn extract_from_str(src: &str) -> Vec<IndexLine> {
         if let Some(content) = el.value().attr("content") {
             let text = content.trim();
             if !text.is_empty() {
-                lines.push(IndexLine {
-                    archive_path: None,
-                    line_number: 0,
-                    content: format!("[HTML:description] {}", text),
-                });
+                meta_parts.push(format!("[HTML:description] {}", text));
             }
         }
+    }
+
+    // Emit single concatenated metadata line if we found any metadata.
+    if !meta_parts.is_empty() {
+        lines.push(IndexLine {
+            archive_path: None,
+            line_number: LINE_METADATA,
+            content: meta_parts.join(" "),
+        });
     }
 
     // ── Content: block-level elements ─────────────────────────────────────────
@@ -79,7 +81,7 @@ fn extract_from_str(src: &str) -> Vec<IndexLine> {
         Selector::parse("h1, h2, h3, h4, h5, h6, p, li, td, th, pre, blockquote, figcaption")
             .unwrap();
 
-    let mut line_number = 0usize;
+    let mut line_number = LINE_CONTENT_START - 1;
 
     for el in document.select(&content_sel) {
         // Skip elements inside excluded containers
@@ -142,9 +144,11 @@ mod tests {
         let lines = extract_from_str(html);
         assert!(lines
             .iter()
-            .any(|l| l.line_number == 0 && l.content == "[HTML:title] My Page Title"));
-        assert!(lines.iter().any(|l| l.line_number == 0
-            && l.content == "[HTML:description] A great page about stuff"));
+            .any(|l| l.line_number == LINE_METADATA && l.content.contains("[HTML:title] My Page Title")),
+            "lines: {lines:?}");
+        assert!(lines.iter().any(|l| l.line_number == LINE_METADATA
+            && l.content.contains("[HTML:description] A great page about stuff")),
+            "lines: {lines:?}");
     }
 
     #[test]
@@ -161,7 +165,7 @@ mod tests {
         let lines = extract_from_str(html);
         let content: Vec<&str> = lines
             .iter()
-            .filter(|l| l.line_number > 0)
+            .filter(|l| l.line_number >= LINE_CONTENT_START)
             .map(|l| l.content.as_str())
             .collect();
 
@@ -185,7 +189,7 @@ mod tests {
         let lines = extract_from_str(html);
         let content: Vec<&str> = lines
             .iter()
-            .filter(|l| l.line_number > 0)
+            .filter(|l| l.line_number >= LINE_CONTENT_START)
             .map(|l| l.content.as_str())
             .collect();
 
@@ -205,7 +209,7 @@ mod tests {
         let lines = extract_from_str(html);
         let content: Vec<&str> = lines
             .iter()
-            .filter(|l| l.line_number > 0)
+            .filter(|l| l.line_number >= LINE_CONTENT_START)
             .map(|l| l.content.as_str())
             .collect();
 
@@ -226,7 +230,7 @@ mod tests {
         let lines = extract_from_str(html);
         let content: Vec<&str> = lines
             .iter()
-            .filter(|l| l.line_number > 0)
+            .filter(|l| l.line_number >= LINE_CONTENT_START)
             .map(|l| l.content.as_str())
             .collect();
 

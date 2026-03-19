@@ -6,7 +6,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, functions::FunctionFlags, params};
 
-use find_common::api::{ContextLine, FileKind, FileRecord, IndexFile, PathRename};
+use find_common::api::{ContextLine, FileKind, FileRecord, IndexFile, PathRename, LINE_CONTENT_START};
 use find_common::path::{composite_like_prefix, is_composite};
 
 use crate::archive::{ArchiveManager, ChunkRef};
@@ -35,7 +35,8 @@ pub use tree::{list_dir, split_composite_path};
 
 /// The current schema version. Stored in SQLite's built-in `user_version` pragma.
 /// Increment this whenever the schema changes incompatibly.
-pub const SCHEMA_VERSION: i64 = 11;
+/// v12: reserved line number scheme (line 0 = path, line 1 = metadata, line 2+ = content).
+pub const SCHEMA_VERSION: i64 = 12;
 
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
@@ -792,9 +793,10 @@ pub fn get_file_lines(
 
 /// Paged variant of `get_file_lines`.
 ///
-/// Always returns all line_number=0 (metadata) rows.  Content rows
-/// (line_number > 0) are returned starting from `offset` (0-based index into
-/// the ordered set of content lines), limited to `limit` rows when provided.
+/// Always returns lines 0 (path) and 1 (metadata).  Content rows
+/// (line_number >= LINE_CONTENT_START = 2) are returned starting from `offset`
+/// (0-based index into the ordered set of content lines), limited to `limit`
+/// rows when provided.
 ///
 /// Returns `(combined_lines, total_content_count, content_unavailable)` where
 /// `combined_lines` contains metadata lines followed by the content page.
@@ -818,8 +820,8 @@ pub fn get_file_lines_paged(
     let (line_count, content_hash) = file_info.unwrap_or((None, None));
     let line_count = line_count.unwrap_or(0) as usize;
 
-    // total_count = all lines except line 0 (the metadata/path line)
-    let total_count = line_count.saturating_sub(1);
+    // total_count = all content lines (excluding lines 0 and 1 which are path/metadata)
+    let total_count = line_count.saturating_sub(LINE_CONTENT_START);
 
     // Detect pending-archive state.
     let is_inline = conn.query_row(
@@ -840,24 +842,27 @@ pub fn get_file_lines_paged(
 
     let mut cache: HashMap<(String, String), Vec<String>> = HashMap::new();
 
-    // Line 0 (metadata/path line) always included.
-    let meta_line = read_chunk_for_file(&mut cache, conn, archive_mgr, file_id, 0)
-        .map(|content| ContextLine { line_number: 0, content });
+    // Lines 0 (path) and 1 (metadata) always included.
+    let mut lines: Vec<ContextLine> = Vec::new();
+    for meta_ln in 0..LINE_CONTENT_START {
+        if let Some(content) = read_chunk_for_file(&mut cache, conn, archive_mgr, file_id, meta_ln as i64) {
+            lines.push(ContextLine { line_number: meta_ln, content });
+        }
+    }
 
-    // Content lines (line_number > 0):
+    // Content lines (line_number >= LINE_CONTENT_START):
     // - When limit is None: offset is ignored, return all content lines.
     //   (backward-compatible behaviour — older clients never send offset without limit).
     // - When limit is Some: paginate with offset.
     let (content_start, content_end) = match limit {
         Some(lim) => {
-            let start = offset + 1; // line_number 1 + offset
+            let start = LINE_CONTENT_START + offset;
             let end = (start + lim).min(line_count);
             (start, end)
         }
-        None => (1, line_count), // all content lines
+        None => (LINE_CONTENT_START, line_count), // all content lines
     };
 
-    let mut lines: Vec<ContextLine> = meta_line.into_iter().collect();
     for ln in content_start..content_end {
         if let Some(content) = read_chunk_for_file(&mut cache, conn, archive_mgr, file_id, ln as i64) {
             lines.push(ContextLine { line_number: ln, content });

@@ -1,7 +1,7 @@
 use std::io::Read;
 use std::path::Path;
 
-use find_extract_types::IndexLine;
+use find_extract_types::{IndexLine, LINE_METADATA, LINE_CONTENT_START};
 use find_extract_types::ExtractorConfig;
 use quick_xml::events::Event;
 
@@ -62,16 +62,18 @@ fn extract_docx(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
     let mut archive = zip::ZipArchive::new(file)?;
     let mut lines = Vec::new();
 
-    // Metadata from docProps/core.xml
+    // Metadata from docProps/core.xml — consolidated into LINE_METADATA.
     {
         if let Ok(mut entry) = archive.by_name("docProps/core.xml") {
             let mut xml = String::new();
             entry.read_to_string(&mut xml)?;
-            lines.extend(parse_docx_metadata(&xml));
+            if let Some(meta) = parse_docx_metadata(&xml) {
+                lines.push(meta);
+            }
         }
     }
 
-    // Content from word/document.xml
+    // Content from word/document.xml — starts at LINE_CONTENT_START.
     {
         if let Ok(mut entry) = archive.by_name("word/document.xml") {
             let mut xml = String::new();
@@ -80,7 +82,7 @@ fn extract_docx(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
             for (i, text) in paragraphs.into_iter().enumerate() {
                 lines.push(IndexLine {
                     archive_path: None,
-                    line_number: i + 1,
+                    line_number: i + LINE_CONTENT_START,
                     content: text,
                 });
             }
@@ -90,10 +92,11 @@ fn extract_docx(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
     Ok(lines)
 }
 
-/// Extract dc:title and dc:creator from docProps/core.xml.
-fn parse_docx_metadata(xml: &str) -> Vec<IndexLine> {
+/// Extract dc:title and dc:creator from docProps/core.xml, concatenated into a
+/// single IndexLine at LINE_METADATA.
+fn parse_docx_metadata(xml: &str) -> Option<IndexLine> {
     let mut reader = quick_xml::Reader::from_str(xml);
-    let mut lines = Vec::new();
+    let mut parts = Vec::new();
     let mut current_field: Option<&'static str> = None;
     let mut buf = Vec::new();
 
@@ -111,11 +114,7 @@ fn parse_docx_metadata(xml: &str) -> Vec<IndexLine> {
                     if let Ok(text) = e.unescape() {
                         let text = text.trim().to_string();
                         if !text.is_empty() {
-                            lines.push(IndexLine {
-                                archive_path: None,
-                                line_number: 0,
-                                content: format!("[DOCX:{}] {}", field, text),
-                            });
+                            parts.push(format!("[DOCX:{}] {}", field, text));
                         }
                     }
                 }
@@ -128,7 +127,16 @@ fn parse_docx_metadata(xml: &str) -> Vec<IndexLine> {
         }
         buf.clear();
     }
-    lines
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    Some(IndexLine {
+        archive_path: None,
+        line_number: LINE_METADATA,
+        content: parts.join(" "),
+    })
 }
 
 /// Collect non-empty paragraphs from word/document.xml.
@@ -179,16 +187,26 @@ fn extract_xlsx(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
 
     let mut wb = open_workbook_auto(path)?;
     let mut lines = Vec::new();
-    let mut content_line = 0usize;
 
-    for sheet_name in wb.sheet_names().to_vec() {
+    let sheet_names = wb.sheet_names().to_vec();
+
+    // All sheet names concatenated into the metadata slot.
+    if !sheet_names.is_empty() {
+        let meta = sheet_names.iter()
+            .map(|n| format!("[XLSX:sheet] {}", n))
+            .collect::<Vec<_>>()
+            .join(" ");
         lines.push(IndexLine {
             archive_path: None,
-            line_number: 0,
-            content: format!("[XLSX:sheet] {}", sheet_name),
+            line_number: LINE_METADATA,
+            content: meta,
         });
+    }
 
-        if let Ok(range) = wb.worksheet_range(&sheet_name) {
+    let mut content_line = LINE_CONTENT_START - 1;
+
+    for sheet_name in &sheet_names {
+        if let Ok(range) = wb.worksheet_range(sheet_name) {
             for row in range.rows() {
                 let cells: Vec<String> = row
                     .iter()
@@ -226,6 +244,7 @@ fn extract_xlsx(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
 fn extract_pptx(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
     let file = std::fs::File::open(path)?;
     let mut archive = zip::ZipArchive::new(file)?;
+    let mut lines = Vec::new();
 
     // Collect slide file names first (no entry borrow held)
     let mut slide_names: Vec<String> = Vec::new();
@@ -246,16 +265,22 @@ fn extract_pptx(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
             .unwrap_or(0)
     });
 
-    let mut lines = Vec::new();
-    let mut content_line = 0usize;
-
-    for (slide_idx, slide_name) in slide_names.iter().enumerate() {
+    // All slide labels concatenated into the metadata slot.
+    if !slide_names.is_empty() {
+        let meta = (1..=slide_names.len())
+            .map(|i| format!("[PPTX:slide] {}", i))
+            .collect::<Vec<_>>()
+            .join(" ");
         lines.push(IndexLine {
             archive_path: None,
-            line_number: 0,
-            content: format!("[PPTX:slide] {}", slide_idx + 1),
+            line_number: LINE_METADATA,
+            content: meta,
         });
+    }
 
+    let mut content_line = LINE_CONTENT_START - 1;
+
+    for slide_name in &slide_names {
         let xml = {
             let mut entry = archive.by_name(slide_name)?;
             let mut s = String::new();
@@ -342,10 +367,10 @@ mod tests {
   <dc:creator>Jane Smith</dc:creator>
 </cp:coreProperties>"#;
 
-        let lines = parse_docx_metadata(xml);
-        assert!(lines.iter().any(|l| l.content == "[DOCX:title] My Document"));
-        assert!(lines.iter().any(|l| l.content == "[DOCX:author] Jane Smith"));
-        assert!(lines.iter().all(|l| l.line_number == 0));
+        let meta = parse_docx_metadata(xml).expect("expected metadata");
+        assert_eq!(meta.line_number, LINE_METADATA);
+        assert!(meta.content.contains("[DOCX:title] My Document"), "content: {}", meta.content);
+        assert!(meta.content.contains("[DOCX:author] Jane Smith"), "content: {}", meta.content);
     }
 
     #[test]

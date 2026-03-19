@@ -18,7 +18,7 @@ use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use find_common::api::{BulkRequest, IndexFile, IndexLine};
+use find_common::api::{BulkRequest, IndexFile, IndexLine, LINE_PATH, LINE_METADATA};
 use find_common::config::ExtractorConfig;
 use find_common::subprocess::extract_lines_via_subprocess;
 
@@ -100,15 +100,23 @@ pub async fn index_upload(
         extract_lines_via_subprocess(&file_path, &ext_cfg, &extractor_dir).await;
 
     // Always include the filename at line 0 so the file is discoverable by name.
-    if lines.iter().all(|l| l.line_number != 0) {
+    if lines.iter().all(|l| l.line_number != LINE_PATH) {
         lines.insert(
             0,
             IndexLine {
                 archive_path: None,
-                line_number: 0,
+                line_number: LINE_PATH,
                 content: meta.rel_path.clone(),
             },
         );
+    }
+    // Guarantee the metadata slot is always present.
+    if lines.iter().all(|l| l.line_number != LINE_METADATA) {
+        lines.push(IndexLine {
+            archive_path: None,
+            line_number: LINE_METADATA,
+            content: String::new(),
+        });
     }
 
     let now = std::time::SystemTime::now()

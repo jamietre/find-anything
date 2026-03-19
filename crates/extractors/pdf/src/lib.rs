@@ -1,5 +1,5 @@
 use std::path::Path;
-use find_extract_types::IndexLine;
+use find_extract_types::{IndexLine, LINE_CONTENT_START};
 use find_extract_types::ExtractorConfig;
 use tracing::{warn, error};
 
@@ -34,7 +34,7 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> an
         warn!("PDF is password-protected, content not indexed: {name}");
         return Ok(vec![IndexLine {
             archive_path: None,
-            line_number: 1,
+            line_number: LINE_CONTENT_START,
             content: "Content encrypted".to_string(),
         }]);
     }
@@ -64,7 +64,7 @@ pub fn extract_from_bytes(bytes: &[u8], name: &str, cfg: &ExtractorConfig) -> an
     };
 
     let mut lines = Vec::new();
-    let mut line_num: usize = 0;
+    let mut line_num: usize = LINE_CONTENT_START - 1;
     let max_content_bytes = cfg.max_content_kb * 1024;
     let mut total_content_bytes: usize = 0;
 
@@ -157,7 +157,7 @@ mod tests {
         let result = extract_from_bytes(bytes, "encrypted.pdf", &test_cfg()).unwrap();
         assert_eq!(result.len(), 1, "expected exactly one line for encrypted PDF");
         assert_eq!(result[0].content, "Content encrypted");
-        assert_eq!(result[0].line_number, 1);
+        assert_eq!(result[0].line_number, LINE_CONTENT_START);
         assert!(result[0].archive_path.is_none());
     }
 

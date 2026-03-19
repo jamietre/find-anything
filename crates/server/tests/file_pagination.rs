@@ -124,8 +124,8 @@ async fn test_non_first_page_has_line_offsets() {
 
     assert_eq!(
         resp.line_offsets,
-        vec![6, 7, 8, 9, 10],
-        "line_offsets must contain actual line numbers for non-first pages"
+        vec![7, 8, 9, 10, 11],
+        "line_offsets must contain actual (2-based) line numbers for non-first pages"
     );
 }
 

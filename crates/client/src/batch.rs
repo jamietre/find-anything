@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
-use find_common::api::{BulkRequest, FileKind, IndexFile, IndexingFailure, IndexLine, SCANNER_VERSION};
+use find_common::api::{BulkRequest, FileKind, IndexFile, IndexingFailure, IndexLine, SCANNER_VERSION, LINE_PATH, LINE_METADATA, LINE_CONTENT_START};
 
 use crate::api::ApiClient;
 
@@ -29,9 +29,17 @@ pub fn build_index_files(
         // Always index the relative path so the file is findable by name.
         all_lines.push(IndexLine {
             archive_path: None,
-            line_number: 0,
+            line_number: LINE_PATH,
             content: format!("[PATH] {}", rel_path),
         });
+        // Guarantee the metadata slot is always present (maintains dense line numbering).
+        if !all_lines.iter().any(|l| l.line_number == LINE_METADATA) {
+            all_lines.push(IndexLine {
+                archive_path: None,
+                line_number: LINE_METADATA,
+                content: String::new(),
+            });
+        }
         return vec![IndexFile { path: rel_path, mtime, size: Some(size), kind, lines: all_lines, extract_ms: None, content_hash: None, scanner_version: SCANNER_VERSION, is_new: false }];
     }
 
@@ -52,9 +60,16 @@ pub fn build_index_files(
     let mut outer_lines = outer_extra;
     outer_lines.push(IndexLine {
         archive_path: None,
-        line_number: 0,
+        line_number: LINE_PATH,
         content: format!("[PATH] {}", rel_path),
     });
+    if !outer_lines.iter().any(|l| l.line_number == LINE_METADATA) {
+        outer_lines.push(IndexLine {
+            archive_path: None,
+            line_number: LINE_METADATA,
+            content: String::new(),
+        });
+    }
     result.push(IndexFile {
         path: rel_path.clone(),
         mtime,
@@ -74,14 +89,22 @@ pub fn build_index_files(
         for l in &mut content_lines {
             l.archive_path = None;
         }
-        // Remove the extractor's filename line (member name only); replace with composite path.
-        content_lines.retain(|l| l.line_number != 0);
-        // Add a line_number=0 entry so the member is findable by name.
+        // Remove the extractor's filename line (LINE_PATH only); keep metadata lines (LINE_METADATA).
+        content_lines.retain(|l| l.line_number != LINE_PATH);
+        // Add a LINE_PATH entry so the member is findable by name.
         content_lines.push(IndexLine {
             archive_path: None,
-            line_number: 0,
+            line_number: LINE_PATH,
             content: format!("[PATH] {}", composite_path),
         });
+        // Guarantee the metadata slot is always present.
+        if !content_lines.iter().any(|l| l.line_number == LINE_METADATA) {
+            content_lines.push(IndexLine {
+                archive_path: None,
+                line_number: LINE_METADATA,
+                content: String::new(),
+            });
+        }
         // Detect the member's actual kind from its filename extension.
         let ext = Path::new(&member)
             .extension()
@@ -134,28 +157,34 @@ pub fn build_member_index_files(
         for l in &mut lines {
             l.archive_path = None;
         }
-        // Remove the extractor's filename marker line but keep metadata lines
-        // (EXIF, [FILE:mime], etc.) which also have line_number=0.
-        let path_marker = format!("[PATH] {}", member);
-        lines.retain(|l| !(l.line_number == 0 && (l.content == member || l.content == path_marker)));
+        // Remove only the extractor's LINE_PATH filename marker; metadata at LINE_METADATA is kept.
+        lines.retain(|l| l.line_number != LINE_PATH);
         lines.push(IndexLine {
             archive_path: None,
-            line_number: 0,
+            line_number: LINE_PATH,
             content: format!("[PATH] {}", composite_path),
         });
+        // Guarantee the metadata slot is always present.
+        if !lines.iter().any(|l| l.line_number == LINE_METADATA) {
+            lines.push(IndexLine {
+                archive_path: None,
+                line_number: LINE_METADATA,
+                content: String::new(),
+            });
+        }
         let ext = Path::new(&member)
             .extension()
             .and_then(|e| e.to_str())
             .unwrap_or("");
         let mut member_kind = FileKind::from_extension(ext);
         // Refine Unknown or Text kind using extracted content:
-        // - A [FILE:mime] line emitted by dispatch means binary → use mime_to_kind.
-        // - Text content lines (line_number > 0) present → promote to Text.
+        // - A [FILE:mime] line emitted by dispatch (at LINE_METADATA) means binary → use mime_to_kind.
+        // - Text content lines (line_number >= LINE_CONTENT_START) present → promote to Text.
         if member_kind == FileKind::Text || member_kind == FileKind::Unknown {
-            if let Some(mime_line) = lines.iter().find(|l| l.line_number == 0 && l.content.starts_with("[FILE:mime] ")) {
+            if let Some(mime_line) = lines.iter().find(|l| l.line_number == LINE_METADATA && l.content.starts_with("[FILE:mime] ")) {
                 let mime = &mime_line.content["[FILE:mime] ".len()..];
                 member_kind = FileKind::from(find_extract_dispatch::mime_to_kind(mime));
-            } else if lines.iter().any(|l| l.line_number > 0) {
+            } else if lines.iter().any(|l| l.line_number >= LINE_CONTENT_START) {
                 member_kind = FileKind::Text;
             }
         }
@@ -230,27 +259,27 @@ mod tests {
         assert_eq!(f.kind, FileKind::Text);
         assert_eq!(f.mtime, 100);
         assert_eq!(f.size, Some(200));
-        // Should have exactly the path line.
-        assert_eq!(f.lines.len(), 1);
-        assert_eq!(f.lines[0].line_number, 0);
-        assert_eq!(f.lines[0].content, "[PATH] readme.md");
-        assert!(f.lines[0].archive_path.is_none());
+        // Should have the path line (0) and empty metadata line (1).
+        assert_eq!(f.lines.len(), 2);
+        assert!(f.lines.iter().any(|l| l.line_number == LINE_PATH && l.content == "[PATH] readme.md"));
+        assert!(f.lines.iter().any(|l| l.line_number == LINE_METADATA && l.content.is_empty()));
     }
 
     #[test]
     fn non_archive_with_content_lines() {
         let lines = vec![
-            line(None, 1, "hello"),
-            line(None, 2, "world"),
+            line(None, LINE_CONTENT_START, "hello"),
+            line(None, LINE_CONTENT_START + 1, "world"),
         ];
         let files = build_index_files("src/main.rs".into(), 0, 0, FileKind::Text, lines);
         assert_eq!(files.len(), 1);
         let f = &files[0];
-        // Content lines + the path line appended at the end.
-        assert_eq!(f.lines.len(), 3);
-        assert!(f.lines.iter().any(|l| l.line_number == 0 && l.content == "[PATH] src/main.rs"));
-        assert!(f.lines.iter().any(|l| l.line_number == 1 && l.content == "hello"));
-        assert!(f.lines.iter().any(|l| l.line_number == 2 && l.content == "world"));
+        // Content lines + path line + empty metadata line.
+        assert_eq!(f.lines.len(), 4);
+        assert!(f.lines.iter().any(|l| l.line_number == LINE_PATH && l.content == "[PATH] src/main.rs"));
+        assert!(f.lines.iter().any(|l| l.line_number == LINE_METADATA && l.content.is_empty()));
+        assert!(f.lines.iter().any(|l| l.line_number == LINE_CONTENT_START && l.content == "hello"));
+        assert!(f.lines.iter().any(|l| l.line_number == LINE_CONTENT_START + 1 && l.content == "world"));
     }
 
     // ── Archive files ──────────────────────────────────────────────────────
@@ -258,9 +287,9 @@ mod tests {
     #[test]
     fn archive_produces_outer_and_member_files() {
         let lines = vec![
-            line(Some("report.txt"), 1, "quarterly"),
-            line(Some("report.txt"), 2, "results"),
-            line(Some("photo.jpg"), 1, "exif data"),
+            line(Some("report.txt"), LINE_CONTENT_START, "quarterly"),
+            line(Some("report.txt"), LINE_CONTENT_START + 1, "results"),
+            line(Some("photo.jpg"), LINE_CONTENT_START, "exif data"),
         ];
         let files = build_index_files("data.zip".into(), 10, 20, FileKind::Archive, lines);
 
@@ -269,7 +298,7 @@ mod tests {
 
         let outer = files.iter().find(|f| f.path == "data.zip").unwrap();
         assert_eq!(outer.kind, FileKind::Archive);
-        assert!(outer.lines.iter().any(|l| l.line_number == 0 && l.content == "[PATH] data.zip"));
+        assert!(outer.lines.iter().any(|l| l.line_number == LINE_PATH && l.content == "[PATH] data.zip"));
 
         let report = files.iter().find(|f| f.path == "data.zip::report.txt").unwrap();
         assert_eq!(report.kind, FileKind::Text);
@@ -278,14 +307,14 @@ mod tests {
         // archive_path stripped from member lines.
         assert!(report.lines.iter().all(|l| l.archive_path.is_none()));
         // Path line present.
-        assert!(report.lines.iter().any(|l| l.line_number == 0 && l.content == "[PATH] data.zip::report.txt"));
+        assert!(report.lines.iter().any(|l| l.line_number == LINE_PATH && l.content == "[PATH] data.zip::report.txt"));
         // Content lines present.
         assert!(report.lines.iter().any(|l| l.content == "quarterly"));
         assert!(report.lines.iter().any(|l| l.content == "results"));
 
         let photo = files.iter().find(|f| f.path == "data.zip::photo.jpg").unwrap();
         assert_eq!(photo.kind, FileKind::Image);
-        assert!(photo.lines.iter().any(|l| l.line_number == 0 && l.content == "[PATH] data.zip::photo.jpg"));
+        assert!(photo.lines.iter().any(|l| l.line_number == LINE_PATH && l.content == "[PATH] data.zip::photo.jpg"));
     }
 
     #[test]
@@ -298,7 +327,7 @@ mod tests {
             ("data.rs",   FileKind::Text),
         ];
         for (member_name, expected_kind) in &cases {
-            let lines = vec![line(Some(member_name), 1, "content")];
+            let lines = vec![line(Some(member_name), LINE_CONTENT_START, "content")];
             let files = build_index_files("outer.zip".into(), 0, 0, FileKind::Archive, lines);
             let member = files
                 .iter()
@@ -313,16 +342,14 @@ mod tests {
     #[test]
     fn index_file_bytes_counts_all_content() {
         let lines = vec![
-            line(None, 0, "src/main.rs"),      // 11 bytes
-            line(None, 1, "hello world"),       // 11 bytes
-            line(None, 2, "foo"),               // 3 bytes
+            line(None, LINE_METADATA, "hello world"),  // 11 bytes (metadata)
+            line(None, LINE_CONTENT_START, "foo"),     // 3 bytes (content)
         ];
         let files = build_index_files("src/main.rs".into(), 0, 0, FileKind::Text, lines);
-        // build_index_files appends a [PATH] line; the manually-passed line(0, "src/main.rs")
-        // is kept as-is, so total lines = 3 + 1 = 4 after the append.
+        // build_index_files appends [PATH] line (18 bytes); LINE_METADATA is present so no empty added.
         let total = super::index_file_bytes(&files[0]);
-        // "src/main.rs"=11, "hello world"=11, "foo"=3, "[PATH] src/main.rs"=18 → 43
-        assert_eq!(total, 43);
+        // "hello world"=11, "foo"=3, "[PATH] src/main.rs"=18 → 32
+        assert_eq!(total, 32);
     }
 
     #[test]
@@ -330,8 +357,8 @@ mod tests {
         // Synthesise a file whose content exceeds an 8 KB budget even with only 2 lines.
         let big_line = "x".repeat(5_000);
         let lines = vec![
-            line(None, 1, &big_line),
-            line(None, 2, &big_line),
+            line(None, LINE_CONTENT_START, &big_line),
+            line(None, LINE_CONTENT_START + 1, &big_line),
         ];
         let files = build_index_files("big.txt".into(), 0, 0, FileKind::Text, lines);
         let bytes = super::index_file_bytes(&files[0]);
@@ -351,8 +378,8 @@ mod tests {
     fn archive_outer_lines_not_in_members() {
         // Lines without an archive_path belong to the outer file, not any member.
         let lines = vec![
-            line(None, 1, "outer-only content"),
-            line(Some("inner.txt"), 1, "inner content"),
+            line(None, LINE_CONTENT_START, "outer-only content"),
+            line(Some("inner.txt"), LINE_CONTENT_START, "inner content"),
         ];
         let files = build_index_files("pkg.tar.gz".into(), 0, 0, FileKind::Archive, lines);
         let outer = files.iter().find(|f| f.path == "pkg.tar.gz").unwrap();

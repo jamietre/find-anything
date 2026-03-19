@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::{extract::State, http::HeaderMap, response::IntoResponse, Json};
 
-use find_common::api::AppSettingsResponse;
+use find_common::api::{AppSettingsResponse, LINE_CONTENT_START};
 
 use crate::{db, AppState};
 
@@ -42,6 +42,7 @@ pub async fn get_settings(
         min_client_version: find_common::api::MIN_CLIENT_VERSION.to_string(),
         max_markdown_render_kb: state.config.server.max_markdown_render_kb,
         file_view_page_size: state.config.server.file_view_page_size,
+        content_line_start: LINE_CONTENT_START,
     })
     .into_response()
 }

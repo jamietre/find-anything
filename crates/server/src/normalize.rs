@@ -7,7 +7,7 @@
 ///
 /// Batch normalization (`normalize_batch_indexed`) additionally runs
 /// `batch`-mode formatters once per batch rather than once per file.
-use find_common::api::IndexLine;
+use find_common::api::{IndexLine, LINE_CONTENT_START};
 use find_common::config::{FormatterConfig, FormatterMode, NormalizationSettings};
 
 /// Normalize `lines` for the file named `name`.
@@ -25,9 +25,9 @@ pub fn normalize_lines(
         return lines;
     }
 
-    // Separate line 0 (path / metadata) from content lines.
+    // Separate path/metadata lines (< LINE_CONTENT_START) from content lines (>= LINE_CONTENT_START).
     let (zero_lines, mut content_lines): (Vec<IndexLine>, Vec<IndexLine>) =
-        lines.into_iter().partition(|l| l.line_number == 0);
+        lines.into_iter().partition(|l| l.line_number < LINE_CONTENT_START);
 
     if content_lines.is_empty() {
         return zero_lines;
@@ -56,12 +56,12 @@ pub fn normalize_lines(
     // Step 3: word-wrap every line that exceeds max_line_length.
     let wrapped_lines = apply_word_wrap(&working_text, cfg.max_line_length);
 
-    // Rebuild IndexLine vec with fresh 1-based line numbers.
+    // Rebuild IndexLine vec with fresh line numbers starting at LINE_CONTENT_START.
     let mut result = zero_lines;
     for (i, content) in wrapped_lines.into_iter().enumerate() {
         result.push(IndexLine {
             archive_path: None,
-            line_number: i + 1,
+            line_number: i + LINE_CONTENT_START,
             content,
         });
     }
@@ -310,7 +310,7 @@ fn apply_batch_formatter(
     for (seq, (batch_idx, ext)) in matching.iter().enumerate() {
         let temp_path = tmp.path().join(format!("{seq:05}.{ext}"));
         let (_, _, lines) = &files[*batch_idx];
-        let mut sorted: Vec<&IndexLine> = lines.iter().filter(|l| l.line_number != 0).collect();
+        let mut sorted: Vec<&IndexLine> = lines.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         sorted.sort_by_key(|l| l.line_number);
         let text = sorted.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
         if let Err(e) = std::fs::write(&temp_path, &text) {
@@ -375,10 +375,10 @@ fn apply_batch_formatter(
         }
 
         let (_, file_name, lines) = &mut files[*batch_idx];
-        let zero_lines: Vec<IndexLine> = lines.iter().filter(|l| l.line_number == 0).cloned().collect();
-        let mut result = zero_lines;
+        let non_content_lines: Vec<IndexLine> = lines.iter().filter(|l| l.line_number < LINE_CONTENT_START).cloned().collect();
+        let mut result = non_content_lines;
         for (j, content) in formatted_text.lines().enumerate() {
-            result.push(IndexLine { archive_path: None, line_number: j + 1, content: content.to_string() });
+            result.push(IndexLine { archive_path: None, line_number: j + LINE_CONTENT_START, content: content.to_string() });
         }
         *lines = result;
         handled[*batch_idx] = true;
@@ -387,22 +387,22 @@ fn apply_batch_formatter(
     }
 }
 
-/// Apply word-wrap to the content lines in `lines`, preserving line-0 entries.
+/// Apply word-wrap to the content lines in `lines`, preserving path/metadata entries.
 fn word_wrap_lines(lines: Vec<IndexLine>, max_line_length: usize) -> Vec<IndexLine> {
-    let (zero_lines, mut content_lines): (Vec<IndexLine>, Vec<IndexLine>) =
-        lines.into_iter().partition(|l| l.line_number == 0);
+    let (non_content_lines, mut content_lines): (Vec<IndexLine>, Vec<IndexLine>) =
+        lines.into_iter().partition(|l| l.line_number < LINE_CONTENT_START);
 
     if content_lines.is_empty() {
-        return zero_lines;
+        return non_content_lines;
     }
 
     content_lines.sort_by_key(|l| l.line_number);
     let full_text = content_lines.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
     let wrapped = apply_word_wrap(&full_text, max_line_length);
 
-    let mut result = zero_lines;
+    let mut result = non_content_lines;
     for (i, content) in wrapped.into_iter().enumerate() {
-        result.push(IndexLine { archive_path: None, line_number: i + 1, content });
+        result.push(IndexLine { archive_path: None, line_number: i + LINE_CONTENT_START, content });
     }
     result
 }
@@ -504,9 +504,12 @@ mod tests {
     }
 
     fn make_lines(contents: &[&str]) -> Vec<IndexLine> {
-        let mut v = vec![IndexLine { archive_path: None, line_number: 0, content: "file.txt".into() }];
+        let mut v = vec![
+            IndexLine { archive_path: None, line_number: 0, content: "file.txt".into() },
+            IndexLine { archive_path: None, line_number: 1, content: String::new() },
+        ];
         for (i, &c) in contents.iter().enumerate() {
-            v.push(IndexLine { archive_path: None, line_number: i + 1, content: c.into() });
+            v.push(IndexLine { archive_path: None, line_number: i + LINE_CONTENT_START, content: c.into() });
         }
         v
     }
@@ -522,9 +525,9 @@ mod tests {
     fn short_lines_unchanged() {
         let lines = make_lines(&["hello", "world"]);
         let result = normalize_lines(lines, "file.txt", &cfg(120));
-        // line 0 + 2 content lines
-        assert_eq!(result.len(), 3);
-        let content: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        // line 0 (path) + line 1 (metadata) + 2 content lines
+        assert_eq!(result.len(), 4);
+        let content: Vec<_> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert_eq!(content[0].content, "hello");
         assert_eq!(content[1].content, "world");
     }
@@ -534,7 +537,7 @@ mod tests {
         let long = "word ".repeat(30).trim_end().to_string(); // ~149 chars
         let lines = make_lines(&[&long]);
         let result = normalize_lines(lines, "file.txt", &cfg(120));
-        let content_lines: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        let content_lines: Vec<_> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(content_lines.len() > 1, "long line should be split");
         for cl in &content_lines {
             assert!(cl.content.chars().count() <= 120, "line too long: {}", cl.content);
@@ -546,7 +549,7 @@ mod tests {
         let minified = r#"{"a":1,"b":[1,2,3],"c":{"d":true}}"#;
         let lines = make_lines(&[minified]);
         let result = normalize_lines(lines, "data.json", &cfg(120));
-        let content_lines: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        let content_lines: Vec<_> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         // Pretty-printed JSON should have multiple lines
         assert!(content_lines.len() > 1, "JSON should be pretty-printed");
     }
@@ -557,7 +560,7 @@ mod tests {
         let lines = make_lines(&[invalid]);
         let result = normalize_lines(lines, "data.json", &cfg(120));
         // Should still produce content (not dropped)
-        assert!(result.iter().any(|l| l.line_number > 0));
+        assert!(result.iter().any(|l| l.line_number >= LINE_CONTENT_START));
     }
 
     #[test]
@@ -565,7 +568,7 @@ mod tests {
         let compact = "a=1\nb=\"hello\"\n[section]\nx=true";
         let lines = make_lines(&[compact]);
         let result = normalize_lines(lines, "config.toml", &cfg(120));
-        assert!(result.iter().any(|l| l.line_number > 0));
+        assert!(result.iter().any(|l| l.line_number >= LINE_CONTENT_START));
     }
 
     #[test]
@@ -573,7 +576,7 @@ mod tests {
         let long = "word ".repeat(50).trim_end().to_string();
         let lines = make_lines(&[&long]);
         let result = normalize_lines(lines, "readme.md", &cfg(120));
-        let content_lines: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        let content_lines: Vec<_> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(content_lines.len() > 1, "long markdown line should be wrapped");
         for cl in &content_lines {
             assert!(cl.content.chars().count() <= 120, "line too long: {}", cl.content);
@@ -585,7 +588,7 @@ mod tests {
         let long_word = "a".repeat(300);
         let lines = make_lines(&[&long_word]);
         let result = normalize_lines(lines, "file.txt", &cfg(120));
-        let content_lines: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        let content_lines: Vec<_> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(content_lines.len() > 1, "long word should be split");
         for cl in &content_lines {
             assert!(cl.content.chars().count() <= 120, "chunk too long: {}", cl.content);
@@ -600,10 +603,10 @@ mod tests {
         let long = "word ".repeat(30).trim_end().to_string();
         let lines = make_lines(&[&long, "short"]);
         let result = normalize_lines(lines, "file.txt", &cfg(120));
-        let mut nums: Vec<usize> = result.iter().filter(|l| l.line_number > 0).map(|l| l.line_number).collect();
+        let mut nums: Vec<usize> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).map(|l| l.line_number).collect();
         nums.sort_unstable();
         for (i, &n) in nums.iter().enumerate() {
-            assert_eq!(n, i + 1);
+            assert_eq!(n, i + LINE_CONTENT_START);
         }
     }
 
@@ -636,7 +639,7 @@ mod tests {
         let settings = cfg_with_formatter("/bin/cat", "txt");
         let lines = make_lines(&["hello", "world"]);
         let result = normalize_lines(lines, "test.txt", &settings);
-        let content: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        let content: Vec<_> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(!content.is_empty(), "expected non-empty output");
         let joined: String = content.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("hello"), "expected 'hello' in output, got: {joined}");
@@ -651,7 +654,7 @@ mod tests {
         let settings = cfg_with_formatter("/bin/false", "txt");
         let lines = make_lines(&["hello", "world"]);
         let result = normalize_lines(lines, "test.txt", &settings);
-        let content: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        let content: Vec<_> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(!content.is_empty(), "expected content to be returned as-is");
         let joined: String = content.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("hello"), "expected 'hello' in output, got: {joined}");
@@ -670,7 +673,7 @@ mod tests {
         let settings = cfg_with_formatter(script.to_str().unwrap(), "txt");
         let lines = make_lines(&["hello", "world"]);
         let result = normalize_lines(lines, "test.txt", &settings);
-        let content: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        let content: Vec<_> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(!content.is_empty(), "expected fallback content when formatter produces empty output");
         let joined: String = content.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("hello"), "expected 'hello' in output, got: {joined}");
@@ -684,7 +687,7 @@ mod tests {
         let settings = cfg_with_formatter("/no/such/formatter", "txt");
         let lines = make_lines(&["hello", "world"]);
         let result = normalize_lines(lines, "test.txt", &settings);
-        let content: Vec<_> = result.iter().filter(|l| l.line_number > 0).collect();
+        let content: Vec<_> = result.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(!content.is_empty(), "expected content to be returned when formatter is nonexistent");
         let joined: String = content.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("hello"), "expected 'hello' in output, got: {joined}");
@@ -728,15 +731,15 @@ mod tests {
         normalize_batch_indexed(&mut files, &cfg);
 
         // JS files should contain "// formatted" appended by the batch formatter.
-        let js_a_content: Vec<_> = files[0].2.iter().filter(|l| l.line_number > 0).collect();
-        let js_b_content: Vec<_> = files[1].2.iter().filter(|l| l.line_number > 0).collect();
+        let js_a_content: Vec<_> = files[0].2.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
+        let js_b_content: Vec<_> = files[1].2.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         let joined_a: String = js_a_content.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
         let joined_b: String = js_b_content.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
         assert!(joined_a.contains("// formatted"), "a.js should be formatted, got: {joined_a}");
         assert!(joined_b.contains("// formatted"), "b.js should be formatted, got: {joined_b}");
 
         // Non-matching file should pass through unchanged via per-file path.
-        let txt_content: Vec<_> = files[2].2.iter().filter(|l| l.line_number > 0).collect();
+        let txt_content: Vec<_> = files[2].2.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         let joined_txt: String = txt_content.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
         assert!(joined_txt.contains("not js"), "readme.txt should be unchanged, got: {joined_txt}");
     }
@@ -768,7 +771,7 @@ mod tests {
         normalize_batch_indexed(&mut files, &cfg);
 
         // Formatter failed → falls through to per-file normalize_lines → word-wrap applied.
-        let content: Vec<_> = files[0].2.iter().filter(|l| l.line_number > 0).collect();
+        let content: Vec<_> = files[0].2.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         assert!(content.len() > 1, "long line should be word-wrapped after formatter failure");
         for l in &content {
             assert!(l.content.len() <= 120, "line too long after fallback: {}", l.content);
@@ -793,7 +796,7 @@ mod tests {
         let mut files = vec![make_batch_entry(0, "file.txt", &["hello", "world"])];
         normalize_batch_indexed(&mut files, &cfg);
 
-        let content: Vec<_> = files[0].2.iter().filter(|l| l.line_number > 0).collect();
+        let content: Vec<_> = files[0].2.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         let joined: String = content.iter().map(|l| l.content.as_str()).collect::<Vec<_>>().join("\n");
         assert!(joined.contains("hello"), "stdin formatter should have run, got: {joined}");
         assert!(joined.contains("world"), "stdin formatter should have run, got: {joined}");
@@ -820,7 +823,7 @@ mod tests {
 
     /// Extract content lines (line_number > 0) as a Vec<&str>, in order.
     fn content_lines(lines: &[IndexLine]) -> Vec<&str> {
-        let mut v: Vec<&IndexLine> = lines.iter().filter(|l| l.line_number > 0).collect();
+        let mut v: Vec<&IndexLine> = lines.iter().filter(|l| l.line_number >= LINE_CONTENT_START).collect();
         v.sort_by_key(|l| l.line_number);
         v.iter().map(|l| l.content.as_str()).collect()
     }

@@ -3,7 +3,7 @@
 	import type { SearchResult } from '$lib/api';
 	import { getContext as fetchContext } from '$lib/api';
 	import { highlightLine } from '$lib/highlight';
-	import { contextWindow } from '$lib/settingsStore';
+	import { contextWindow, contentLineStart } from '$lib/settingsStore';
 
 	/** All hits for this file, ordered by relevance (first hit is primary). */
 	export let hits: SearchResult[];
@@ -49,7 +49,8 @@
 
 	async function loadContext() {
 		const hit = hits[activeHitIndex] ?? hits[0];
-		if (hit.line_number === 0) {
+		// Skip context loading for path matches (line 0) and metadata matches (line 1 in new scheme).
+		if (hit.line_number < $contentLineStart) {
 			contextLoaded = true;
 			return;
 		}
@@ -114,6 +115,30 @@
 		return r.archive_path ? `${r.path}::${r.archive_path}` : r.path;
 	}
 
+	/** Convert raw line_number to user-visible display number. */
+	function displayLine(n: number): number {
+		return n >= $contentLineStart ? n - ($contentLineStart - 1) : n;
+	}
+
+	/** True if this is a metadata match (line 1 in the new scheme, or line 0 with '[' prefix in the old). */
+	function isMetadataMatch(r: SearchResult): boolean {
+		if ($contentLineStart >= 2) {
+			return r.line_number === 1;
+		}
+		// Old server: metadata was at line 0 with '[' prefix.
+		return r.line_number === 0 && r.snippet.startsWith('[');
+	}
+
+	/** True if this is a path/filename match. */
+	function isPathMatch(r: SearchResult): boolean {
+		return r.line_number === 0 && !isMetadataMatch(r);
+	}
+
+	/** True if this is a content match (has a navigable line number). */
+	function isContentMatch(r: SearchResult): boolean {
+		return r.line_number >= $contentLineStart;
+	}
+
 	function escapeHtml(s: string): string {
 		return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 	}
@@ -152,29 +177,29 @@
 		on:keydown={handleKeydown}
 		role="button"
 		tabindex="0"
-		title={result.line_number > 0 ? `Open file at line ${result.line_number}` : 'Open file'}
+		title={isContentMatch(result) ? `Open file at line ${displayLine(result.line_number)}` : 'Open file'}
 	>
 		<span class="badge">{result.source}</span>
 		<span class="file-path" title={displayPath(result)}>
-			{#if result.line_number === 0 && !result.snippet.startsWith('[')}
+			{#if isPathMatch(result)}
 				{@html highlightPath(displayPath(result), query)}
 			{:else}
 				{displayPath(result)}
 			{/if}
 		</span>
-		{#if hits.length === 1 && hits[0].line_number > 0}
-			<span class="line-ref">:{hits[0].line_number}</span>
+		{#if hits.length === 1 && isContentMatch(hits[0])}
+			<span class="line-ref">:{displayLine(hits[0].line_number)}</span>
 		{:else if hits.length > 1}
 			<!-- svelte-ignore a11y-no-static-element-interactions -->
 			<!-- svelte-ignore a11y-click-events-have-key-events -->
 			<span class="hit-nav" title="{activeHitIndex + 1} of {hits.length} hits" on:click|stopPropagation>
-				<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex === 0} on:click|stopPropagation={() => switchToHit(activeHitIndex - 1)} title="Previous hit (line {hits[activeHitIndex - 1]?.line_number})">
+				<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex === 0} on:click|stopPropagation={() => switchToHit(activeHitIndex - 1)} title="Previous hit (line {displayLine(hits[activeHitIndex - 1]?.line_number ?? 0)})">
 					<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 						<polyline points="5.5,1.5 2.5,4 5.5,6.5"/>
 					</svg>
 				</button>
-				<span class="line-ref nav-line-ref">:{hits[activeHitIndex].line_number}</span>
-				<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex >= hits.length - 1} on:click|stopPropagation={() => switchToHit(activeHitIndex + 1)} title="Next hit (line {hits[activeHitIndex + 1]?.line_number})">
+				<span class="line-ref nav-line-ref">:{displayLine(hits[activeHitIndex].line_number)}</span>
+				<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex >= hits.length - 1} on:click|stopPropagation={() => switchToHit(activeHitIndex + 1)} title="Next hit (line {displayLine(hits[activeHitIndex + 1]?.line_number ?? 0)})">
 					<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
 						<polyline points="2.5,1.5 5.5,4 2.5,6.5"/>
 					</svg>
@@ -208,34 +233,34 @@
 	{/if}
 
 	<div class="context-lines">
-		{#if result.line_number === 0 && result.snippet.startsWith('[')}
+		{#if isMetadataMatch(result)}
 			<!-- Metadata match (EXIF, mime, etc.) — show the matched tag -->
 			<div class="line match">
 				<span class="arrow meta-arrow">▶</span>
 				<code class="lc">{result.snippet}</code>
 			</div>
-		{:else if result.line_number === 0}
+		{:else if isPathMatch(result)}
 			<!-- Path/filename match — path is already shown in the header, skip snippet -->
 		{:else if contextLines.length > 0}
 			{#each contextLines as content, i}
 				{@const lineNum = contextStart + i}
 				{@const isMatch = i === contextMatchIndex}
 				<div class="line" class:match={isMatch}>
-					<span class="ln">{lineNum}</span>
+					<span class="ln">{displayLine(lineNum)}</span>
 					<span class="arrow">{isMatch ? '▶' : ' '}</span>
 					<code class="lc">{@html highlightLine(content, result.path)}</code>
 				</div>
 			{/each}
 		{:else if contextLoaded}
 			<div class="line match">
-				<span class="ln">{result.line_number}</span>
+				<span class="ln">{displayLine(result.line_number)}</span>
 				<span class="arrow">▶</span>
 				<code class="lc">{@html highlightLine(result.snippet, result.path)}</code>
 			</div>
 		{:else}
 			{#each Array(2 * $contextWindow + 1) as _, i}
 				<div class="placeholder" class:match={i === $contextWindow}>
-					<span class="ln">{i === $contextWindow ? result.line_number : ''}</span>
+					<span class="ln">{i === $contextWindow ? displayLine(result.line_number) : ''}</span>
 					<span class="arrow">{i === $contextWindow ? '▶' : ' '}</span>
 					<span class="placeholder-bar"></span>
 				</div>

@@ -38,7 +38,7 @@ export interface FileResponse {
 	lines: string[];
 	/** Actual line numbers when not a contiguous 1-based sequence (e.g. sparse PDFs). */
 	line_offsets?: number[];
-	/** Line-number-0 entries: file path, metadata strings, dedup-alias paths. */
+	/** Path/metadata entries (line_number < content_line_start). */
 	metadata: string[];
 	file_kind: string;
 	total_lines: number;
@@ -47,6 +47,8 @@ export interface FileResponse {
 	indexing_error?: string;
 	/** True when content is indexed but not yet written to the archive by the background worker. */
 	content_unavailable?: boolean;
+	/** Other paths with identical content. */
+	duplicate_paths?: string[];
 }
 
 export interface ContextResponse {
@@ -270,6 +272,11 @@ export interface AppSettings {
 	max_markdown_render_kb: number;
 	/** Maximum content lines per /api/v1/file request. 0 = no limit. */
 	file_view_page_size: number;
+	/**
+	 * The line_number of the first content line (2 for new servers, defaults to 1 for old servers).
+	 * Clients compute display line as: line_number - (content_line_start - 1).
+	 */
+	content_line_start?: number;
 }
 
 export async function getSettings(): Promise<AppSettings> {

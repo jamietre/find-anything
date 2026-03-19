@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher, onMount, tick } from 'svelte';
 	import { getFile } from '$lib/api';
-	import { fileViewPageSize } from '$lib/settingsStore';
+	import { fileViewPageSize, contentLineStart } from '$lib/settingsStore';
 	import { highlightFile } from '$lib/highlight';
 	import DirListing from './DirListing.svelte';
 	import ImageViewer from './ImageViewer.svelte';
@@ -189,6 +189,12 @@
 		if (!loadingBackward && !noMoreBackward && isNearTop()) loadBackward();
 	}
 
+	/** Adjust raw line_offsets from server to display line numbers. */
+	function adjustOffsets(raw: number[]): number[] {
+		const adj = $contentLineStart - 1;
+		return adj > 0 ? raw.map(n => n - adj) : raw;
+	}
+
 	/** Rebuild rawContent / highlightedCode / lineOffsets from accumulated lines. */
 	function updateCodeState() {
 		lineOffsets = allLineOffsets;
@@ -220,7 +226,7 @@
 		}
 
 		lineOffsets = data.line_offsets && data.line_offsets.length > 0
-			? data.line_offsets
+			? adjustOffsets(data.line_offsets)
 			: data.lines.map((_, i) => i + 1);
 		rawContent = data.lines.join('\n');
 		highlightedCode = highlightFile(data.lines, path);
@@ -295,7 +301,7 @@
 				applyFileMeta(data, isInitial);
 
 				const pageOffsets = data.line_offsets && data.line_offsets.length > 0
-					? data.line_offsets
+					? adjustOffsets(data.line_offsets)
 					: data.lines.map((_, i) => anchorOffset + i + 1);
 				allContentLines = [...data.lines];
 				allLineOffsets = pageOffsets;
@@ -331,7 +337,7 @@
 			const pageSize = $fileViewPageSize;
 			const data = await getFile(source, path, archivePath ?? undefined, forwardOffset, pageSize);
 			const pageOffsets = data.line_offsets && data.line_offsets.length > 0
-				? data.line_offsets
+				? adjustOffsets(data.line_offsets)
 				: data.lines.map((_, i) => forwardOffset + i + 1);
 			allContentLines = [...allContentLines, ...data.lines];
 			allLineOffsets = [...allLineOffsets, ...pageOffsets];
@@ -353,7 +359,7 @@
 			const limit = backwardOffset - prevOffset;
 			const data = await getFile(source, path, archivePath ?? undefined, prevOffset, limit);
 			const pageOffsets = data.line_offsets && data.line_offsets.length > 0
-				? data.line_offsets
+				? adjustOffsets(data.line_offsets)
 				: data.lines.map((_, i) => prevOffset + i + 1);
 
 			// Preserve scroll position when prepending.
