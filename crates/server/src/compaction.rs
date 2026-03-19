@@ -129,7 +129,7 @@ pub fn scan_wasted_space(
     let orphaned_bytes = result.bytes_freed;
 
     // Total bytes from the content store's incremental counter.
-    let total_bytes = content_store.archive_stats().map(|(_, b)| b).unwrap_or(0);
+    let total_bytes = content_store.storage_stats().map(|(_, b)| b).unwrap_or(0);
 
     let scanned_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -154,9 +154,9 @@ pub fn compact_archives(
     let live_keys = collect_live_keys(data_dir);
     let r = content_store.compact(&live_keys, dry_run)?;
     Ok(CompactResponse {
-        archives_scanned:   r.archives_scanned,
-        archives_rewritten: r.archives_rewritten,
-        archives_deleted:   r.archives_deleted,
+        units_scanned:   r.units_scanned,
+        units_rewritten: r.units_rewritten,
+        units_deleted:   r.units_deleted,
         chunks_removed:     r.chunks_removed,
         bytes_freed:        r.bytes_freed,
         dry_run,
@@ -257,9 +257,9 @@ pub fn start_compaction_scanner(
                     }).await;
                     match result {
                         Ok(Ok(resp)) => tracing::info!(
-                            "compaction: done in {:.1}s — {} archives rewritten, {} chunks removed, {} freed",
+                            "compaction: done in {:.1}s — {} storage units rewritten, {} chunks removed, {} freed",
                             t0.elapsed().as_secs_f64(),
-                            resp.archives_rewritten,
+                            resp.units_rewritten,
                             resp.chunks_removed,
                             find_common::mem::fmt_bytes(resp.bytes_freed),
                         ),
@@ -431,7 +431,7 @@ mod tests {
 
         let resp = compact_archives(data_dir, &cs, false).unwrap();
         assert!(
-            resp.chunks_removed > 0 || resp.archives_deleted > 0 || resp.archives_rewritten > 0,
+            resp.chunks_removed > 0 || resp.units_deleted > 0 || resp.units_rewritten > 0,
             "expected at least some compaction work"
         );
         // Orphan should be gone.

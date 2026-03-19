@@ -284,19 +284,18 @@ impl ContentStore for SqliteContentStore {
         let after_bytes = db::db_size_bytes(&self.data_dir);
 
         Ok(CompactResult {
-            archives_scanned: 1,
-            archives_rewritten: if deleted_rows > 0 { 1 } else { 0 },
-            archives_deleted: 0,
+            units_scanned: 1,
+            units_rewritten: if deleted_rows > 0 { 1 } else { 0 },
+            units_deleted: 0,
             chunks_removed: (before_rows.saturating_sub(after_rows)) as usize,
             bytes_freed: before_bytes.saturating_sub(after_bytes),
         })
     }
 
-    fn archive_stats(&self) -> Option<(u64, u64)> {
-        let conn = self.read_pool.acquire().ok()?;
-        let rows = db::row_count(&conn).ok()?;
+    fn storage_stats(&self) -> Option<(u64, u64)> {
+        // 1 unit = the single blobs.db file.
         let bytes = db::db_size_bytes(&self.data_dir);
-        Some((rows, bytes))
+        Some((1, bytes))
     }
 }
 

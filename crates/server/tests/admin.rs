@@ -364,8 +364,8 @@ async fn test_compact_deletes_fully_orphaned_archive() {
 
     // When all entries in an archive are orphaned, the file is deleted entirely.
     // chunks_removed counts the entries that were in the now-deleted archive.
-    assert!(resp.archives_deleted >= 1,
-        "compact should delete the fully-orphaned archive (deleted={})", resp.archives_deleted);
+    assert!(resp.units_deleted >= 1,
+        "compact should delete the fully-orphaned archive (deleted={})", resp.units_deleted);
     assert!(resp.chunks_removed > 0,
         "compact should count the removed chunks (got {})", resp.chunks_removed);
 }
@@ -432,6 +432,6 @@ async fn test_delete_source_removes_chunk_refs() {
     let resp: CompactResponse = srv.client
         .post(srv.url("/api/v1/admin/compact"))
         .send().await.unwrap().json().await.unwrap();
-    assert!(resp.chunks_removed > 0 || resp.archives_deleted > 0 || resp.archives_rewritten > 0,
+    assert!(resp.chunks_removed > 0 || resp.units_deleted > 0 || resp.units_rewritten > 0,
         "compact should reclaim orphaned content after delete_source");
 }

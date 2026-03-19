@@ -564,14 +564,14 @@ pub async fn compact(
         let resp = crate::compaction::compact_archives(&data_dir, &content_store, dry_run)?;
         if dry_run {
             tracing::info!(
-                "compact (dry-run): {} archives, {} orphaned chunks, {} would be freed",
-                resp.archives_scanned, resp.chunks_removed,
+                "compact (dry-run): {} storage units, {} orphaned chunks, {} would be freed",
+                resp.units_scanned, resp.chunks_removed,
                 find_common::mem::fmt_bytes(resp.bytes_freed),
             );
         } else {
             tracing::info!(
-                "compact: rewrote {}/{} archives, removed {} chunks, freed {}",
-                resp.archives_rewritten, resp.archives_scanned,
+                "compact: rewrote {}/{} storage units, removed {} chunks, freed {}",
+                resp.units_rewritten, resp.units_scanned,
                 resp.chunks_removed, find_common::mem::fmt_bytes(resp.bytes_freed),
             );
         }

@@ -55,9 +55,9 @@ pub async fn get_stats(
     let archive_queue = count_gz(&to_archive_dir);
 
     // Archive totals from content store.
-    let (total_archives, archive_size_bytes) = state
+    let (content_file_count, content_size_bytes) = state
         .content_store
-        .archive_stats()
+        .storage_stats()
         .map(|(c, b)| (c as usize, b))
         .unwrap_or((0, 0));
 
@@ -145,9 +145,9 @@ pub async fn get_stats(
         inbox_pending,
         failed_requests,
         archive_queue,
-        total_archives,
+        content_file_count,
         db_size_bytes,
-        archive_size_bytes,
+        content_size_bytes,
         worker_status,
         inbox_paused,
         orphaned_bytes,
@@ -217,8 +217,8 @@ fn build_stream_event(state: &AppState) -> StatsStreamEvent {
         inbox_pending:           count_gz(&inbox_dir),
         failed_requests:         count_gz(&failed_dir),
         archive_queue:           count_gz(&to_archive_dir),
-        total_archives:          state.content_store.archive_stats().map(|(c, _)| c as usize).unwrap_or(0),
-        archive_size_bytes:      state.content_store.archive_stats().map(|(_, b)| b).unwrap_or(0),
+        content_file_count:          state.content_store.storage_stats().map(|(c, _)| c as usize).unwrap_or(0),
+        content_size_bytes:      state.content_store.storage_stats().map(|(_, b)| b).unwrap_or(0),
         db_size_bytes,
         worker_status,
         inbox_paused,

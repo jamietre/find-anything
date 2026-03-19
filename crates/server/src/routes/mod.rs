@@ -208,7 +208,7 @@ pub async fn get_metrics(
             .unwrap_or(0)
     };
 
-    let total_archives = {
+    let content_file_count = {
         let content_dir = sources_dir.join("content");
         let mut count = 0;
         if let Ok(rd) = std::fs::read_dir(&content_dir) {
@@ -229,7 +229,7 @@ pub async fn get_metrics(
     Json(serde_json::json!({
         "inbox_queue_depth": count_gz(&inbox_dir),
         "failed_requests":   count_gz(&failed_dir),
-        "total_archives":    total_archives,
+        "content_file_count":    content_file_count,
     }))
     .into_response()
 }

@@ -193,9 +193,9 @@
 
 		<!-- Global metrics (shown once, not per-source) -->
 		<div class="global-metrics">
-			<span>{stats.total_archives.toLocaleString()} archive{stats.total_archives !== 1 ? 's' : ''}</span>
+			<span>{stats.content_file_count.toLocaleString()} content file{stats.content_file_count !== 1 ? 's' : ''}</span>
 			<span title="SQLite database size">DB: {fmtSize(stats.db_size_bytes)}</span>
-			<span title="ZIP archive size">Archives: {fmtSize(stats.archive_size_bytes)}</span>
+			<span title="Content store size">Content: {fmtSize(stats.content_size_bytes)}</span>
 			{#if stats.inbox_pending > 0}
 				<span class="pending">{stats.inbox_pending} pending</span>
 			{/if}

@@ -207,9 +207,9 @@ impl ContentStore for ZipContentStore {
         // ── 2. Scan all archives and compact ─────────────────────────────────
         let content_dir = self.data_dir.join("sources").join("content");
 
-        let mut archives_scanned   = 0usize;
-        let mut archives_rewritten = 0usize;
-        let mut archives_deleted   = 0usize;
+        let mut units_scanned   = 0usize;
+        let mut units_rewritten = 0usize;
+        let mut units_deleted   = 0usize;
         let mut chunks_removed     = 0usize;
         let mut bytes_freed        = 0u64;
 
@@ -227,7 +227,7 @@ impl ContentStore for ZipContentStore {
                     Some(n) => n.to_string(),
                     None => continue,
                 };
-                archives_scanned += 1;
+                units_scanned += 1;
 
                 // Determine orphaned entries within this archive.
                 let orphaned = orphans_by_archive
@@ -263,14 +263,14 @@ impl ContentStore for ZipContentStore {
 
                 if total_entries == 0 {
                     // Pre-existing empty archive — delete it.
-                    archives_deleted += 1;
+                    units_deleted += 1;
                     if !dry_run {
                         let lock = self.shared.rewrite_lock_for(&path);
                         let _guard = lock.lock().unwrap();
                         if std::fs::remove_file(&path).is_ok() {
                             tracing::info!("compaction: deleted empty archive {}", archive_name);
                         } else {
-                            archives_deleted -= 1;
+                            units_deleted -= 1;
                         }
                     }
                     continue;
@@ -281,7 +281,7 @@ impl ContentStore for ZipContentStore {
 
                 if orphaned.len() == total_entries {
                     // All entries orphaned — delete the whole file.
-                    archives_deleted += 1;
+                    units_deleted += 1;
                     if !dry_run {
                         let lock = self.shared.rewrite_lock_for(&path);
                         let _guard = lock.lock().unwrap();
@@ -292,14 +292,14 @@ impl ContentStore for ZipContentStore {
                                 orphaned.len()
                             );
                         } else {
-                            archives_deleted -= 1;
+                            units_deleted -= 1;
                             chunks_removed   -= orphaned.len();
                             bytes_freed      -= orphaned_size;
                         }
                     }
                 } else {
                     // Partial — rewrite keeping only referenced entries.
-                    archives_rewritten += 1;
+                    units_rewritten += 1;
                     if !dry_run {
                         let lock = self.shared.rewrite_lock_for(&path);
                         let _guard = lock.lock().unwrap();
@@ -309,7 +309,7 @@ impl ContentStore for ZipContentStore {
                                 "compaction: failed to rewrite {}: {e:#}",
                                 archive_name
                             );
-                            archives_rewritten -= 1;
+                            units_rewritten -= 1;
                             chunks_removed     -= orphaned.len();
                             bytes_freed        -= orphaned_size;
                         } else {
@@ -336,15 +336,15 @@ impl ContentStore for ZipContentStore {
         }
 
         Ok(CompactResult {
-            archives_scanned,
-            archives_rewritten,
-            archives_deleted,
+            units_scanned,
+            units_rewritten,
+            units_deleted,
             chunks_removed,
             bytes_freed,
         })
     }
 
-    fn archive_stats(&self) -> Option<(u64, u64)> {
+    fn storage_stats(&self) -> Option<(u64, u64)> {
         let count = self.shared.total_archives();
         let bytes = self.shared.archive_size_bytes();
         Some((count, bytes))

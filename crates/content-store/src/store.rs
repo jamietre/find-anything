@@ -3,12 +3,15 @@ use std::collections::HashSet;
 use crate::key::ContentKey;
 
 /// Statistics returned by a `compact` call.
+///
+/// "Units" are backend-specific storage containers: ZIP archive files for
+/// `ZipContentStore`, or the single `blobs.db` file for `SqliteContentStore`.
 pub struct CompactResult {
-    pub archives_scanned:   usize,
-    pub archives_rewritten: usize,
-    pub archives_deleted:   usize,
-    pub chunks_removed:     usize,
-    pub bytes_freed:        u64,
+    pub units_scanned:   usize,
+    pub units_rewritten: usize,
+    pub units_deleted:   usize,
+    pub chunks_removed:  usize,
+    pub bytes_freed:     u64,
 }
 
 /// Content-addressable blob storage abstraction.
@@ -49,9 +52,12 @@ pub trait ContentStore: Send + Sync {
         dry_run: bool,
     ) -> anyhow::Result<CompactResult>;
 
-    /// Optional stats hook for monitoring (archive count, bytes on disk).
-    /// Default impl returns `None`; `ZipContentStore` overrides.
-    fn archive_stats(&self) -> Option<(u64 /* count */, u64 /* bytes */)> {
+    /// Optional stats hook for monitoring: (storage-unit count, bytes on disk).
+    ///
+    /// The meaning of "unit" is backend-specific: ZIP archive files for
+    /// `ZipContentStore`, 1 (the single `blobs.db`) for `SqliteContentStore`.
+    /// Default impl returns `None`.
+    fn storage_stats(&self) -> Option<(u64 /* units */, u64 /* bytes */)> {
         None
     }
 }

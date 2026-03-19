@@ -532,17 +532,18 @@ pub struct StatsResponse {
     /// Number of requests waiting for the archive thread to write ZIP content.
     #[serde(default)]
     pub archive_queue: usize,
-    pub total_archives: usize,
+    /// Number of storage files in the content store (ZIP archives for the zip backend, 1 for SQLite).
+    pub content_file_count: usize,
     /// Total on-disk size of all SQLite source databases (bytes).
     pub db_size_bytes: u64,
-    /// Total on-disk size of all ZIP content archives (bytes).
-    pub archive_size_bytes: u64,
+    /// Total on-disk size of the content store (bytes).
+    pub content_size_bytes: u64,
     /// Current state of the inbox worker.
     pub worker_status: WorkerStatus,
     /// True when inbox processing has been paused via `POST /api/v1/admin/inbox/pause`.
     #[serde(default)]
     pub inbox_paused: bool,
-    /// Total compressed size of orphaned chunks across all archives (bytes).
+    /// Total compressed size of orphaned chunks in the content store (bytes).
     /// `None` if the background scanner has not yet run.
     #[serde(default)]
     pub orphaned_bytes: Option<u64>,
@@ -562,9 +563,9 @@ pub struct StatsStreamEvent {
     pub failed_requests: usize,
     #[serde(default)]
     pub archive_queue: usize,
-    pub total_archives: usize,
+    pub content_file_count: usize,
     pub db_size_bytes: u64,
-    pub archive_size_bytes: u64,
+    pub content_size_bytes: u64,
     pub worker_status: WorkerStatus,
     #[serde(default)]
     pub inbox_paused: bool,
@@ -636,11 +637,11 @@ pub struct InboxResumeResponse {}
 /// `POST /api/v1/admin/compact` response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompactResponse {
-    pub archives_scanned: usize,
-    pub archives_rewritten: usize,
-    /// Archives deleted entirely (all entries were orphaned, or the archive was
+    pub units_scanned: usize,
+    pub units_rewritten: usize,
+    /// Storage units deleted entirely (all entries were orphaned, or the unit was
     /// already empty from a previous compaction pass).
-    pub archives_deleted: usize,
+    pub units_deleted: usize,
     pub chunks_removed: usize,
     pub bytes_freed: u64,
     pub dry_run: bool,

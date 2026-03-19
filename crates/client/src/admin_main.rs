@@ -315,23 +315,23 @@ async fn main() -> Result<()> {
         Command::Compact { dry_run } => {
             let client = api::ApiClient::new(&config.server.url, &config.server.token);
             if dry_run {
-                println!("Scanning archives (dry run — no files will be modified)...");
+                println!("Scanning content store (dry run — no files will be modified)...");
             } else {
-                println!("Compacting archives...");
+                println!("Compacting content store...");
             }
             let resp = client.compact(dry_run).await.context("running compact")?;
-            let nothing_to_do = resp.chunks_removed == 0 && resp.archives_deleted == 0;
+            let nothing_to_do = resp.chunks_removed == 0 && resp.units_deleted == 0;
             if nothing_to_do {
-                println!("No orphaned chunks found across {} archive(s).", resp.archives_scanned);
+                println!("No orphaned chunks found across {} storage unit(s).", resp.units_scanned);
             } else if dry_run {
-                let would_delete = resp.archives_deleted + resp.archives_rewritten; // rewritten == all-orphan deletes in dry-run
+                let would_delete = resp.units_deleted + resp.units_rewritten; // rewritten == all-orphan deletes in dry-run
                 println!(
-                    "Would free {} across {} orphaned chunk(s) — {} archive(s) to rewrite, {} to delete (of {} scanned).",
+                    "Would free {} across {} orphaned chunk(s) — {} unit(s) to rewrite, {} to delete (of {} scanned).",
                     format_bytes(resp.bytes_freed),
                     resp.chunks_removed,
-                    resp.archives_rewritten,
+                    resp.units_rewritten,
                     would_delete,
-                    resp.archives_scanned,
+                    resp.units_scanned,
                 );
                 println!("Run without --dry-run to apply.");
             } else {
@@ -339,11 +339,11 @@ async fn main() -> Result<()> {
                 if resp.bytes_freed > 0 {
                     parts.push(format!("freed {}", format_bytes(resp.bytes_freed)));
                 }
-                if resp.archives_rewritten > 0 {
-                    parts.push(format!("rewrote {} archive(s)", resp.archives_rewritten));
+                if resp.units_rewritten > 0 {
+                    parts.push(format!("rewrote {} storage unit(s)", resp.units_rewritten));
                 }
-                if resp.archives_deleted > 0 {
-                    parts.push(format!("deleted {} empty archive(s)", resp.archives_deleted));
+                if resp.units_deleted > 0 {
+                    parts.push(format!("deleted {} empty storage unit(s)", resp.units_deleted));
                 }
                 if resp.chunks_removed > 0 {
                     parts.push(format!("removed {} orphaned chunk(s)", resp.chunks_removed));
@@ -527,12 +527,12 @@ fn format_status(stats: &find_common::api::StatsResponse) -> String {
         writeln!(out, "Inbox:    {} pending, {} failed, {} awaiting archive",
             stats.inbox_pending, stats.failed_requests, stats.archive_queue).unwrap();
     }
-    writeln!(out, "Archives: {} ZIP files ({})", stats.total_archives, format_bytes(stats.archive_size_bytes)).unwrap();
+    writeln!(out, "Content:  {} file(s) ({})", stats.content_file_count, format_bytes(stats.content_size_bytes)).unwrap();
     writeln!(out, "DB size:  {}", format_bytes(stats.db_size_bytes)).unwrap();
     match (stats.orphaned_bytes, stats.orphaned_stats_age_secs) {
         (Some(orphaned), Some(age)) => {
-            let pct = if stats.archive_size_bytes > 0 {
-                orphaned as f64 / stats.archive_size_bytes as f64 * 100.0
+            let pct = if stats.content_size_bytes > 0 {
+                orphaned as f64 / stats.content_size_bytes as f64 * 100.0
             } else { 0.0 };
             writeln!(
                 out,
@@ -578,12 +578,12 @@ fn format_stream_status(event: &find_common::api::StatsStreamEvent) -> String {
         writeln!(out, "Inbox:    {} pending, {} failed, {} awaiting archive",
             event.inbox_pending, event.failed_requests, event.archive_queue).unwrap();
     }
-    writeln!(out, "Archives: {} ZIP files ({})", event.total_archives, format_bytes(event.archive_size_bytes)).unwrap();
+    writeln!(out, "Content:  {} file(s) ({})", event.content_file_count, format_bytes(event.content_size_bytes)).unwrap();
     writeln!(out, "DB size:  {}", format_bytes(event.db_size_bytes)).unwrap();
     match (event.orphaned_bytes, event.orphaned_stats_age_secs) {
         (Some(orphaned), Some(age)) => {
-            let pct = if event.archive_size_bytes > 0 {
-                orphaned as f64 / event.archive_size_bytes as f64 * 100.0
+            let pct = if event.content_size_bytes > 0 {
+                orphaned as f64 / event.content_size_bytes as f64 * 100.0
             } else { 0.0 };
             writeln!(
                 out,

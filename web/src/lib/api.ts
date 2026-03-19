@@ -324,9 +324,9 @@ export interface StatsResponse {
 	sources: SourceStats[];
 	inbox_pending: number;
 	failed_requests: number;
-	total_archives: number;
+	content_file_count: number;
 	db_size_bytes: number;
-	archive_size_bytes: number;
+	content_size_bytes: number;
 	worker_status: WorkerStatus;
 }
 
