@@ -5,40 +5,35 @@ Stream of consciousness for bugfixes and features approaching V1
 ## Bugs/Enhancements
 
 
-[ ] FEAT: Can collapse tree even when selected
-[ ] FEAT "split/extracted" doesn't make sense with sleout - just remove button.
-[ ] FEAT: make chevron bar wider
+
+[ ] BUG: pictures/2014/Jamie Phone 2014/20140410_074302.jpg - no metadata available - why?
+[ ] FEAT: Guard against low disk space
+[ ] FEAT: Render SVG by default
 [ ] CHORE: address clippy too_many_arguments issues
 [ ] FEAT: Allow non-zip archive members to be streamable, if they are below a configrable threshold in size
-[ ] Regular download button should be available in archives too
 [ ] Frontent factoring: stuff like     "showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal); " -- logic should be centralized
-[ ] Write logs ferom extractors as structured json, optionally, for tool use error reporting: "As for why the member path isn't shown: the relay attaches file=Blog.zip because that's all the client knows at that point — the archive extractor subprocess's entire stderr is collected and relayed as a batch with the outer file as context. Symphonia fires inside that subprocess against a temp file, with no way to surface which archive member it was probing. There's no good fix  
-  for that without restructuring how the archive extractor emits its logs (e.g. writing structured JSON stderr instead of plain text)." (Symphonia errors don't show full path to file in client scanner)
 [ ] Evaluate scoring algorithm: recent dates score higher; but if we use a better strategy for storing content, then 
 use the content
 [ ] BUG find-admin inbox-pause should also pause archiving. And it doesn't log except the API
 [ ] FEAT format times as 4m22s
-[ ] Add image zoom/pan controls to normal detail view
 [ ] BUG: back arrow browser navigation doesn't work at all
 [ ] CHORE: frontent ux tests; frontend code quality. LOooks like lots of css duplication among other issues. Lots of components reimplemented everywhere
 [ ] FEAT: When [sources.nas-data] path = "/mnt/nas-data" is missing from server, show a clear inline error message or fallback UI in the client
-[ ] BUG: pictures/2014/Jamie Phone 2014/20140410_074302.jpg - no metadata available - why?
-[ ] FEAT: Guard against low disk space
+
 [ ] BUG: Fetching existing file list seems to not be targeted to a particular tree (e.g. find-scan /path/to/dir)
-[ ] BUG: Monhegan Lighthouse DOry 2005.tif can't be shown
 [ ] FEAT: make "find-admin inbox" have subcommands
 [ ] FEAT: Run compaction scan only once a day, or on demand
 [ ] BUG: App ID is not persisted, each rebuild makes it not show up in pinned taskbar items
 [ ] BUG: Windows shows "stop watcher" before connecting to service, it should know right away status of watcher
 [ ] FEAT: Give higher priority to more recently modified documents
 [ ] FEAT: UX to retry failed scans (admin page)
-[ ] FEAT: Render SVG by default
 [ ] BUG: Searching on ".png" doesn't work is that improvable
 [ ] CHORE: Include **/AppData/**, **/bin/**, **/obj/**, **/\*.log by default, "**/pnpm/\*\*", vscode-remote-wsl
 [ ] CHORE: refactor front end to split svg assets out into files, etc
 [ ] CHORE: Server install should also be able to chain client install
 [ ] CHORE: Code quality: avoid optional typescript parameters; default values should be set at as high a level as possible and propagated conclusively. Add to claude.md
 [ ] FEAT: Custom protocol handler (chrome) to allow exploring the file location. Requires client config for roots.
+[ ] Write logs ferom extractors as structured json, optionally, for tool use error reporting: "As for why the member path isn't shown: the relay attaches file=Blog.zip because that's all the client knows at that point — the archive extractor subprocess's entire stderr is collected and relayed as a batch with the outer file as context. Symphonia fires inside that subprocess against a temp file, with no way to surface which archive member it was probing. There's no good fix for that without restructuring how the archive extractor emits its logs (e.g. writing structured JSON stderr instead of plain text)." (Symphonia errors don't show full path to file in client scanner)
 [ ] FEAT (planned): Add providing uname/password for share to config for each source
 [ ] FEAT (PLANNED) metrics - log start/end time of critical proceses to an external service - Grafana LGTM?
 [ ] FEAT (PLANNED): allow adding file extension -> content type mappers. Extract all hardcoded into config
@@ -52,6 +47,12 @@ use the content
 
 ### Completed Items
 
+[x] BUG: backups/FromMomMac/FromMomMac.zip::FromMomMac/Library/Mail/V7/079E825E-CEF8-46FA-813A-F63AAB5350AC/[Gmail].mbox/All Mail.mbox/95F6C28D-53E9-4B54-BF8E-0B058ABFAFAF/Data/3/4/5/Attachments/543053/1/Christmas Letter 2016.rtfd/Monhegan Lighthouse Dory 2005.tif can't be shown. [Note: this is a jpeg file with a tiff extension; added magic byte detection]
+[x] Regular download button should be available in archives too
+[x] FEAT: make chevron bar wider
+[x] FEAT "split/extracted" doesn't make sense with slideeout - just remove button.
+[x] FEAT: Add image zoom/pan controls to normal detail view
+[x] FEAT: Can collapse tree even when selected
 [x] archive/unfiled/OpenMULE-Win32.zip::resources/action.wav shows a duplicate. But when you click on it, it doesn't have a dup link back to the original.
 [x] CHORE: Unit test for handling of retrieval of duplicated items in index
 [x] FEAT: In image detail split view, should be able to move divider/resize window (implemented as slideout drawer)

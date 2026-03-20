@@ -18,10 +18,17 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Content-store `chunk_blob` redesign** — chunks are now stored as lines joined by `\n` with no trailing newline (previously each line was stored with a trailing `\n`); `get_lines` uses `str::lines()` for reconstruction, which correctly handles the trailing-newline artifact and preserves interior empty lines; `chunk_blob("")` naturally returns an empty vec; empty lines are no longer filtered from `get_lines` results (UX handles display)
 - **Trailing whitespace trimming** — line content is now `trim_end()`-stripped before being written to the FTS5 index and before being stored in the content store blob; this keeps the indexes clean without affecting search correctness
 
+- **Image viewer unified** — the in-app image detail view now uses `DirectImageViewer` (zoom/pan, scroll-wheel zoom, drag, double-click reset) instead of the static `ImageViewer`; `ImageViewer.svelte` deleted; the "View Split/Extracted" toggle removed (zoom replaces the need for full-width mode); EXIF metadata drawer sits alongside the viewer as before
+- **Download Archive button for zip members** — when viewing a file inside a zip archive where individual member download is supported, a "Download Archive" button now appears alongside "Download", allowing the outer `.zip` to be saved directly
+- **Duplicate list bullet points** — each entry in the expanded duplicates accordion now has a `•` bullet prefix for visual clarity
+- **MetaDrawer toggle wider** — the collapse/expand chevron strip doubled from 20 px to 40 px for easier clicking
+
 - **`MetaDrawer` component** — the metadata side-panel in image, audio, and video viewers is now a shared `MetaDrawer.svelte` component; it is collapsible (chevron toggle), starts collapsed for images (metadata secondary to the image) and open for audio (metadata is the primary content); eliminates duplicated layout CSS across three viewers
 - **Tooltip consistency** — the `data-tooltip` + CSS `::after` pattern (introduced for PathBar) is now applied to all toolbar buttons (tree-toggle, search-help `?`, word-wrap, view-original); native `title` attributes removed; tooltips appear centred below the button at a consistent offset
 
 ### Fixed
+
+- **Images with mismatched extensions (e.g. JPEG saved as `.tif`)** — `convert=png` now uses magic-byte sniffing (`sniff_browser_format`) before attempting decode+re-encode; if the file's true content is already a browser-native format (JPEG, PNG, GIF, WebP, BMP), it is served directly with the correct `Content-Type` and no conversion overhead; this fixes the 422 error for files like `Monhegan Lighthouse Dory 2005.tif` which is actually a JPEG
 
 - **Tree directory collapse** — manually collapsing a directory (or archive node) that contains the active file no longer immediately re-expands; the auto-expand reactive now gates on `activePath` changing to a new value rather than re-running whenever `expanded` changes, so user-initiated collapses are respected
 

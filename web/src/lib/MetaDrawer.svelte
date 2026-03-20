@@ -32,7 +32,7 @@
 	}
 
 	.drawer-toggle {
-		width: 20px;
+		width: 40px;
 		flex-shrink: 0;
 		align-self: stretch;
 		display: flex;

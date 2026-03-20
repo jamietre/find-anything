@@ -191,6 +191,19 @@ pub async fn get_raw(
             Ok(b) => b,
             Err(_) => return StatusCode::NOT_FOUND.into_response(),
         };
+        // Fast path: if the file's true content is already a browser-native format
+        // (detected by magic bytes), serve it directly with the correct MIME type
+        // rather than decoding and re-encoding to PNG.
+        if let Some((mime, ext)) = crate::image_util::sniff_browser_format(&bytes) {
+            let stem = canonical_full.file_stem().and_then(|n| n.to_str()).unwrap_or("file").replace('"', "");
+            let native_disp = format!("{disp_kind}; filename=\"{stem}.{ext}\"");
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, mime)
+                .header(header::CONTENT_DISPOSITION, native_disp)
+                .body(Body::from(bytes))
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
         let png_bytes = match tokio::task::spawn_blocking(move || -> Result<Vec<u8>, ()> {
             let img = crate::image_util::load_image(&bytes).map_err(|_| ())?;
             let mut out = Vec::new();
@@ -414,12 +427,20 @@ async fn serve_archive_member(
             .replace('"', "");
 
         if convert.as_deref() == Some("png") {
-            let png_name = std::path::Path::new(&leaf_name)
+            let stem = std::path::Path::new(&leaf_name)
                 .file_stem()
                 .and_then(|n| n.to_str())
-                .map(|s| format!("{s}.png"))
-                .unwrap_or_else(|| "file.png".to_string());
-            let png_name = png_name.replace('"', "");
+                .unwrap_or("file")
+                .replace('"', "");
+            // Fast path: serve browser-native formats directly by detected type.
+            if let Some((mime, ext)) = crate::image_util::sniff_browser_format(&bytes) {
+                return Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, mime)
+                    .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"{stem}.{ext}\""))
+                    .body(Body::from(bytes))
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+            }
             let png_bytes = match (|| -> Result<Vec<u8>, ()> {
                 let img = crate::image_util::load_image(&bytes).map_err(|_| ())?;
                 let mut out = Vec::new();
@@ -433,7 +454,7 @@ async fn serve_archive_member(
             return Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "image/png")
-                .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"{png_name}\""))
+                .header(header::CONTENT_DISPOSITION, format!("inline; filename=\"{stem}.png\""))
                 .body(Body::from(png_bytes))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
         }

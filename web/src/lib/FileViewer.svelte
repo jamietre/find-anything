@@ -5,7 +5,8 @@
 	import { highlightFile } from '$lib/highlight';
 	import DirListing from './DirListing.svelte';
 	import AudioViewer from './AudioViewer.svelte';
-	import ImageViewer from './ImageViewer.svelte';
+	import DirectImageViewer from './DirectImageViewer.svelte';
+	import MetaDrawer from './MetaDrawer.svelte';
 	import MarkdownViewer from './MarkdownViewer.svelte';
 	import CodeViewer from './CodeViewer.svelte';
 	import PdfViewer from './PdfViewer.svelte';
@@ -66,9 +67,6 @@
 			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
 		}
 	}
-	// For images: false = split view (image + metadata side-by-side), true = full-width image
-	let imageFullWidth = false;
-
 	// Parsed image dimensions for the aspect-ratio loading placeholder.
 	$: imgDims = parseImageDimensions(metaLines);
 	$: placeholderStyle = imgDims
@@ -261,7 +259,6 @@
 		isEncrypted = fileKind === 'pdf' && data.lines.length === 1 && data.lines[0] === 'Content encrypted';
 		if (isInitial) {
 			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
-			imageFullWidth = false;
 		}
 	}
 
@@ -289,7 +286,6 @@
 		if (isInitial) {
 			isEncrypted = fileKind === 'pdf' && data.lines.length === 1 && data.lines[0] === 'Content encrypted';
 			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
-			imageFullWidth = false;
 		}
 	}
 
@@ -480,21 +476,14 @@
 					{markdownFormat ? 'Plain' : 'Formatted'}
 				</button>
 			{/if}
-			{#if canViewInline && (fileKind === 'image' || fileKind === 'pdf' || fileKind === 'video' || fileKind === 'audio')}
-				{#if fileKind === 'image'}
-					{#if imageFullWidth}
-						<button class="toolbar-btn" on:click={() => imageFullWidth = false}>View Split</button>
-					{:else}
-						<button class="toolbar-btn" on:click={() => imageFullWidth = true}>View Extracted</button>
-					{/if}
-				{:else if fileKind !== 'audio'}
-					<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}>
-						{showOriginal ? 'View Extracted' : 'View Original'}
-					</button>
-				{/if}
+			{#if canViewInline && (fileKind === 'pdf' || fileKind === 'video')}
+				<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}>
+					{showOriginal ? 'View Extracted' : 'View Original'}
+				</button>
 			{/if}
 			{#if canDownloadMember}
 				<button class="toolbar-btn" on:click={() => triggerDownload(rawInlineUrl, memberFileName)}>Download</button>
+				<button class="toolbar-btn" on:click={() => triggerDownload(rawUrl, fileName)}>Download Archive</button>
 			{:else}
 				<button class="toolbar-btn" on:click={() => triggerDownload(rawUrl, fileName)}>
 					{isArchiveMember || fileKind === 'archive' ? 'Download Archive' : 'Download'}
@@ -538,13 +527,23 @@
 		{/if}
 		{#if showOriginal && canViewInline}
 			{#if fileKind === 'image'}
-				<ImageViewer
-					src={rawInlineUrl}
-					{path}
-					fullWidth={imageFullWidth}
-					{placeholderStyle}
-					{metaLines}
-				/>
+				<div class="image-viewer-panel">
+					<DirectImageViewer src={rawInlineUrl} />
+					<MetaDrawer initialOpen={false}>
+						{#if metaLines.length > 0}
+							{#each metaLines as meta}
+								{#each parseMetaTags(meta.content) as tag}
+									<div class="meta-row">
+										<span class="tag-label">[{tag.label}]</span>
+										<span class="tag-value">{tag.value}</span>
+									</div>
+								{/each}
+							{/each}
+						{:else}
+							<div class="no-meta">No metadata available.</div>
+						{/if}
+					</MetaDrawer>
+				</div>
 			{:else if fileKind === 'audio'}
 				<AudioViewer
 					src={rawInlineUrl}
@@ -739,6 +738,14 @@
 
 	.dup-item {
 		display: flex;
+		align-items: center;
+		gap: 6px;
+	}
+
+	.dup-item::before {
+		content: '•';
+		color: var(--text-muted);
+		flex-shrink: 0;
 	}
 
 	.dup-link {
@@ -873,5 +880,37 @@
 	.sentinel-btn:hover {
 		color: var(--text);
 		background: var(--bg-hover);
+	}
+
+	.image-viewer-panel {
+		flex: 1;
+		display: flex;
+		flex-direction: row;
+		min-height: 0;
+		overflow: hidden;
+	}
+
+	.meta-row {
+		padding: 2px 0;
+		line-height: 1.6;
+		display: flex;
+		gap: 6px;
+		flex-wrap: wrap;
+	}
+
+	.tag-label {
+		color: var(--text-dim);
+		flex-shrink: 0;
+	}
+
+	.tag-value {
+		color: var(--text-muted);
+	}
+
+	.no-meta {
+		padding: 24px;
+		color: var(--text-dim);
+		font-size: 13px;
+		text-align: center;
 	}
 </style>

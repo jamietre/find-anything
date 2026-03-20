@@ -1,11 +1,30 @@
 //! Image loading with format fallbacks not covered by the `image` crate.
 //!
-//! The public entry point is [`load_image`], which wraps `image::load_from_memory`
-//! and transparently handles additional cases — currently palette-indexed TIFFs
-//! (`PhotometricInterpretation = RGBPalette`), which the `image` crate's TIFF
-//! decoder rejects.
+//! The public entry points are:
+//! - [`sniff_browser_format`] — detects whether a file's true content is already a
+//!   browser-native image format (JPEG, PNG, GIF, WebP, BMP) by inspecting magic
+//!   bytes, regardless of the file extension.  When true, the raw bytes can be
+//!   served directly with the correct MIME type instead of converting to PNG.
+//! - [`load_image`] — decodes bytes into a [`image::DynamicImage`] for conversion
+//!   to PNG.  Handles palette-indexed TIFFs as a special case.
 //!
 //! The [`palette_tiff`] submodule abstracts all direct use of the `tiff` crate.
+
+/// Inspect the magic bytes of `bytes` and return `(mime_type, extension)` if the
+/// content is a browser-native image format that does not need PNG conversion.
+///
+/// Returns `None` for formats that require conversion (e.g. real TIFFs) or for
+/// unrecognised data.
+pub fn sniff_browser_format(bytes: &[u8]) -> Option<(&'static str, &'static str)> {
+    if bytes.starts_with(b"\xff\xd8\xff")           { return Some(("image/jpeg", "jpg")); }
+    if bytes.starts_with(b"\x89PNG\r\n\x1a\n")       { return Some(("image/png",  "png")); }
+    if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
+                                                       return Some(("image/gif",   "gif")); }
+    if bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WEBP" {
+                                                       return Some(("image/webp",  "webp")); }
+    if bytes.starts_with(b"BM")                      { return Some(("image/bmp",  "bmp")); }
+    None
+}
 
 /// Load an image from raw bytes into a [`image::DynamicImage`].
 ///
