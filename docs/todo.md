@@ -4,6 +4,7 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
 
+[ ] CHORE: address clippy too_many_arguments issues
 [ ] FEAT: Allow non-zip archive members to be streamable, if they are below a configrable threshold in size
 [ ] Regular download button should be available in archives too
 [ ] Frontent factoring: stuff like     "showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal); " -- logic should be centralized
@@ -13,13 +14,10 @@ Stream of consciousness for bugfixes and features approaching V1
 use the content
 [ ] BUG find-admin inbox-pause should also pause archiving. And it doesn't log except the API
 [ ] FEAT format times as 4m22s
-[ ] archive/unfiled/OpenMULE-Win32.zip::resources/action.wav shows a duplicate. But when you click on it, it doesn't have a dup link back to the original.
 [ ] Add image zoom/pan controls to normal detail view
 [ ] BUG: back arrow browser navigation doesn't work at all
-[ ] CHORE: frontent ux tests
-[ ] CHORE: Code quality analysis on file scanning/walking/filtering pipeline
+[ ] CHORE: frontent ux tests; frontend code quality. LOooks like lots of css duplication among other issues. Lots of components reimplemented everywhere
 [ ] FEAT: When [sources.nas-data] path = "/mnt/nas-data" is missing from server, show a clear inline error message or fallback UI in the client
-[ ] FEAT: In image detail split view, should be able to move divider/resize window
 [ ] BUG: pictures/2014/Jamie Phone 2014/20140410_074302.jpg - no metadata available - why?
 [ ] FEAT: Guard against low disk space
 [ ] BUG: Fetching existing file list seems to not be targeted to a particular tree (e.g. find-scan /path/to/dir)
@@ -33,7 +31,6 @@ use the content
 [ ] FEAT: Render SVG by default
 [ ] BUG: Searching on ".png" doesn't work is that improvable
 [ ] CHORE: Include **/AppData/**, **/bin/**, **/obj/**, **/\*.log by default, "**/pnpm/\*\*", vscode-remote-wsl
-[ ] CHORE: Unit test for handling of retrieval of duplicated items in index
 [ ] CHORE: refactor front end to split svg assets out into files, etc
 [ ] CHORE: Server install should also be able to chain client install
 [ ] CHORE: Code quality: avoid optional typescript parameters; default values should be set at as high a level as possible and propagated conclusively. Add to claude.md
@@ -51,6 +48,9 @@ use the content
 
 ### Completed Items
 
+[x] archive/unfiled/OpenMULE-Win32.zip::resources/action.wav shows a duplicate. But when you click on it, it doesn't have a dup link back to the original.
+[x] CHORE: Unit test for handling of retrieval of duplicated items in index
+[x] FEAT: In image detail split view, should be able to move divider/resize window (implemented as slideout drawer)
 [x] Allow playing audio files
 [x] FEAT: Use human readable numbers Mar 17 15:01:26 findanything find-server[312010]:  INFO compaction scan: 2553268401/4119151881 bytes orphaned (62.0%) in 632.3s
 [x] BUG: Is RAR content indexed? Do we compute hashes of all files? For example 1992-04-05 - The Fox Theatre - Boulder, CO part 1 - Copy.rar::I 01 Llama.mp3 is a duplicate of 1992-04-05 - The Fox Theatre - Boulder, CO part 1 - Copy (2).rar::I 01 Llama.mp3 but not marked as so

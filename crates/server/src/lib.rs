@@ -130,7 +130,8 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
     db::check_all_sources(&data_dir.join("sources"))
         .context("schema version check failed — delete the listed database(s) and re-run `find-scan`")?;
 
-    let under_systemd = std::env::var("INVOCATION_ID").is_ok();
+    let under_systemd = config.server.force_systemd
+        .unwrap_or_else(|| std::env::var("INVOCATION_ID").is_ok());
     let worker_status = Arc::new(std::sync::Mutex::new(WorkerStatus::Idle));
     let inbox_paused = Arc::new(AtomicBool::new(false));
     let content_store: Arc<dyn ContentStore> = open_content_store(&config, &data_dir)
@@ -170,7 +171,6 @@ pub async fn create_app_state(config: ServerAppConfig) -> Result<Arc<AppState>> 
         request_timeout: std::time::Duration::from_secs(
             state.config.server.inbox_request_timeout_secs,
         ),
-        inline_threshold_bytes: state.config.server.inline_threshold_bytes,
         archive_batch_size: state.config.server.archive_batch_size,
         activity_log_max_entries: state.config.server.activity_log_max_entries,
         normalization: state.config.normalization.clone(),

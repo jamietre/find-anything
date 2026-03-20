@@ -104,7 +104,7 @@ fn collect_live_keys(data_dir: &Path) -> HashSet<ContentKey> {
             Err(_) => continue,
         };
         let mut stmt = match conn.prepare(
-            "SELECT DISTINCT content_hash FROM files WHERE content_hash IS NOT NULL",
+            "SELECT DISTINCT file_hash FROM files WHERE file_hash IS NOT NULL",
         ) {
             Ok(s) => s,
             Err(_) => continue,
@@ -373,7 +373,7 @@ mod tests {
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
         let conn = crate::db::open(&db_path).unwrap();
         conn.execute(
-            "INSERT INTO files (path, mtime, size, kind, indexed_at, content_hash, line_count)
+            "INSERT INTO files (path, mtime, size, kind, indexed_at, file_hash, line_count)
              VALUES ('test.txt', 1000, 100, 'text', 0, ?1, 1)",
             rusqlite::params![hash],
         ).unwrap();

@@ -124,6 +124,15 @@
 	})();
 	$: memberFileName = archivePath ? (archivePath.split('/').pop()?.split('::').pop() ?? archivePath) : '';
 
+	function triggerDownload(url: string, filename: string) {
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = filename;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+	}
+
 	// Detect if file is markdown
 	$: isMarkdown = path.endsWith('.md') || path.endsWith('.markdown');
 
@@ -462,7 +471,7 @@
 			on:reload={reload}
 		/>
 		<div class="toolbar">
-			<button class="toolbar-btn" on:click={toggleWordWrap} title="Toggle word wrap">
+			<button class="toolbar-btn" on:click={toggleWordWrap}>
 				{wordWrap ? '⊟' : '⊞'} Wrap
 			</button>
 			{#if isMarkdown && !markdownTooLarge}
@@ -478,28 +487,27 @@
 						<button class="toolbar-btn" on:click={() => imageFullWidth = true}>View Extracted</button>
 					{/if}
 				{:else if fileKind !== 'audio'}
-					<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}
-							title="Toggle original file view">
+					<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}>
 						{showOriginal ? 'View Extracted' : 'View Original'}
 					</button>
 				{/if}
 			{/if}
 			{#if canDownloadMember}
-				<a href={rawInlineUrl} download={memberFileName} class="toolbar-btn">Download</a>
+				<button class="toolbar-btn" on:click={() => triggerDownload(rawInlineUrl, memberFileName)}>Download</button>
 			{:else}
-				<a href={rawUrl} download={fileName} class="toolbar-btn">
+				<button class="toolbar-btn" on:click={() => triggerDownload(rawUrl, fileName)}>
 					{isArchiveMember || fileKind === 'archive' ? 'Download Archive' : 'Download'}
-				</a>
+				</button>
 			{/if}
 			<div class="metadata">
 				{#if fileKind && fileKind !== 'raw'}
-					<span class="meta-item kind-badge" title="File type">{fileKind}</span>
+					<span class="meta-item kind-badge">{fileKind}</span>
 				{/if}
 				{#if size !== null}
-					<span class="meta-item" title="File size">{formatSize(size)}</span>
+					<span class="meta-item">{formatSize(size)}</span>
 				{/if}
 				{#if mtime !== null}
-					<span class="meta-item" title="Last modified">{formatDate(mtime)}</span>
+					<span class="meta-item">{formatDate(mtime)}</span>
 				{/if}
 			</div>
 		</div>

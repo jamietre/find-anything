@@ -86,7 +86,7 @@
 	<button
 		class="tree-toggle"
 		class:active={showTree}
-		title="Toggle file tree"
+		data-tooltip="Toggle file tree"
 		on:click={() => dispatch('treeToggle')}
 	>◫</button>
 	<SearchHelp />
@@ -113,7 +113,7 @@
 			on:change={(e) => dispatch('filterChange', e.detail)}
 		/>
 	{/if}
-	<button class="gear-btn" title="Settings" on:click={() => goto('/settings')}>⚙</button>
+	<button class="gear-btn" on:click={() => goto('/settings')}>⚙</button>
 </div>
 
 {#if prefixTokens.length > 0}
@@ -213,6 +213,7 @@
 		border-radius: 4px;
 		line-height: 1;
 		flex-shrink: 0;
+		position: relative;
 	}
 
 	.tree-toggle:hover {
@@ -222,6 +223,29 @@
 
 	.tree-toggle.active {
 		color: var(--accent, #58a6ff);
+	}
+
+	.tree-toggle[data-tooltip]::after {
+		content: attr(data-tooltip);
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 50%;
+		transform: translateX(-50%);
+		white-space: nowrap;
+		background: var(--bg-secondary);
+		border: 1px solid var(--border);
+		color: var(--text-muted);
+		padding: 2px 6px;
+		border-radius: 3px;
+		font-size: 11px;
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 0.1s;
+		z-index: 100;
+	}
+
+	.tree-toggle[data-tooltip]:hover::after {
+		opacity: 1;
 	}
 
 	.gear-btn {

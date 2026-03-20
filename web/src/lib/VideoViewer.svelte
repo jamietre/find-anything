@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import { parseMetaTags } from '$lib/metaTags';
+	import MetaDrawer from '$lib/MetaDrawer.svelte';
 
 	export let src: string;
 	/** Extracted metadata lines (line_number === 1, starting with '['). */
@@ -21,7 +22,7 @@
 		</video>
 	</div>
 	{#if hasMeta}
-		<div class="video-split-right">
+		<MetaDrawer initialOpen={false}>
 			{#each duplicatePaths as dup}
 				<div class="meta-row duplicate-row">
 					<span class="duplicate-label">DUPLICATE:</span>
@@ -36,7 +37,7 @@
 					</div>
 				{/each}
 			{/each}
-		</div>
+		</MetaDrawer>
 	{/if}
 </div>
 
@@ -65,18 +66,6 @@
 		max-height: 100%;
 		outline: none;
 		border-radius: 4px;
-	}
-
-	.video-split-right {
-		width: 300px;
-		flex-shrink: 0;
-		overflow-y: auto;
-		padding: 12px 16px;
-		font-family: var(--font-mono);
-		font-size: 12px;
-		color: var(--text-muted);
-		background: var(--bg-secondary);
-		border-left: 1px solid var(--border, rgba(255, 255, 255, 0.1));
 	}
 
 	.meta-row {

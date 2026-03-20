@@ -23,7 +23,7 @@ fn make_bulk_with_kind(source: &str, path: &str, content: &str, kind: FileKind) 
             kind,
             lines,
             extract_ms: None,
-            content_hash: None,
+            file_hash: None,
             scanner_version: SCANNER_VERSION,
             is_new: true,
         }],
@@ -210,7 +210,7 @@ async fn test_search_pagination_total_is_accurate() {
 async fn test_search_returns_duplicate_paths() {
     let srv = TestServer::spawn().await;
 
-    // Two files with the same content_hash — they should appear as duplicates of each other.
+    // Two files with the same file_hash — they should appear as duplicates of each other.
     srv.post_bulk(&make_text_bulk_hashed("src", "original.txt", "duplicate content keyword here. ".repeat(5).trim())).await;
     srv.post_bulk(&make_text_bulk_hashed("src", "copy.txt",     "duplicate content keyword here. ".repeat(5).trim())).await;
     srv.wait_for_idle().await;

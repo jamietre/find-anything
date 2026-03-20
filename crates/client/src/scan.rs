@@ -415,9 +415,9 @@ async fn push_non_archive_files(
         file.kind.clone()
     };
     // Hash raw file bytes for dedup (streaming to avoid OOM on large files).
-    // Skip hashing known binary extensions that no specialist extractor handles:
-    // opening these files can block indefinitely on Windows (e.g. live VHDX held by Hyper-V).
-    let content_hash = if find_extract_dispatch::is_binary_ext_path(&file.abs_path) {
+    // Skip only disk-image extensions that block File::open on Windows
+    // (live VHDX held by Hyper-V, mounted VMDK, etc.). Media files are always hashed.
+    let file_hash = if find_extract_dispatch::is_open_blocking_ext_path(&file.abs_path) {
         None
     } else {
         hash_file(&file.abs_path)
@@ -425,7 +425,7 @@ async fn push_non_archive_files(
     let mut index_files = build_index_files(file.rel_path.clone(), file.mtime, file.size, kind, file.lines.clone());
     if let Some(f) = index_files.first_mut() {
         f.extract_ms = Some(file.extract_ms);
-        f.content_hash = content_hash;
+        f.file_hash = file_hash;
         f.is_new = file.is_new;
     }
     for f in index_files {
@@ -551,7 +551,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                         kind: FileKind::Archive,
                         lines: vec![IndexLine { archive_path: None, line_number: 0, content: format!("[PATH] {}", rel_path) }],
                         extract_ms: None,
-                        content_hash: None,
+                        file_hash: None,
                         scanner_version: SCANNER_VERSION,
                         is_new,
                     };
@@ -583,7 +583,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
 
                     let mut members_submitted: usize = 0;
                     for batch in member_batches {
-                        for file in build_member_index_files(rel_path, mtime, batch.size, batch.lines, batch.content_hash) {
+                        for file in build_member_index_files(rel_path, mtime, batch.size, batch.lines, batch.file_hash) {
                             ctx.batch_bytes += index_file_bytes(&file);
                             members_submitted += 1;
                             ctx.batch.push(file);
@@ -605,7 +605,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                         kind: FileKind::Archive,
                         lines: vec![IndexLine { archive_path: None, line_number: 0, content: format!("[PATH] {}", rel_path) }],
                         extract_ms: None,
-                        content_hash: outer_hash,
+                        file_hash: outer_hash,
                         scanner_version: SCANNER_VERSION,
                         is_new,
                     });
@@ -636,7 +636,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                     kind: kind.clone(),
                     lines: vec![IndexLine { archive_path: None, line_number: 0, content: format!("[PATH] {}", rel_path) }],
                     extract_ms: None,
-                    content_hash: None, // no hash on start sentinel — avoids premature dedup alias
+                    file_hash: None, // no hash on start sentinel — avoids premature dedup alias
                     scanner_version: SCANNER_VERSION,
                     is_new,
                 };
@@ -686,9 +686,9 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                         }
                     }
 
-                    let content_hash = member_batch.content_hash;
+                    let file_hash = member_batch.file_hash;
                     let member_mtime = member_batch.mtime.unwrap_or(mtime);
-                    for file in build_member_index_files(rel_path, member_mtime, member_batch.size, member_batch.lines, content_hash) {
+                    for file in build_member_index_files(rel_path, member_mtime, member_batch.size, member_batch.lines, file_hash) {
                         ctx.batch_bytes += index_file_bytes(&file);
                         members_submitted += 1;
                         ctx.batch.push(file);
@@ -725,7 +725,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                     kind,
                     lines: vec![IndexLine { archive_path: None, line_number: 0, content: format!("[PATH] {}", rel_path) }],
                     extract_ms: None,
-                    content_hash: outer_hash,
+                    file_hash: outer_hash,
                     scanner_version: SCANNER_VERSION,
                     is_new,
                 });

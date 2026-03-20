@@ -321,9 +321,7 @@ async fn test_inbox_pause_stops_processing() {
 async fn test_compact_removes_orphaned_chunks() {
     let srv = TestServer::spawn().await;
 
-    // Index a file with a content_hash so the archive worker writes chunks to ZIP.
-    // Content must exceed the default inline_threshold_bytes (256) so it is stored
-    // in a ZIP archive rather than inline in file_content.
+    // Index a file with a file_hash so the archive worker writes chunks to the content store.
     let big_content = "archive content line for compaction test. ".repeat(10);
     srv.post_bulk(&make_text_bulk_hashed("compact-src", "file.txt", &big_content)).await;
     srv.wait_for_idle().await;
@@ -407,7 +405,7 @@ async fn test_compact_dry_run_does_not_remove_chunks() {
 async fn test_delete_source_removes_chunk_refs() {
     let srv = TestServer::spawn().await;
 
-    // Index with a content_hash so chunks are archived (content > 256 bytes to exceed inline threshold).
+    // Index with a file_hash so chunks are archived to the content store.
     let big_content = "archive content line for delete source chunk test. ".repeat(10);
     srv.post_bulk(&make_text_bulk_hashed("del-src", "file.txt", &big_content)).await;
     srv.wait_for_idle().await;
@@ -694,9 +692,9 @@ async fn test_update_check_requires_auth() {
 
 #[tokio::test]
 async fn test_update_apply_without_systemd_returns_400() {
-    // The test server is not running under systemd, so update/apply should
-    // immediately return 400 without making any network requests.
-    let srv = TestServer::spawn().await;
+    // Force under_systemd = false regardless of whether INVOCATION_ID is set
+    // in the CI environment (GitHub Actions runners may run under systemd).
+    let srv = TestServer::spawn_with_extra_config("force_systemd = false").await;
 
     let resp: UpdateApplyResponse = srv
         .client

@@ -1,6 +1,8 @@
 -- Schema v4: same as v3 but without content_blocks, content_archives,
 -- content_chunks and their indexes.  Chunk metadata now lives in
 -- data_dir/content.db, owned by find-content-store.
+--
+-- v14: file_content table dropped; files.content_hash renamed to files.file_hash.
 
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
@@ -18,7 +20,7 @@ CREATE TABLE IF NOT EXISTS files (
     kind             TEXT    NOT NULL DEFAULT 'text',
     indexed_at       INTEGER,
     extract_ms       INTEGER,
-    content_hash     TEXT,
+    file_hash        TEXT,
     scanner_version  INTEGER NOT NULL DEFAULT 0,
     line_count       INTEGER
 );
@@ -26,25 +28,18 @@ CREATE TABLE IF NOT EXISTS files (
 -- Inner archive members use composite paths: "archive.zip::member.txt"
 -- No separate column needed; path IS the identifier.
 
-CREATE INDEX IF NOT EXISTS files_content_hash ON files(content_hash)
-    WHERE content_hash IS NOT NULL;
+CREATE INDEX IF NOT EXISTS files_file_hash ON files(file_hash)
+    WHERE file_hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_files_mtime ON files(mtime);
 
--- Inline content for small files (below inline_threshold_bytes server setting).
--- Kept separate from `files` to avoid row-width bloat on the heavily-scanned files table.
-CREATE TABLE IF NOT EXISTS file_content (
-    file_id INTEGER PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
-    content TEXT NOT NULL
-);
-
--- Duplicate tracking: populated only when 2+ files share a content_hash.
+-- Duplicate tracking: populated only when 2+ files share a file_hash.
 CREATE TABLE IF NOT EXISTS duplicates (
-    content_hash TEXT    NOT NULL,
-    file_id      INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
-    PRIMARY KEY (content_hash, file_id)
+    file_hash TEXT    NOT NULL,
+    file_id   INTEGER NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    PRIMARY KEY (file_hash, file_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_duplicates_hash ON duplicates(content_hash);
+CREATE INDEX IF NOT EXISTS idx_duplicates_hash ON duplicates(file_hash);
 
 -- Contentless FTS5 index.
 -- rowid = file_id * MAX_LINES_PER_FILE + line_number

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import { parseMetaTags } from '$lib/metaTags';
+	import MetaDrawer from '$lib/MetaDrawer.svelte';
 
 	/** URL to stream the audio file. */
 	export let src: string;
@@ -19,7 +20,7 @@
 			Your browser does not support the audio element.
 		</audio>
 	</div>
-	<div class="audio-split-right">
+	<MetaDrawer initialOpen={true}>
 		{#if metaLines.length > 0 || duplicatePaths.length > 0}
 			{#each duplicatePaths as dup}
 				<div class="meta-row duplicate-row">
@@ -38,7 +39,7 @@
 		{:else}
 			<div class="no-content">No metadata available.</div>
 		{/if}
-	</div>
+	</MetaDrawer>
 </div>
 
 <style>
@@ -65,17 +66,6 @@
 		width: 100%;
 		max-width: 480px;
 		outline: none;
-	}
-
-	.audio-split-right {
-		width: 300px;
-		flex-shrink: 0;
-		overflow-y: auto;
-		padding: 12px 16px;
-		font-family: var(--font-mono);
-		font-size: 12px;
-		color: var(--text-muted);
-		background: var(--bg-secondary);
 	}
 
 	.no-content {

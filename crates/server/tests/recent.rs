@@ -22,7 +22,7 @@ fn make_bulk_with_mtime(source: &str, path: &str, content: &str, mtime: i64) -> 
             kind: FileKind::Text,
             lines,
             extract_ms: None,
-            content_hash: None,
+            file_hash: None,
             scanner_version: SCANNER_VERSION,
             is_new: true,
         }],

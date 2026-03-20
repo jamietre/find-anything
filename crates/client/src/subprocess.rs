@@ -278,7 +278,7 @@ pub async fn run_external_tempdir(
                     line_number: 0,
                     content: member_rel.clone(),
                 }],
-                content_hash: None,
+                file_hash: None,
                 skip_reason: None,
                 mtime: None,
                 size: Some(bytes.len() as u64),
@@ -302,7 +302,7 @@ pub async fn run_external_tempdir(
                 }).collect();
                 members.push(MemberBatch {
                     lines: prefixed,
-                    content_hash: batch.content_hash,
+                    file_hash: batch.file_hash,
                     skip_reason: batch.skip_reason,
                     mtime: batch.mtime,
                     size: batch.size,
@@ -317,7 +317,7 @@ pub async fn run_external_tempdir(
             // Fall through to filename-only on extraction failure.
         }
 
-        let content_hash = if bytes.is_empty() {
+        let file_hash = if bytes.is_empty() {
             None
         } else {
             Some(blake3::hash(&bytes).to_hex().to_string())
@@ -335,7 +335,7 @@ pub async fn run_external_tempdir(
             line_number: 0,
             content: format!("[PATH] {}", member_rel),
         });
-        members.push(MemberBatch { lines: content_lines, content_hash, skip_reason: None, mtime: None, size: Some(bytes.len() as u64) });
+        members.push(MemberBatch { lines: content_lines, file_hash, skip_reason: None, mtime: None, size: Some(bytes.len() as u64) });
     }
 
     ExternalOutcome::OkMembers(members)
@@ -998,16 +998,16 @@ mod tests {
             .join(" ");
         assert!(hello_content.contains("hello from nested zip"), "unexpected content: {hello_content}");
 
-        // Each member batch for inner zip members should have a content_hash set.
+        // Each member batch for inner zip members should have a file_hash set.
         let inner_batches_with_hash: Vec<_> = batches.iter()
             .filter(|b| b.lines.iter().any(|l| {
                 l.archive_path.as_deref()
                     .map(|p| p.starts_with("inner.zip::") && p.ends_with("hello.txt"))
                     .unwrap_or(false)
             }))
-            .filter(|b| b.content_hash.is_some())
+            .filter(|b| b.file_hash.is_some())
             .collect();
-        assert!(!inner_batches_with_hash.is_empty(), "inner.zip::hello.txt batch has no content_hash");
+        assert!(!inner_batches_with_hash.is_empty(), "inner.zip::hello.txt batch has no file_hash");
 
         // inner.nd1 inside inner.zip should be extracted via the external nd1 extractor,
         // yielding its member greet.txt as a composite path.

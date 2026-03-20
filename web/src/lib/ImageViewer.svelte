@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import { parseMetaTags } from '$lib/metaTags';
+	import MetaDrawer from '$lib/MetaDrawer.svelte';
 
 	/** URL of the image (or converted PNG for unsupported formats). */
 	export let src: string;
@@ -51,7 +52,7 @@
 					on:error={() => imageError = true} />
 			{/if}
 		</div>
-		<div class="image-split-right">
+		<MetaDrawer initialOpen={false}>
 			{#if metaLines.length > 0 || duplicatePaths.length > 0}
 				{#each duplicatePaths as dup}
 					<div class="meta-row duplicate-row">
@@ -70,7 +71,7 @@
 			{:else}
 				<div class="no-content">No metadata available.</div>
 			{/if}
-		</div>
+		</MetaDrawer>
 	</div>
 {/if}
 
@@ -99,17 +100,6 @@
 		max-width: 100%;
 		max-height: 100%;
 		object-fit: contain;
-	}
-
-	.image-split-right {
-		width: 300px;
-		flex-shrink: 0;
-		overflow-y: auto;
-		padding: 12px 16px;
-		font-family: var(--font-mono);
-		font-size: 12px;
-		color: var(--text-muted);
-		background: var(--bg-secondary);
 	}
 
 	/* Image full-width view */

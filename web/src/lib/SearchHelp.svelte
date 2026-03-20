@@ -9,7 +9,7 @@
 	<button
 		class="help-btn"
 		class:active={showHelp}
-		title="Search syntax help"
+		data-tooltip={showHelp ? null : 'Search syntax help'}
 		on:click={toggleHelp}
 		aria-label="Search syntax help"
 	>?</button>
@@ -81,6 +81,30 @@
 		align-items: center;
 		justify-content: center;
 		flex-shrink: 0;
+		position: relative;
+	}
+
+	.help-btn[data-tooltip]::after {
+		content: attr(data-tooltip);
+		position: absolute;
+		top: calc(100% + 4px);
+		left: 50%;
+		transform: translateX(-50%);
+		white-space: nowrap;
+		background: var(--bg-secondary);
+		border: 1px solid var(--border);
+		color: var(--text-muted);
+		padding: 2px 6px;
+		border-radius: 3px;
+		font-size: 11px;
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 0.1s;
+		z-index: 100;
+	}
+
+	.help-btn[data-tooltip]:hover::after {
+		opacity: 1;
 	}
 
 	.help-btn:hover {

@@ -253,8 +253,9 @@
 	.copy-btn[data-tooltip]:not(.copied)::after {
 		content: attr(data-tooltip);
 		position: absolute;
-		bottom: calc(100% + 4px);
-		right: 0;
+		top: calc(100% + 4px);
+		left: 50%;
+		transform: translateX(-50%);
 		white-space: nowrap;
 		background: var(--bg-secondary);
 		border: 1px solid var(--border);
@@ -262,7 +263,6 @@
 		padding: 2px 6px;
 		border-radius: 3px;
 		font-size: 11px;
-		font-family: var(--font-mono);
 		opacity: 0;
 		pointer-events: none;
 		transition: opacity 0.1s;

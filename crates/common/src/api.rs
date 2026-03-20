@@ -146,7 +146,7 @@ pub enum WorkerQueueSlot {
 /// Update this constant whenever a breaking API change is made (e.g. new
 /// required request fields, removed endpoints, changed response shapes).
 /// Clients older than this version will be refused with a clear error message.
-pub const MIN_CLIENT_VERSION: &str = "0.6.0";
+pub const MIN_CLIENT_VERSION: &str = "0.6.2";
 
 /// GET /api/v1/sources response entry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,10 +172,11 @@ pub struct IndexFile {
     /// Set on the outer file; None for inner archive members.
     #[serde(default)]
     pub extract_ms: Option<u64>,
-    /// blake3 hex hash of the file's raw bytes, used for content deduplication.
-    /// None for files that could not be hashed (too large, permission error, etc.).
+    /// blake3 hex hash of the raw binary file bytes, used for deduplication and
+    /// as the content-store key. None for files that could not be hashed
+    /// (locked disk images, permission error, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub content_hash: Option<String>,
+    pub file_hash: Option<String>,
     /// Version of the scanner that indexed this file. Compared against
     /// `SCANNER_VERSION` by `find-scan --upgrade` to detect stale entries.
     #[serde(default)]

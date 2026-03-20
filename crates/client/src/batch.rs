@@ -65,7 +65,7 @@ pub fn build_index_files(
             content: format!("[PATH] {}", rel_path),
         });
         ensure_metadata_slot(&mut all_lines);
-        return vec![IndexFile { path: rel_path, mtime, size: Some(size), kind, lines: all_lines, extract_ms: None, content_hash: None, scanner_version: SCANNER_VERSION, is_new: false }];
+        return vec![IndexFile { path: rel_path, mtime, size: Some(size), kind, lines: all_lines, extract_ms: None, file_hash: None, scanner_version: SCANNER_VERSION, is_new: false }];
     }
 
     // Group by archive_path.
@@ -96,7 +96,7 @@ pub fn build_index_files(
         kind: kind.clone(),
         lines: outer_lines,
         extract_ms: None,
-        content_hash: None,
+        file_hash: None,
         scanner_version: SCANNER_VERSION,
         is_new: false,
     });
@@ -118,7 +118,7 @@ pub fn build_index_files(
             kind: member_kind,
             lines: content_lines,
             extract_ms: None,
-            content_hash: None,
+            file_hash: None,
             scanner_version: SCANNER_VERSION,
             is_new: false,
         });
@@ -141,7 +141,7 @@ pub fn build_member_index_files(
     mtime: i64,
     member_size: Option<u64>,
     member_lines: Vec<IndexLine>,
-    content_hash: Option<String>,
+    file_hash: Option<String>,
 ) -> Vec<IndexFile> {
     let mut groups: std::collections::HashMap<String, Vec<IndexLine>> = std::collections::HashMap::new();
     for line in member_lines {
@@ -178,7 +178,7 @@ pub fn build_member_index_files(
             kind: member_kind,
             lines,
             extract_ms: None,
-            content_hash: content_hash.clone(),
+            file_hash: file_hash.clone(),
             scanner_version: SCANNER_VERSION,
             is_new: false,
         });

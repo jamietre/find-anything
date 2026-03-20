@@ -139,7 +139,6 @@
 		class="trigger"
 		class:active={anyFilter}
 		on:click={() => (isOpen ? (isOpen = false) : openPanel())}
-		title="Advanced search filters"
 	>
 		<span class="icon">⚙</span>
 		<span class="text">Advanced</span>

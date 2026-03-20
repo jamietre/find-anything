@@ -179,6 +179,15 @@ pub fn is_binary_ext_path(path: &Path) -> bool {
     find_extract_text::is_binary_ext_path(path)
 }
 
+/// Returns `true` if `path` has an extension that is known to block
+/// `File::open` indefinitely on Windows (live disk images held open by Hyper-V).
+///
+/// Use this as the guard before `hash_file` — narrower than `is_binary_ext_path`
+/// so that media files (jpg, mp3, etc.) are hashed even though they are binary.
+pub fn is_open_blocking_ext_path(path: &Path) -> bool {
+    find_extract_text::is_open_blocking_ext_path(path)
+}
+
 /// Map a MIME type string to a file kind string.
 ///
 /// This is the single source of truth — previously duplicated in

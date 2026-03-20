@@ -414,7 +414,7 @@ pub fn fetch_duplicates_for_file_ids(
     let sql = format!(
         "SELECT d1.file_id, f2.path
          FROM duplicates d1
-         JOIN duplicates d2 ON d2.content_hash = d1.content_hash AND d2.file_id != d1.file_id
+         JOIN duplicates d2 ON d2.file_hash = d1.file_hash AND d2.file_id != d1.file_id
          JOIN files f2 ON f2.id = d2.file_id
          WHERE d1.file_id IN ({id_phs})
          ORDER BY d1.file_id, f2.path"
@@ -438,12 +438,12 @@ mod tests {
     fn test_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-        conn.execute_batch(include_str!("../schema_v3.sql")).unwrap();
+        conn.execute_batch(include_str!("../schema_v4.sql")).unwrap();
         crate::db::register_scalar_functions(&conn).unwrap();
         conn
     }
 
-    /// Insert a file with inline content and FTS entries. Returns the file_id.
+    /// Insert a file with FTS entries. Returns the file_id.
     /// `lines` is `(line_number, content)` pairs in order.
     fn insert_inline_file(conn: &Connection, path: &str, mtime: i64, kind: &str, lines: &[(usize, &str)]) -> i64 {
         conn.execute(
@@ -451,12 +451,6 @@ mod tests {
             rusqlite::params![path, mtime, kind, lines.len() as i64],
         ).unwrap();
         let file_id = conn.last_insert_rowid();
-
-        let content: String = lines.iter().map(|(_, c)| *c).collect::<Vec<_>>().join("\n");
-        conn.execute(
-            "INSERT INTO file_content (file_id, content) VALUES (?1, ?2)",
-            rusqlite::params![file_id, content],
-        ).unwrap();
 
         for (line_number, line_content) in lines.iter() {
             let rowid = encode_fts_rowid(file_id, *line_number as i64);

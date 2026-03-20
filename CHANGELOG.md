@@ -16,6 +16,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Content-store `chunk_blob` redesign** — chunks are now stored as lines joined by `\n` with no trailing newline (previously each line was stored with a trailing `\n`); `get_lines` uses `str::lines()` for reconstruction, which correctly handles the trailing-newline artifact and preserves interior empty lines; `chunk_blob("")` naturally returns an empty vec; empty lines are no longer filtered from `get_lines` results (UX handles display)
 - **Trailing whitespace trimming** — line content is now `trim_end()`-stripped before being written to the FTS5 index and before being stored in the content store blob; this keeps the indexes clean without affecting search correctness
 
+- **`MetaDrawer` component** — the metadata side-panel in image, audio, and video viewers is now a shared `MetaDrawer.svelte` component; it is collapsible (chevron toggle), starts collapsed for images (metadata secondary to the image) and open for audio (metadata is the primary content); eliminates duplicated layout CSS across three viewers
+- **Tooltip consistency** — the `data-tooltip` + CSS `::after` pattern (introduced for PathBar) is now applied to all toolbar buttons (tree-toggle, search-help `?`, word-wrap, view-original); native `title` attributes removed; tooltips appear centred below the button at a consistent offset
+
 ### Fixed
 
 - **Palette-indexed TIFF display** — TIFF files with `PhotometricInterpretation=RGBPalette` (8-bit indexed colour, common in older scanned documents) now convert correctly via `GET /api/v1/raw?convert=png`; previously returned 422 because the `image` crate's TIFF decoder does not implement this mode. Fixed via a new `image_util` module that reads the `ColorMap` tag directly, patches the PMI field in-memory to `BlackIsZero`, decodes the indices via the `image` crate, then expands them through the palette to produce a full RGB image.

@@ -352,7 +352,7 @@ async fn s11_upgrade_reindexes_old_scanner_version() {
                 IndexLine { archive_path: None, line_number: 1, content: "upgrade test content here".to_string() },
             ],
             extract_ms: None,
-            content_hash: None,
+            file_hash: None,
             scanner_version: 0, // intentionally old
             is_new: true,
         }],

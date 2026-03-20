@@ -121,7 +121,7 @@ pub async fn get_file(
             let mut stmt = conn.prepare(
                 "SELECT f2.path
                  FROM duplicates d1
-                 JOIN duplicates d2 ON d2.content_hash = d1.content_hash
+                 JOIN duplicates d2 ON d2.file_hash = d1.file_hash
                    AND d2.file_id != d1.file_id
                  JOIN files f2 ON f2.id = d2.file_id
                  WHERE d1.file_id = ?1

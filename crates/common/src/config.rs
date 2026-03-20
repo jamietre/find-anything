@@ -64,7 +64,7 @@ struct ServerSettingsDefaults {
     log_batch_detail_limit: usize,
     archive_batch_size: usize,
     inbox_request_timeout_secs: u64,
-    inline_threshold_bytes: u64,
+
     activity_log_max_entries: usize,
 }
 
@@ -724,13 +724,6 @@ pub struct ServerAppSettings {
     /// Default: 200.
     #[serde(default = "default_archive_batch_size")]
     pub archive_batch_size: usize,
-    /// Files whose total extracted content is at or below this size (bytes) are
-    /// stored directly in SQLite (`file_content` table) rather than in ZIP archives.
-    /// This eliminates ZIP overhead for small files (config files, dotfiles, etc.)
-    /// and speeds up reads for them.  Set to 0 to disable inline storage.
-    /// Default: 256.
-    #[serde(default = "default_inline_threshold_bytes")]
-    pub inline_threshold_bytes: u64,
     /// Maximum number of activity-log entries retained per source database.
     /// When a batch pushes the count over this limit, the oldest entries are
     /// pruned.  Set to 0 to disable the activity log entirely.
@@ -756,6 +749,11 @@ pub struct ServerAppSettings {
     /// Can be overridden per-user in the browser. Default: 4.
     #[serde(default = "default_tab_width")]
     pub tab_width: usize,
+    /// Override the systemd-detection heuristic (`INVOCATION_ID` env var).
+    /// `true` = treat as if running under systemd; `false` = treat as not.
+    /// When absent, detection is automatic. Intended for integration tests.
+    #[serde(default)]
+    pub force_systemd: Option<bool>,
 }
 
 fn default_max_markdown_render_kb() -> usize { 512 }
@@ -767,7 +765,6 @@ fn default_download_zip_member_levels() -> usize { server_defaults().server.down
 fn default_log_batch_detail_limit() -> usize     { server_defaults().server.log_batch_detail_limit }
 fn default_inbox_request_timeout_secs() -> u64   { server_defaults().server.inbox_request_timeout_secs }
 fn default_archive_batch_size() -> usize         { server_defaults().server.archive_batch_size }
-fn default_inline_threshold_bytes() -> u64       { server_defaults().server.inline_threshold_bytes }
 fn default_activity_log_max_entries() -> usize   { server_defaults().server.activity_log_max_entries }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

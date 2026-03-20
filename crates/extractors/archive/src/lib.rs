@@ -18,7 +18,7 @@ pub struct MemberBatch {
     pub lines: Vec<IndexLine>,
     /// blake3 hex hash of the member's raw bytes (decompressed from the archive).
     /// None for filename-only entries (too large, nested archives, or single-compressed).
-    pub content_hash: Option<String>,
+    pub file_hash: Option<String>,
     /// Set when content extraction was skipped or failed.
     /// The caller (scan.rs) records this as an IndexingFailure for the member's path,
     /// so the reason is surfaced to users in the file viewer and errors panel.
@@ -284,8 +284,8 @@ fn zip_from_archive<R: Read + std::io::Seek>(
         } else {
             None
         };
-        let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
-        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash, skip_reason, mtime, size: member_size });
+        let file_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
+        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), file_hash, skip_reason, mtime, size: member_size });
     }
     Ok(())
 }
@@ -344,8 +344,8 @@ fn tar_streaming<R: Read>(mut archive: tar::Archive<R>, display_prefix: &str, cf
         } else {
             None
         };
-        let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
-        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash, skip_reason, mtime, size: member_size });
+        let file_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
+        callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), file_hash, skip_reason, mtime, size: member_size });
     }
     Ok(())
 }
@@ -428,8 +428,8 @@ fn sevenz_process_entry(
         None
     };
 
-    let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
-    callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), content_hash, skip_reason, mtime, size: Some(entry.size()) });
+    let file_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
+    callback(MemberBatch { lines: extract_member_bytes(bytes, &name, display_prefix, cfg), file_hash, skip_reason, mtime, size: Some(entry.size()) });
     Ok(true)
 }
 
@@ -484,7 +484,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
             .unwrap_or(0);
         callback(MemberBatch {
             lines: vec![],
-            content_hash: None,
+            file_hash: None,
             skip_reason: Some(format!(
                 "7z: {} file(s) in {} solid block(s) not extracted \
                  (largest block {} MB exceeds memory limit of {} MB); \
@@ -500,7 +500,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
                     if !entry.is_directory() {
                         callback(MemberBatch {
                             lines: make_filename_line(entry.name()),
-                            content_hash: None,
+                            file_hash: None,
                             size: Some(entry.size()),
                             ..Default::default()
                         });
@@ -584,7 +584,7 @@ fn sevenz_streaming(path: &Path, display_prefix: &str, cfg: &ExtractorConfig, ca
                 for (name, entry_size) in file_infos {
                     callback(MemberBatch {
                         lines: make_filename_line(name),
-                        content_hash: None,
+                        file_hash: None,
                         skip_reason: skip_reason.clone(),
                         size: Some(entry_size),
                         ..Default::default()
@@ -639,10 +639,10 @@ fn single_compressed<R: Read>(reader: R, path: &Path, cfg: &ExtractorConfig) -> 
     reader.take(size_limit as u64).read_to_end(&mut bytes)?;
 
     let decompressed_size = bytes.len() as u64;
-    let content_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
+    let file_hash = if bytes.is_empty() { None } else { Some(blake3::hash(&bytes).to_hex().to_string()) };
     Ok(MemberBatch {
         lines: extract_member_bytes(bytes, &inner_name, path.to_str().unwrap_or(""), cfg),
-        content_hash,
+        file_hash,
         skip_reason: None,
         mtime: None, // single-file wrapper: caller uses outer archive's filesystem mtime
         size: Some(decompressed_size),
@@ -677,7 +677,7 @@ fn handle_nested_archive(
     callback: CB<'_>,
 ) {
     // Always emit the filename of the nested archive itself, with its size.
-    callback(MemberBatch { lines: make_filename_line(outer_name), content_hash: None, skip_reason: None, mtime: None, size: outer_size });
+    callback(MemberBatch { lines: make_filename_line(outer_name), file_hash: None, skip_reason: None, mtime: None, size: outer_size });
 
     if cfg.max_depth == 0 {
         warn!(
@@ -709,7 +709,7 @@ fn handle_nested_archive(
                 l
             })
             .collect();
-        callback(MemberBatch { lines: p, content_hash: inner_batch.content_hash, skip_reason: inner_batch.skip_reason, mtime: inner_batch.mtime, size: inner_batch.size });
+        callback(MemberBatch { lines: p, file_hash: inner_batch.file_hash, skip_reason: inner_batch.skip_reason, mtime: inner_batch.mtime, size: inner_batch.size });
     };
 
     // Use `reader` as `&mut dyn Read` throughout so that tar_streaming<GzDecoder<&mut dyn Read>>

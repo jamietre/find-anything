@@ -141,7 +141,7 @@ pub async fn index_upload(
             kind,
             lines,
             extract_ms: None,
-            content_hash: None,
+            file_hash: None,
             scanner_version: find_common::api::SCANNER_VERSION,
             is_new: false,
         }],

@@ -84,17 +84,14 @@ pub fn append_scan_history(conn: &Connection, scanned_at: i64) -> Result<()> {
 
 /// Count files whose content has not yet been written to the content store.
 ///
-/// A file is "pending content" when it has a `content_hash` (i.e. content was
-/// extracted) but neither an inline `file_content` row nor an entry in the
-/// content store exists yet.  This is the DB-level view of archive backlog,
-/// independent of how many `.gz` files remain in the `to-archive/` queue.
+/// A file is "pending content" when it has a `file_hash` (i.e. content was
+/// extracted) but no entry in the content store exists yet.  This is the
+/// DB-level view of archive backlog, independent of how many `.gz` files
+/// remain in the `to-archive/` queue.
 pub fn get_files_pending_content(conn: &Connection, content_store: &dyn ContentStore) -> Result<usize> {
-    // Collect all distinct content_hash values that have no inline content.
     let hashes: Vec<String> = conn
         .prepare(
-            "SELECT DISTINCT f.content_hash FROM files f
-             WHERE f.content_hash IS NOT NULL
-               AND NOT EXISTS (SELECT 1 FROM file_content fc WHERE fc.file_id = f.id)",
+            "SELECT DISTINCT file_hash FROM files WHERE file_hash IS NOT NULL",
         )?
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<_>>()?;
@@ -313,7 +310,7 @@ mod tests {
     fn test_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-        conn.execute_batch(include_str!("../schema_v3.sql")).unwrap();
+        conn.execute_batch(include_str!("../schema_v4.sql")).unwrap();
         crate::db::register_scalar_functions(&conn).unwrap();
         conn
     }
@@ -336,25 +333,23 @@ mod tests {
     fn test_get_files_pending_content_counts_unarchived() {
         let conn = test_conn();
 
-        // Insert a file with a content_hash but no inline file_content row.
+        // Insert a file with a file_hash but content not yet in the store.
         conn.execute(
-            "INSERT INTO files (path, mtime, kind, content_hash) VALUES ('file.txt', 1000, 'text', 'abc123')",
+            "INSERT INTO files (path, mtime, kind, file_hash) VALUES ('file.txt', 1000, 'text', 'abc123')",
             [],
         ).unwrap();
 
         let store = EmptyStore;
         let pending = get_files_pending_content(&conn, &store).unwrap();
-        assert_eq!(pending, 1, "file with content_hash but no stored content should be pending");
+        assert_eq!(pending, 1, "file with file_hash but no stored content should be pending");
 
-        // Now insert an inline file_content row — the file is no longer pending.
-        let file_id: i64 = conn.query_row("SELECT id FROM files WHERE path = 'file.txt'", [], |r| r.get(0)).unwrap();
+        // A file without a file_hash is not pending.
         conn.execute(
-            "INSERT INTO file_content (file_id, content) VALUES (?1, 'hello')",
-            rusqlite::params![file_id],
+            "INSERT INTO files (path, mtime, kind) VALUES ('nohash.txt', 1000, 'text')",
+            [],
         ).unwrap();
-
-        let pending_after = get_files_pending_content(&conn, &store).unwrap();
-        assert_eq!(pending_after, 0, "file with inline content should not be pending");
+        let pending2 = get_files_pending_content(&conn, &store).unwrap();
+        assert_eq!(pending2, 1, "file without file_hash should not be counted as pending");
     }
 
     #[test]

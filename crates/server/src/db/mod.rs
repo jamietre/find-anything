@@ -37,7 +37,9 @@ pub use tree::{list_dir, split_composite_path};
 /// Increment this whenever the schema changes incompatibly.
 /// v13: content_blocks / content_archives / content_chunks removed from source
 ///      DBs; chunk metadata now lives in data_dir/content.db (find-content-store).
-pub const SCHEMA_VERSION: i64 = 13;
+/// v14: Drop file_content table; rename content_hash → file_hash in files and
+///      duplicates tables.
+pub const SCHEMA_VERSION: i64 = 14;
 
 pub fn open(db_path: &Path) -> Result<Connection> {
     let conn = Connection::open(db_path)
@@ -61,6 +63,17 @@ pub fn open(db_path: &Path) -> Result<Connection> {
         // Brand-new database — initialise the full current schema and stamp the version.
         conn.execute_batch(include_str!("../schema_v4.sql"))
             .context("initialising schema")?;
+        conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
+            .context("stamping schema version")?;
+    } else if version == 13 {
+        // v13 → v14: drop file_content, rename content_hash → file_hash.
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS file_content;
+             ALTER TABLE files RENAME COLUMN content_hash TO file_hash;
+             DROP INDEX IF EXISTS files_content_hash;
+             CREATE INDEX IF NOT EXISTS files_file_hash ON files(file_hash) WHERE file_hash IS NOT NULL;
+             ALTER TABLE duplicates RENAME COLUMN content_hash TO file_hash;",
+        ).context("migrating schema v13 → v14")?;
         conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))
             .context("stamping schema version")?;
     } else if version != SCHEMA_VERSION {
@@ -139,8 +152,7 @@ pub fn check_all_sources(sources_dir: &Path) -> Result<()> {
 
 /// Read a single line's content for a file via `ContentStore`.
 ///
-/// 1. Checks `file_content` (inline) first.
-/// 2. Otherwise, looks up `files.content_hash` and calls `content_store.get_lines`.
+/// Looks up `files.file_hash` and calls `content_store.get_lines`.
 ///
 /// Returns `None` if the file or line cannot be found (stale FTS, pending archive).
 pub fn read_chunk_for_file(
@@ -149,19 +161,8 @@ pub fn read_chunk_for_file(
     file_id: i64,
     line_number: i64,
 ) -> Option<String> {
-    // 1. Check inline storage.
-    let inline: Option<String> = conn.query_row(
-        "SELECT content FROM file_content WHERE file_id = ?1",
-        params![file_id],
-        |r| r.get(0),
-    ).optional().ok().flatten();
-    if let Some(content) = inline {
-        return content.split('\n').nth(line_number as usize).map(|s| s.to_string());
-    }
-
-    // 2. Look up content_hash from files table.
     let hash: String = conn.query_row(
-        "SELECT content_hash FROM files WHERE id = ?1",
+        "SELECT file_hash FROM files WHERE id = ?1",
         params![file_id],
         |r| r.get(0),
     ).optional().ok().flatten()?;
@@ -175,9 +176,8 @@ pub fn read_chunk_for_file(
 /// Batch-resolve line content for multiple `(file_id, line_number)` pairs
 /// using `ContentStore`.
 ///
-/// 1. Batch-fetch inline content for all file IDs.
-/// 2. Batch-fetch `content_hash` for non-inline file IDs.
-/// 3. For each unique hash, call `content_store.get_lines` with the full range.
+/// 1. Batch-fetch `file_hash` for all file IDs.
+/// 2. For each unique hash, call `content_store.get_lines` with the full range.
 pub fn read_content_batch(
     conn: &Connection,
     content_store: &dyn ContentStore,
@@ -195,64 +195,33 @@ pub fn read_content_batch(
         .filter(|id| seen.insert(*id))
         .collect();
 
-    // ── 1. Inline storage ─────────────────────────────────────────────────
+    // ── 1. file_hash for all files ────────────────────────────────────────
     let ph: String = (1..=file_ids.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
-    let sql = format!("SELECT file_id, content FROM file_content WHERE file_id IN ({ph})");
+    let sql = format!(
+        "SELECT id, file_hash FROM files WHERE id IN ({ph}) AND file_hash IS NOT NULL"
+    );
     let params_refs: Vec<&dyn rusqlite::ToSql> =
         file_ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
-    let mut inline_map: HashMap<i64, String> = HashMap::new();
+    let mut hash_map: HashMap<i64, String> = HashMap::new();
     if let Ok(mut stmt) = conn.prepare(&sql) {
         let _ = stmt
             .query_map(params_refs.as_slice(), |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })
             .map(|rows| {
-                rows.flatten()
-                    .for_each(|(fid, content)| { inline_map.insert(fid, content); })
+                rows.flatten().for_each(|(fid, hash)| { hash_map.insert(fid, hash); })
             });
     }
 
-    // ── 2. content_hash for non-inline files ──────────────────────────────
-    let non_inline: Vec<i64> = file_ids
-        .iter()
-        .filter(|id| !inline_map.contains_key(*id))
-        .copied()
-        .collect();
-
-    // file_id → content_hash
-    let mut hash_map: HashMap<i64, String> = HashMap::new();
-    if !non_inline.is_empty() {
-        let ph2: String = (1..=non_inline.len()).map(|i| format!("?{i}")).collect::<Vec<_>>().join(",");
-        let sql2 = format!(
-            "SELECT id, content_hash FROM files WHERE id IN ({ph2}) AND content_hash IS NOT NULL"
-        );
-        let params2: Vec<&dyn rusqlite::ToSql> =
-            non_inline.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
-        if let Ok(mut stmt) = conn.prepare(&sql2) {
-            let _ = stmt
-                .query_map(params2.as_slice(), |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })
-                .map(|rows| {
-                    rows.flatten().for_each(|(fid, hash)| { hash_map.insert(fid, hash); })
-                });
-        }
-    }
-
-    // ── 3. Group needed line positions by hash ────────────────────────────
-    // hash → Vec<(file_id, line_number)>
+    // ── 2. Group needed line positions by hash ────────────────────────────
     let mut by_hash: HashMap<String, Vec<(i64, i64)>> = HashMap::new();
     for &(file_id, line_number) in pairs {
-        if inline_map.contains_key(&file_id) {
-            continue;
-        }
         if let Some(hash) = hash_map.get(&file_id) {
             by_hash.entry(hash.clone()).or_default().push((file_id, line_number));
         }
     }
 
-    // ── 4. Fetch lines from ContentStore, one call per hash ───────────────
-    // hash → Vec<(pos, content)>
+    // ── 3. Fetch lines from ContentStore, one call per hash ───────────────
     let mut content_cache: HashMap<String, Vec<(usize, String)>> = HashMap::new();
     for (hash, pairs_for_hash) in &by_hash {
         let lo = pairs_for_hash.iter().map(|(_, ln)| *ln as usize).min().unwrap_or(0);
@@ -263,16 +232,10 @@ pub fn read_content_batch(
         }
     }
 
-    // ── 5. Resolve each pair ──────────────────────────────────────────────
+    // ── 4. Resolve each pair ──────────────────────────────────────────────
     let mut result = HashMap::new();
     for &(file_id, line_number) in pairs {
-        if let Some(inline) = inline_map.get(&file_id) {
-            if let Some(line) = inline.split('\n').nth(line_number as usize) {
-                if !line.is_empty() {
-                    result.insert((file_id, line_number), line.to_string());
-                }
-            }
-        } else if let Some(hash) = hash_map.get(&file_id) {
+        if let Some(hash) = hash_map.get(&file_id) {
             if let Some(lines) = content_cache.get(hash) {
                 if let Some((_, content)) = lines.iter().find(|(pos, _)| *pos == line_number as usize) {
                     if !content.is_empty() {
@@ -289,19 +252,8 @@ pub fn read_content_batch(
 /// Used by DocRegex mode to test a regex against the full document.
 /// Returns an empty string if content is not available.
 pub fn read_file_document(conn: &Connection, content_store: &dyn ContentStore, file_id: i64) -> String {
-    // 1. Inline storage (test fixtures and small files).
-    let inline: Option<String> = conn.query_row(
-        "SELECT content FROM file_content WHERE file_id = ?1",
-        params![file_id],
-        |r| r.get(0),
-    ).optional().ok().flatten();
-    if let Some(content) = inline {
-        return content;
-    }
-
-    // 2. Content-hash storage.
     let hash: Option<String> = conn.query_row(
-        "SELECT content_hash FROM files WHERE id = ?1 AND content_hash IS NOT NULL",
+        "SELECT file_hash FROM files WHERE id = ?1 AND file_hash IS NOT NULL",
         params![file_id],
         |r| r.get(0),
     ).optional().ok().flatten();
@@ -318,14 +270,14 @@ pub fn read_file_document(conn: &Connection, content_store: &dyn ContentStore, f
 // ── Source-level helpers ──────────────────────────────────────────────────────
 
 /// Delete singleton entries from the `duplicates` table.
-/// A singleton is a content_hash that appears only once — meaning the file
+/// A singleton is a file_hash that appears only once — meaning the file
 /// is no longer a duplicate after another file with the same hash was deleted.
 pub fn cleanup_singleton_duplicates(conn: &Connection) -> Result<()> {
     conn.execute(
         "DELETE FROM duplicates
-         WHERE content_hash IN (
-             SELECT content_hash FROM duplicates
-             GROUP BY content_hash HAVING COUNT(*) = 1
+         WHERE file_hash IN (
+             SELECT file_hash FROM duplicates
+             GROUP BY file_hash HAVING COUNT(*) = 1
          )",
         [],
     )?;
@@ -554,7 +506,7 @@ fn delete_one_path_simple(tx: &rusqlite::Transaction, path: &str) -> Result<()> 
         params![composite_like_prefix(path)],
     )?;
 
-    // Delete the outer file (CASCADE removes file_content, duplicates entries).
+    // Delete the outer file (CASCADE removes duplicates entries).
     tx.execute("DELETE FROM files WHERE id = ?1", params![outer_id])?;
     Ok(())
 }
@@ -563,9 +515,9 @@ fn delete_one_path_simple(tx: &rusqlite::Transaction, path: &str) -> Result<()> 
 fn cleanup_singleton_duplicates_tx(tx: &rusqlite::Transaction) -> Result<()> {
     tx.execute(
         "DELETE FROM duplicates
-         WHERE content_hash IN (
-             SELECT content_hash FROM duplicates
-             GROUP BY content_hash HAVING COUNT(*) = 1
+         WHERE file_hash IN (
+             SELECT file_hash FROM duplicates
+             GROUP BY file_hash HAVING COUNT(*) = 1
          )",
         [],
     )?;
@@ -679,17 +631,6 @@ pub fn rename_files(conn: &Connection, renames: &[PathRename]) -> Result<()> {
             params![rowid0, rename.new_path],
         )?;
 
-        // For inline content: update the first line (line 0) if it equals old_path.
-        tx.execute(
-            "UPDATE file_content SET content = ?1 || substr(content, length(?2) + 1)
-             WHERE file_id = ?3 AND content LIKE ?4",
-            params![
-                rename.new_path,
-                rename.old_path,
-                file_id,
-                format!("{}%", rename.old_path),
-            ],
-        )?;
     }
     tx.commit()?;
     Ok(())
@@ -734,7 +675,7 @@ fn resolve_file_id(conn: &Connection, path: &str) -> rusqlite::Result<Option<i64
 /// Returns every indexed line for a file, ordered by line number, plus a flag
 /// indicating whether content is pending archive processing.
 ///
-/// `content_unavailable` is `true` when the file has a content_hash but the
+/// `content_unavailable` is `true` when the file has a file_hash but the
 /// content store does not yet contain that blob — i.e. phase 1 is done but
 /// the archive worker has not yet run.
 ///
@@ -749,14 +690,14 @@ pub fn get_file_lines(
     };
 
     let file_info: Option<(Option<i64>, Option<String>)> = conn.query_row(
-        "SELECT line_count, content_hash FROM files WHERE id = ?1",
+        "SELECT line_count, file_hash FROM files WHERE id = ?1",
         params![file_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     ).optional()?;
-    let (line_count, content_hash) = file_info.unwrap_or((None, None));
+    let (line_count, file_hash) = file_info.unwrap_or((None, None));
     let line_count = line_count.unwrap_or(0);
 
-    let content_unavailable = content_unavailable(conn, content_store, file_id, &content_hash);
+    let content_unavailable = content_unavailable(conn, content_store, file_id, &file_hash);
 
     let lines: Vec<ContextLine> = (0..line_count)
         .filter_map(|ln| {
@@ -790,15 +731,15 @@ pub fn get_file_lines_paged(
     };
 
     let file_info: Option<(Option<i64>, Option<String>)> = conn.query_row(
-        "SELECT line_count, content_hash FROM files WHERE id = ?1",
+        "SELECT line_count, file_hash FROM files WHERE id = ?1",
         params![file_id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     ).optional()?;
-    let (line_count, content_hash) = file_info.unwrap_or((None, None));
+    let (line_count, file_hash) = file_info.unwrap_or((None, None));
     let line_count = line_count.unwrap_or(0) as usize;
     let total_count = line_count.saturating_sub(LINE_CONTENT_START);
 
-    let content_unavail = content_unavailable(conn, content_store, file_id, &content_hash);
+    let content_unavail = content_unavailable(conn, content_store, file_id, &file_hash);
 
     // Lines 0 (path) and 1 (metadata) always included.
     let mut lines: Vec<ContextLine> = Vec::new();
@@ -892,25 +833,16 @@ fn get_line_context(
     Ok(lines)
 }
 
-/// Returns `true` when the file has a `content_hash` but neither inline
-/// content nor an entry in the content store — i.e. archive phase is pending.
+/// Returns `true` when the file has a `file_hash` but the content store does
+/// not yet contain that blob — i.e. phase 1 is done but the archive worker
+/// has not yet run.
 fn content_unavailable(
-    conn: &Connection,
+    _conn: &Connection,
     content_store: &dyn ContentStore,
-    file_id: i64,
-    content_hash: &Option<String>,
+    _file_id: i64,
+    file_hash: &Option<String>,
 ) -> bool {
-    let is_inline = conn
-        .query_row(
-            "SELECT COUNT(*) FROM file_content WHERE file_id = ?1",
-            params![file_id],
-            |r| r.get::<_, i64>(0),
-        )
-        .unwrap_or(0) > 0;
-    if is_inline {
-        return false;
-    }
-    let Some(ref hash) = content_hash else { return false; };
+    let Some(ref hash) = file_hash else { return false; };
     let key = ContentKey::new(hash.as_str());
     !content_store.contains(&key).unwrap_or(false)
 }
@@ -926,12 +858,12 @@ mod tests {
     fn test_conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
-        conn.execute_batch(include_str!("../schema_v3.sql")).unwrap();
+        conn.execute_batch(include_str!("../schema_v4.sql")).unwrap();
         register_scalar_functions(&conn).unwrap();
         conn
     }
 
-    /// Insert a plain-text file using inline storage (v3 schema).
+    /// Insert a plain-text file with FTS entries.
     /// `lines[0]` is the path (line_number = 0); subsequent entries are content lines.
     /// Returns the `file_id`.
     fn insert_file(conn: &Connection, path: &str, mtime: i64, lines: &[&str]) -> i64 {
@@ -940,12 +872,6 @@ mod tests {
             params![path, mtime, lines.len() as i64],
         ).unwrap();
         let file_id = conn.last_insert_rowid();
-
-        let content = lines.join("\n");
-        conn.execute(
-            "INSERT INTO file_content (file_id, content) VALUES (?1, ?2)",
-            params![file_id, content],
-        ).unwrap();
 
         for (i, &line) in lines.iter().enumerate() {
             let rowid = crate::db::encode_fts_rowid(file_id, i as i64);

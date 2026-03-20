@@ -173,6 +173,27 @@ pub fn is_binary_ext_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Returns true if `path` has an extension that is known to block `File::open`
+/// indefinitely on Windows (live disk images held open by Hyper-V / QEMU).
+///
+/// Use this — rather than `is_binary_ext_path` — as the guard before calling
+/// `hash_file`, so that media files (jpg, mp3, etc.) are still hashed even
+/// though they are binary from a text-extraction perspective.
+pub fn is_open_blocking_ext_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .map(is_open_blocking_ext)
+        .unwrap_or(false)
+}
+
+fn is_open_blocking_ext(ext: &str) -> bool {
+    matches!(
+        ext.to_lowercase().as_str(),
+        "vmdk" | "vhd" | "vhdx" | "vdi" | "qcow2" | "ova"
+        | "iso" | "dmg" | "img" | "bin"
+    )
+}
+
 fn is_binary_ext(ext: &str) -> bool {
     matches!(
         ext.to_lowercase().as_str(),
