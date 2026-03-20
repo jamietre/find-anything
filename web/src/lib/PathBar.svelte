@@ -66,19 +66,19 @@
 	function copyPath() {
 		const text = fullPath;
 		if (navigator.clipboard) {
-			navigator.clipboard.writeText(text).then(() => showCopied()).catch(() => fallbackCopy(text));
+			navigator.clipboard.writeText(text).then(() => showCopied()).catch(() => fallbackCopy(text, showCopied));
 		} else {
-			fallbackCopy(text);
+			fallbackCopy(text, showCopied);
 		}
 	}
-	function fallbackCopy(text: string) {
+	function fallbackCopy(text: string, done: () => void) {
 		const ta = document.createElement('textarea');
 		ta.value = text;
 		ta.style.cssText = 'position:fixed;opacity:0';
 		document.body.appendChild(ta);
 		ta.focus();
 		ta.select();
-		try { document.execCommand('copy'); showCopied(); } finally { document.body.removeChild(ta); }
+		try { document.execCommand('copy'); done(); } finally { document.body.removeChild(ta); }
 	}
 	function showCopied() {
 		copied = true;
@@ -93,13 +93,12 @@
 		try {
 			const resp = await createLink(source, path, archivePath);
 			const url = window.location.origin + resp.url;
+			const showLinkCopied = () => { linkCopied = true; setTimeout(() => (linkCopied = false), 2000); };
 			if (navigator.clipboard) {
-				await navigator.clipboard.writeText(url).catch(() => fallbackCopy(url));
+				await navigator.clipboard.writeText(url).then(() => showLinkCopied()).catch(() => fallbackCopy(url, showLinkCopied));
 			} else {
-				fallbackCopy(url);
+				fallbackCopy(url, showLinkCopied);
 			}
-			linkCopied = true;
-			setTimeout(() => (linkCopied = false), 2000);
 		} catch {
 			// silently ignore
 		} finally {
@@ -120,7 +119,7 @@
 				<button class="seg seg--link" on:click={() => handleSegmentClick(seg)}>{seg.label}</button>
 			{/if}
 		{/each}
-		<button class="copy-btn" class:copied on:click={copyPath} title={copied ? '' : 'Copy path'}>
+		<button class="copy-btn" class:copied on:click={copyPath} data-tooltip="Copy path">
 			{#if copied}
 				<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
 					<polyline points="2,7 5,10 11,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
@@ -133,7 +132,7 @@
 				</svg>
 			{/if}
 		</button>
-		<button class="copy-btn" class:copied={linkCopied} on:click={shareLink} title={linkCopied ? '' : 'Copy share link'} disabled={linkBusy}>
+		<button class="copy-btn" class:copied={linkCopied} on:click={shareLink} data-tooltip="Copy share link" disabled={linkBusy}>
 			{#if linkCopied}
 				<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
 					<polyline points="2,7 5,10 11,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
@@ -248,6 +247,29 @@
 		gap: 4px;
 		border-radius: 3px;
 		transition: color 0.15s;
+		position: relative;
+	}
+
+	.copy-btn[data-tooltip]:not(.copied)::after {
+		content: attr(data-tooltip);
+		position: absolute;
+		bottom: calc(100% + 4px);
+		right: 0;
+		white-space: nowrap;
+		background: var(--bg-secondary);
+		border: 1px solid var(--border);
+		color: var(--text-muted);
+		padding: 2px 6px;
+		border-radius: 3px;
+		font-size: 11px;
+		font-family: var(--font-mono);
+		opacity: 0;
+		pointer-events: none;
+		transition: opacity 0.1s;
+	}
+
+	.copy-btn[data-tooltip]:not(.copied):hover::after {
+		opacity: 1;
 	}
 
 	.copy-btn:hover {

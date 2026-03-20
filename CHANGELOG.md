@@ -9,6 +9,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- **PathBar copy buttons** — clicking "Copy share link" no longer also triggers the "Copied" state on the "Copy path" button; `fallbackCopy` now takes a callback instead of hardcoding `showCopied()`
+- **PathBar tooltip positioning** — replaced native `title` attribute (which positioned the tooltip far from the cursor in flex layouts) with a CSS `::after` pseudo-element tooltip that appears above the button, right-aligned to its edge
+
 ### Added
 
 - **Test coverage improvement (plans 084–085)** — extensive unit and integration tests across the codebase, raising line coverage from ~65% toward ~78%:
