@@ -227,7 +227,7 @@
 		metaLines = [];
 		duplicatePaths = [];
 		for (const s of data.metadata) {
-			if (s === compositePath) continue;
+			if (!s || s === compositePath) continue;
 			if (s.startsWith('[')) {
 				metaLines.push({ content: s });
 			} else {
@@ -236,7 +236,7 @@
 		}
 		// Also include duplicate_paths from the dedicated field (schema v3).
 		for (const dup of (data.duplicate_paths ?? [])) {
-			if (!duplicatePaths.includes(dup)) duplicatePaths.push(dup);
+			if (dup && !duplicatePaths.includes(dup)) duplicatePaths.push(dup);
 		}
 
 		lineOffsets = data.line_offsets && data.line_offsets.length > 0
@@ -265,7 +265,7 @@
 		metaLines = [];
 		duplicatePaths = [];
 		for (const s of data.metadata) {
-			if (s === compositePath) continue;
+			if (!s || s === compositePath) continue;
 			if (s.startsWith('[')) {
 				metaLines.push({ content: s });
 			} else {
@@ -274,7 +274,7 @@
 		}
 		// Also include duplicate_paths from the dedicated field (schema v3).
 		for (const dup of (data.duplicate_paths ?? [])) {
-			if (!duplicatePaths.includes(dup)) duplicatePaths.push(dup);
+			if (dup && !duplicatePaths.includes(dup)) duplicatePaths.push(dup);
 		}
 		if (isInitial) {
 			isEncrypted = fileKind === 'pdf' && data.lines.length === 1 && data.lines[0] === 'Content encrypted';

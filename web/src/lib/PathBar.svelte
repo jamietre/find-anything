@@ -266,6 +266,7 @@
 		opacity: 0;
 		pointer-events: none;
 		transition: opacity 0.1s;
+		z-index: 100;
 	}
 
 	.copy-btn[data-tooltip]:not(.copied):hover::after {

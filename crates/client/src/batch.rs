@@ -8,6 +8,38 @@ use find_common::api::{BulkRequest, FileKind, IndexFile, IndexingFailure, IndexL
 
 use crate::api::ApiClient;
 
+/// Ensure the metadata slot (line 1) is present, inserting an empty placeholder if needed.
+///
+/// The server stores inline content as a `'\n'`-joined string indexed by position:
+/// line 0 = path, line 1 = metadata, line 2+ = content.  A gap at line 1 would
+/// shift all subsequent content lines down by one and corrupt positional reads.
+/// Normalise a member's line list for submission:
+/// - clears `archive_path` on every line (redundant once the path is composite),
+/// - replaces the extractor's `LINE_PATH` marker with one using `composite_path`,
+/// - ensures the `LINE_METADATA` slot is present.
+fn prepare_member_lines(lines: &mut Vec<IndexLine>, composite_path: &str) {
+    for l in lines.iter_mut() {
+        l.archive_path = None;
+    }
+    lines.retain(|l| l.line_number != LINE_PATH);
+    lines.push(IndexLine {
+        archive_path: None,
+        line_number: LINE_PATH,
+        content: format!("[PATH] {}", composite_path),
+    });
+    ensure_metadata_slot(lines);
+}
+
+fn ensure_metadata_slot(lines: &mut Vec<IndexLine>) {
+    if !lines.iter().any(|l| l.line_number == LINE_METADATA) {
+        lines.push(IndexLine {
+            archive_path: None,
+            line_number: LINE_METADATA,
+            content: String::new(),
+        });
+    }
+}
+
 /// Convert extracted lines for one filesystem file into one or more IndexFiles.
 ///
 /// For non-archive files: one IndexFile with path = rel_path.
@@ -32,14 +64,7 @@ pub fn build_index_files(
             line_number: LINE_PATH,
             content: format!("[PATH] {}", rel_path),
         });
-        // Guarantee the metadata slot is always present (maintains dense line numbering).
-        if !all_lines.iter().any(|l| l.line_number == LINE_METADATA) {
-            all_lines.push(IndexLine {
-                archive_path: None,
-                line_number: LINE_METADATA,
-                content: String::new(),
-            });
-        }
+        ensure_metadata_slot(&mut all_lines);
         return vec![IndexFile { path: rel_path, mtime, size: Some(size), kind, lines: all_lines, extract_ms: None, content_hash: None, scanner_version: SCANNER_VERSION, is_new: false }];
     }
 
@@ -63,13 +88,7 @@ pub fn build_index_files(
         line_number: LINE_PATH,
         content: format!("[PATH] {}", rel_path),
     });
-    if !outer_lines.iter().any(|l| l.line_number == LINE_METADATA) {
-        outer_lines.push(IndexLine {
-            archive_path: None,
-            line_number: LINE_METADATA,
-            content: String::new(),
-        });
-    }
+    ensure_metadata_slot(&mut outer_lines);
     result.push(IndexFile {
         path: rel_path.clone(),
         mtime,
@@ -85,26 +104,7 @@ pub fn build_index_files(
     // One IndexFile per archive member, with composite path "zip::member".
     for (member, mut content_lines) in member_groups {
         let composite_path = format!("{}::{}", rel_path, member);
-        // Strip archive_path from individual lines (redundant now that path is composite).
-        for l in &mut content_lines {
-            l.archive_path = None;
-        }
-        // Remove the extractor's filename line (LINE_PATH only); keep metadata lines (LINE_METADATA).
-        content_lines.retain(|l| l.line_number != LINE_PATH);
-        // Add a LINE_PATH entry so the member is findable by name.
-        content_lines.push(IndexLine {
-            archive_path: None,
-            line_number: LINE_PATH,
-            content: format!("[PATH] {}", composite_path),
-        });
-        // Guarantee the metadata slot is always present.
-        if !content_lines.iter().any(|l| l.line_number == LINE_METADATA) {
-            content_lines.push(IndexLine {
-                archive_path: None,
-                line_number: LINE_METADATA,
-                content: String::new(),
-            });
-        }
+        prepare_member_lines(&mut content_lines, &composite_path);
         // Detect the member's actual kind from its filename extension.
         let ext = Path::new(&member)
             .extension()
@@ -154,24 +154,7 @@ pub fn build_member_index_files(
     let mut result = Vec::new();
     for (member, mut lines) in groups {
         let composite_path = format!("{}::{}", outer_path, member);
-        for l in &mut lines {
-            l.archive_path = None;
-        }
-        // Remove only the extractor's LINE_PATH filename marker; metadata at LINE_METADATA is kept.
-        lines.retain(|l| l.line_number != LINE_PATH);
-        lines.push(IndexLine {
-            archive_path: None,
-            line_number: LINE_PATH,
-            content: format!("[PATH] {}", composite_path),
-        });
-        // Guarantee the metadata slot is always present.
-        if !lines.iter().any(|l| l.line_number == LINE_METADATA) {
-            lines.push(IndexLine {
-                archive_path: None,
-                line_number: LINE_METADATA,
-                content: String::new(),
-            });
-        }
+        prepare_member_lines(&mut lines, &composite_path);
         let ext = Path::new(&member)
             .extension()
             .and_then(|e| e.to_str())

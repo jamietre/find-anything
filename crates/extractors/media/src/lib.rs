@@ -32,7 +32,7 @@ pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexL
     } else if is_audio_ext(&ext) {
         extract_audio(path, &path.to_string_lossy())
     } else if is_video_ext(&ext) {
-        extract_video(path)
+        extract_video(path, &path.to_string_lossy())
     } else {
         Ok(vec![])
     }
@@ -57,6 +57,9 @@ pub fn extract_from_bytes(bytes: &[u8], entry_name: &str, cfg: &ExtractorConfig)
     // original member name rather than an opaque temp-file path.
     if is_audio_ext(ext) {
         return extract_audio(tmp.path(), entry_name);
+    }
+    if is_video_ext(ext) {
+        return extract_video(tmp.path(), entry_name);
     }
     extract(tmp.path(), cfg)
 }
@@ -458,13 +461,13 @@ thread_local! {
         std::cell::RefCell::new(nom_exif::MediaParser::new());
 }
 
-fn extract_video(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
+fn extract_video(path: &Path, label: &str) -> anyhow::Result<Vec<IndexLine>> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
 
     match ext.as_str() {
         // nom-exif handles ISOBMFF and Matroska natively, with seek-based I/O.
         "mp4" | "m4v" | "mov" | "3gp" | "mkv" | "webm" | "mka" => {
-            extract_video_nom_exif(path, &ext)
+            extract_video_nom_exif(path, &ext, label)
         }
         // Other formats: detect container from magic bytes, emit format line only.
         _ => extract_video_header_only(path),
@@ -472,7 +475,7 @@ fn extract_video(path: &Path) -> anyhow::Result<Vec<IndexLine>> {
 }
 
 /// Parse video metadata using nom-exif (seek-based, no full-file read).
-fn extract_video_nom_exif(path: &Path, ext: &str) -> anyhow::Result<Vec<IndexLine>> {
+fn extract_video_nom_exif(path: &Path, ext: &str, label: &str) -> anyhow::Result<Vec<IndexLine>> {
     use nom_exif::{MediaSource, TrackInfo, TrackInfoTag};
 
     let ms = match MediaSource::file_path(path) {
@@ -484,12 +487,13 @@ fn extract_video_nom_exif(path: &Path, ext: &str) -> anyhow::Result<Vec<IndexLin
         return Ok(vec![make_meta_line(ext)]);
     }
 
-    let info: Option<TrackInfo> = MEDIA_PARSER.with(|p| {
-        p.borrow_mut().parse(ms).ok()
-    });
-
-    let Some(info) = info else {
-        return Ok(vec![make_meta_line(ext)]);
+    let parse_result = MEDIA_PARSER.with(|p| p.borrow_mut().parse(ms));
+    let info: TrackInfo = match parse_result {
+        Ok(info) => info,
+        Err(e) => {
+            warn!("nom_exif parse failed for '{}': {e}", label);
+            return Ok(vec![make_meta_line(ext)]);
+        }
     };
 
     let mut parts = vec![video_part("format", ext)];
