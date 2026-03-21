@@ -66,6 +66,7 @@
 		width: 300px;
 		height: 100%;
 		overflow-y: auto;
+		overflow-x: hidden;
 		padding: 12px 16px;
 		font-family: var(--font-mono);
 		font-size: 12px;
@@ -73,6 +74,8 @@
 		background: var(--bg-secondary);
 		border-left: 1px solid var(--border, rgba(255, 255, 255, 0.1));
 		box-sizing: border-box;
+		overflow-wrap: break-word;
+		word-break: break-all;
 	}
 
 	@media (max-width: 768px) {

@@ -5,11 +5,6 @@ Stream of consciousness for bugfixes and features approaching V1
 ## Bugs/Enhancements
 
 
-[ ] FEAT: Mobile friendly layout
-   - no tree
-   - Favor only filename in search results
-   
-[ ] BUG: pictures/2014/Jamie Phone 2014/20140410_074302.jpg - no metadata available - why?
 [ ] FEAT: Guard against low disk space
 [ ] FEAT: Render SVG by default
 [ ] CHORE: address clippy too_many_arguments issues
@@ -51,6 +46,8 @@ use the content
 
 ### Completed Items
 
+[x] FEAT: Mobile friendly layou
+[x] BUG: pictures/2014/Jamie Phone 2014/20140410_074302.jpg - no metadata available - why?
 [x] BUG: back arrow browser navigation doesn't work at all
 [x] BUG: backups/FromMomMac/FromMomMac.zip::FromMomMac/Library/Mail/V7/079E825E-CEF8-46FA-813A-F63AAB5350AC/[Gmail].mbox/All Mail.mbox/95F6C28D-53E9-4B54-BF8E-0B058ABFAFAF/Data/3/4/5/Attachments/543053/1/Christmas Letter 2016.rtfd/Monhegan Lighthouse Dory 2005.tif can't be shown. [Note: this is a jpeg file with a tiff extension; added magic byte detection]
 [x] Regular download button should be available in archives too

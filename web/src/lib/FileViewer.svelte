@@ -65,7 +65,7 @@
 	$: if (preferOriginal !== _prevPreferOriginal) {
 		_prevPreferOriginal = preferOriginal;
 		if (fileKind !== null) {
-			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
+			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal) || isSvg;
 		}
 	}
 	// Parsed image dimensions for the aspect-ratio loading placeholder.
@@ -96,7 +96,8 @@
 	);
 	// Images, PDFs, videos, and audio can be shown inline when the file is directly accessible
 	// or is a member of a ZIP archive.
-	$: canViewInline = canServeArchiveMember && (fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted) || fileKind === 'video' || fileKind === 'audio');
+	$: isSvg = /\.svgz?$/i.test(archivePath ?? path);
+	$: canViewInline = canServeArchiveMember && (fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted) || fileKind === 'video' || fileKind === 'audio' || isSvg);
 	// For images the browser can't render natively, request server-side PNG conversion.
 	// Check the member's own extension for archive members.
 	const BROWSER_IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','svg','svgz','avif','bmp','ico']);
@@ -323,7 +324,7 @@
 		indexingError = data.indexing_error ?? null;
 		isEncrypted = fileKind === 'pdf' && data.lines.length === 1 && data.lines[0] === 'Content encrypted';
 		if (isInitial) {
-			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
+			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal) || isSvg;
 		}
 	}
 
@@ -350,7 +351,7 @@
 		}
 		if (isInitial) {
 			isEncrypted = fileKind === 'pdf' && data.lines.length === 1 && data.lines[0] === 'Content encrypted';
-			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal);
+			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal) || isSvg;
 		}
 	}
 
@@ -552,6 +553,10 @@
 				<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}>
 					{showOriginal ? 'View Extracted' : 'View Original'}
 				</button>
+			{:else if isSvg && canViewInline}
+				<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}>
+					{showOriginal ? 'View Source' : 'View SVG'}
+				</button>
 			{/if}
 			{#if canDownloadMember}
 				<button class="toolbar-btn download-btn" on:click={() => triggerDownload(rawInlineUrl, memberFileName)}>Download</button>
@@ -601,7 +606,11 @@
 			</div>
 		{/if}
 		{#if showOriginal && canViewInline}
-			{#if fileKind === 'image'}
+			{#if isSvg}
+				<div class="svg-viewer-panel">
+					<img src={rawInlineUrl} alt="" class="svg-img" />
+				</div>
+			{:else if fileKind === 'image'}
 				<div class="image-viewer-panel">
 					<DirectImageViewer src={rawInlineUrl} />
 					<MetaDrawer initialOpen={false}>
@@ -963,6 +972,23 @@
 	.sentinel-btn:hover {
 		color: var(--text);
 		background: var(--bg-hover);
+	}
+
+	.svg-viewer-panel {
+		flex: 1;
+		min-height: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 24px;
+		overflow: auto;
+		background: var(--bg);
+	}
+
+	.svg-img {
+		max-width: 100%;
+		max-height: 100%;
+		object-fit: contain;
 	}
 
 	.image-viewer-panel {

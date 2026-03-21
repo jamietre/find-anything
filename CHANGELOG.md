@@ -14,6 +14,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Mobile support (plan 089)** — responsive layout for narrow screens and mobile browsers: logo collapses to "fa", search input takes the full first row, Advanced filters moves below the search row with a sliders icon, tree sidebar and resize handle are hidden, "Open in Explorer" button and the related Preferences section are hidden, download buttons are hidden; PathBar splits into two rows (back/source on row 1, path on row 2); FileViewer toolbar metadata left-aligns on mobile; AdvancedSearch opens as a full-screen scrollable modal on mobile; Settings page uses an accordion layout instead of a fixed left nav; search results show filename on row 1 and kind/size/date on row 2; image EXIF metadata stacks below the preview
 - **AdvancedSearch panel scrolls on desktop** — panel is now capped at `calc(100vh - 80px)` with an internal scroll area (`panel-body`) so filters are reachable even on short viewports; Apply/Clear footer stays pinned at the bottom; scrollbar styled to match the dark theme
 - **Word Wrap button hidden for media** — the Wrap toolbar button is no longer shown when viewing images, video, audio, or a PDF in its original renderer
+- **SVG inline viewer** — `.svg`/`.svgz` files now render inline by default with a "View Source / View SVG" toggle; no EXIF drawer (SVG has no metadata); source view shows the XML content as before
+- **Index size / Content size in Stats** — stats page and `find-admin stats` output now show "Index size" (source DBs) and "Content size" (blobs.db) as prominent cards; removed the confusing "1 content file(s)" label
+- **MetaDrawer wraps long values** — hex strings and other long values in the EXIF drawer now wrap rather than causing horizontal scroll
 
 ### Added
 

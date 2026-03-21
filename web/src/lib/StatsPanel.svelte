@@ -193,9 +193,14 @@
 
 		<!-- Global metrics (shown once, not per-source) -->
 		<div class="global-metrics">
-			<span>{stats.content_file_count.toLocaleString()} content file{stats.content_file_count !== 1 ? 's' : ''}</span>
-			<span title="SQLite database size">DB: {fmtSize(stats.db_size_bytes)}</span>
-			<span title="Content store size">Content: {fmtSize(stats.content_size_bytes)}</span>
+			<div class="card card-global" title="Source index databases">
+				<div class="card-value">{fmtSize(stats.db_size_bytes)}</div>
+				<div class="card-label">index size</div>
+			</div>
+			<div class="card card-global" title="Content store (blobs.db)">
+				<div class="card-value">{fmtSize(stats.content_size_bytes)}</div>
+				<div class="card-label">content size</div>
+			</div>
 			{#if stats.inbox_pending > 0}
 				<span class="pending">{stats.inbox_pending} pending</span>
 			{/if}
@@ -393,10 +398,20 @@
 	/* Global metrics strip */
 	.global-metrics {
 		display: flex;
-		gap: 16px;
+		gap: 12px;
+		align-items: center;
 		font-size: 12px;
 		color: var(--text-muted);
 		margin-bottom: 16px;
+	}
+
+	.card-global {
+		flex: none;
+		padding: 8px 12px;
+	}
+
+	.card-global .card-value {
+		font-size: 15px;
 	}
 
 	.pending {

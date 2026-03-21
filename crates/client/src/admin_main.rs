@@ -527,8 +527,8 @@ fn format_status(stats: &find_common::api::StatsResponse) -> String {
         writeln!(out, "Inbox:    {} pending, {} failed, {} awaiting write",
             stats.inbox_pending, stats.failed_requests, stats.archive_queue).unwrap();
     }
-    writeln!(out, "Content:  {} file(s) ({})", stats.content_file_count, format_bytes(stats.content_size_bytes)).unwrap();
-    writeln!(out, "DB size:  {}", format_bytes(stats.db_size_bytes)).unwrap();
+    writeln!(out, "Index size:   {}", format_bytes(stats.db_size_bytes)).unwrap();
+    writeln!(out, "Content size: {}", format_bytes(stats.content_size_bytes)).unwrap();
     match (stats.orphaned_bytes, stats.orphaned_stats_age_secs) {
         (Some(orphaned), Some(age)) => {
             let pct = if stats.content_size_bytes > 0 {
@@ -578,8 +578,8 @@ fn format_stream_status(event: &find_common::api::StatsStreamEvent) -> String {
         writeln!(out, "Inbox:    {} pending, {} failed, {} awaiting write",
             event.inbox_pending, event.failed_requests, event.archive_queue).unwrap();
     }
-    writeln!(out, "Content:  {} file(s) ({})", event.content_file_count, format_bytes(event.content_size_bytes)).unwrap();
-    writeln!(out, "DB size:  {}", format_bytes(event.db_size_bytes)).unwrap();
+    writeln!(out, "Index size:   {}", format_bytes(event.db_size_bytes)).unwrap();
+    writeln!(out, "Content size: {}", format_bytes(event.content_size_bytes)).unwrap();
     match (event.orphaned_bytes, event.orphaned_stats_age_secs) {
         (Some(orphaned), Some(age)) => {
             let pct = if event.content_size_bytes > 0 {
