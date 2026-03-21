@@ -247,6 +247,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/v1/upload",        post(routes::upload_init))
         .route("/api/v1/upload/{id}",   patch(routes::upload_patch))
         .route("/api/v1/upload/{id}",   head(routes::upload_status))
+        .layer(DefaultBodyLimit::disable())
         .with_state(Arc::clone(&state));
 
     let app = Router::new()

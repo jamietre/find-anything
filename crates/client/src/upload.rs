@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 use crate::api::ApiClient;
-use find_common::api::UploadInitResponse;
+use find_common::api::{UploadInitResponse, UploadScanHints};
 
 const CHUNK_SIZE: usize = 4 * 1024 * 1024; // 4 MB
 
@@ -24,6 +24,7 @@ pub async fn upload_file(
     rel_path: &str,
     mtime: i64,
     source_name: &str,
+    scan_hints: UploadScanHints,
 ) -> Result<()> {
     let meta = abs_path.metadata().context("stat file for upload")?;
     let total_size = meta.len();
@@ -32,7 +33,7 @@ pub async fn upload_file(
 
     // Initiate the upload.
     let init_resp: UploadInitResponse = api
-        .upload_init(source_name, rel_path, mtime, total_size)
+        .upload_init(source_name, rel_path, mtime, total_size, scan_hints)
         .await
         .context("initiating upload")?;
     let upload_id = init_resp.upload_id;

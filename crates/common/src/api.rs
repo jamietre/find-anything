@@ -772,6 +772,27 @@ pub struct ResolveLinkResponse {
 
 // ── Upload API types ───────────────────────────────────────────────────────────
 
+/// Client-side scan settings forwarded with an upload request so the server
+/// can reproduce the same extraction behaviour for archive member filtering.
+///
+/// Only filter/limit settings are forwarded; process-oriented settings
+/// (timeouts, extractor paths) are owned by the server's `[scan]` config.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UploadScanHints {
+    /// Exclude glob patterns (replaces server defaults if non-empty).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+    /// Additive extra exclude patterns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude_extra: Vec<String>,
+    /// Include glob patterns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include: Vec<String>,
+    /// Overrides the server's `[scan] max_content_size_mb` when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_content_size_mb: Option<u64>,
+}
+
 /// `POST /api/v1/upload` request body — initiates a resumable file upload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UploadInitRequest {
@@ -783,6 +804,9 @@ pub struct UploadInitRequest {
     pub mtime: i64,
     /// Total file size in bytes.
     pub size: u64,
+    /// Client scan settings forwarded for archive member filtering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_hints: Option<UploadScanHints>,
 }
 
 /// `POST /api/v1/upload` response.

@@ -10,7 +10,7 @@ use find_common::api::{
     InboxDeleteResponse, InboxPauseResponse, InboxResumeResponse, InboxRetryResponse,
     InboxShowResponse, InboxStatusResponse, RecentFile, RecentResponse, SearchResponse,
     SourceDeleteResponse, SourceInfo, StatsResponse, StatsStreamEvent, UploadInitRequest,
-    UploadInitResponse, UploadPatchResponse, UploadStatusResponse,
+    UploadInitResponse, UploadPatchResponse, UploadScanHints, UploadStatusResponse,
 };
 
 pub struct ApiClient {
@@ -395,12 +395,14 @@ impl ApiClient {
         rel_path: &str,
         mtime: i64,
         size: u64,
+        scan_hints: UploadScanHints,
     ) -> Result<UploadInitResponse> {
         let req = UploadInitRequest {
             source: source.to_string(),
             rel_path: rel_path.to_string(),
             mtime,
             size,
+            scan_hints: Some(scan_hints),
         };
         self.client
             .post(self.url("/api/v1/upload"))

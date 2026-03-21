@@ -20,7 +20,6 @@ struct ClientDefaults {
 struct ScanDefaults {
     exclude: Vec<String>,
     max_content_size_mb: u64,
-    max_line_length: usize,
     noindex_file: String,
     index_file: String,
     subprocess_timeout_secs: u64,
@@ -177,13 +176,6 @@ pub struct ScanConfig {
     #[serde(default)]
     pub archives: ArchiveConfig,
 
-    /// Maximum line length (in characters) for PDF text extraction.
-    /// Lines longer than this are split at word boundaries so that context
-    /// retrieval returns meaningful snippets.
-    /// Set to 0 to disable wrapping. Default: 120.
-    #[serde(default = "default_max_line_length")]
-    pub max_line_length: usize,
-
     /// Name of the marker file that signals a directory (and all descendants)
     /// should be excluded from indexing. Default: ".noindex".
     #[serde(default = "default_noindex_file")]
@@ -251,7 +243,6 @@ impl Default for ScanConfig {
             follow_symlinks: false,
             include_hidden: false,
             archives: ArchiveConfig::default(),
-            max_line_length: default_max_line_length(),
             noindex_file: default_noindex_file(),
             index_file: default_index_file(),
             dir_include: None,
@@ -299,9 +290,6 @@ impl ScanConfig {
         if let Some(v) = ov.follow_symlinks {
             result.follow_symlinks = v;
         }
-        if let Some(v) = ov.max_line_length {
-            result.max_line_length = v;
-        }
         if let Some(arch_ov) = &ov.archives {
             if let Some(v) = arch_ov.enabled {
                 result.archives.enabled = v;
@@ -334,7 +322,6 @@ pub struct ScanOverride {
     pub include_hidden: Option<bool>,
     pub follow_symlinks: Option<bool>,
     pub archives: Option<ArchiveOverride>,
-    pub max_line_length: Option<usize>,
 }
 
 /// Archive-specific fields for a `ScanOverride`.
@@ -472,7 +459,6 @@ fn default_batch_window_secs() -> f64       { client_defaults().watch.batch_wind
 fn default_scan_interval_hours() -> f64     { client_defaults().watch.scan_interval_hours }
 fn default_excludes() -> Vec<String>         { client_defaults().scan.exclude.clone() }
 fn default_max_content_size_mb() -> u64      { client_defaults().scan.max_content_size_mb }
-fn default_max_line_length() -> usize        { client_defaults().scan.max_line_length }
 fn default_noindex_file() -> String          { client_defaults().scan.noindex_file.clone() }
 fn default_index_file() -> String            { client_defaults().scan.index_file.clone() }
 fn default_subprocess_timeout_secs() -> u64  { client_defaults().scan.subprocess_timeout_secs }
@@ -511,7 +497,7 @@ pub fn extractor_config_from_scan(scan: &ScanConfig) -> ExtractorConfig {
     ExtractorConfig {
         max_content_kb: scan.max_content_size_mb as usize * 1024,
         max_depth: scan.archives.max_depth,
-        max_line_length: scan.max_line_length,
+        max_line_length: 0, // line wrapping is a server normalization concern
         max_temp_file_mb: scan.archives.max_temp_file_mb,
         include_hidden: scan.include_hidden,
         max_7z_solid_block_mb: scan.archives.max_7z_solid_block_mb,
@@ -589,6 +575,8 @@ impl Default for StorageConfig {
 pub struct ServerAppConfig {
     pub server: ServerAppSettings,
     #[serde(default)]
+    pub scan: ServerScanConfig,
+    #[serde(default)]
     pub search: SearchSettings,
     #[serde(default)]
     pub extraction: ExtractionSettings,
@@ -606,6 +594,33 @@ pub struct ServerAppConfig {
     #[serde(default)]
     pub sources: std::collections::HashMap<String, ServerSourceConfig>,
 }
+
+/// Server-side scan execution settings — process-oriented concerns only.
+/// Filter/pattern settings (exclude, include) come from the client and are
+/// forwarded per-upload in `UploadInitRequest`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerScanConfig {
+    /// Maximum seconds a single extractor subprocess may run before being
+    /// killed and recorded as a failure. Default: 600 (10 minutes).
+    #[serde(default = "default_server_subprocess_timeout_secs")]
+    pub subprocess_timeout_secs: u64,
+    /// Maximum content size in MB to extract per file.
+    /// Can be overridden per-upload by the client's value. Default: 100.
+    #[serde(default = "default_server_max_content_size_mb")]
+    pub max_content_size_mb: u64,
+}
+
+impl Default for ServerScanConfig {
+    fn default() -> Self {
+        Self {
+            subprocess_timeout_secs: default_server_subprocess_timeout_secs(),
+            max_content_size_mb: default_server_max_content_size_mb(),
+        }
+    }
+}
+
+fn default_server_subprocess_timeout_secs() -> u64 { 600 }
+fn default_server_max_content_size_mb() -> u64 { 100 }
 
 /// Configuration for share link generation.
 #[derive(Debug, Clone, Serialize, Deserialize)]

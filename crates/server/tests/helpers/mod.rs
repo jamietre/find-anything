@@ -28,16 +28,18 @@ impl TestServer {
         let data_dir = tempfile::TempDir::new().expect("tempdir");
         let data_path = data_dir.path().to_str().unwrap().to_string();
 
+        // Bind first so we know the actual port before building the config.
+        // This lets index_upload derive the correct server URL from the bind address.
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+
         let config_toml = format!(
-            "[server]\ndata_dir = \"{data_path}\"\ntoken = \"{TEST_TOKEN}\"\n{extra}"
+            "[server]\ndata_dir = \"{data_path}\"\ntoken = \"{TEST_TOKEN}\"\nbind = \"{addr}\"\n{extra}"
         );
         let (config, _) = parse_server_config(&config_toml).expect("parse config");
 
         let state = create_app_state(config).await.expect("create_app_state");
         let app = build_router(state);
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
-        let addr = listener.local_addr().expect("local_addr");
 
         tokio::spawn(async move {
             axum::serve(

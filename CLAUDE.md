@@ -172,6 +172,42 @@ bound.) Results are grouped server-side into virtual directory nodes and file
 nodes. Only immediate children of the prefix are returned; the UI lazy-loads
 subdirectories on expand.
 
+### find-upload → find-scan delegation (plan 088)
+
+`find-upload` sends files to the server as chunked PATCH uploads. When the
+final chunk arrives, the server delegates extraction to `find-scan` rather than
+running extractors inline:
+
+1. Server creates a UUID temp dir (`$TMPDIR/find-upload-<uuid>/`) and places
+   the file at `<temp_root>/<rel_path>`.
+2. Server writes a minimal `<temp_root>.toml` with the source name, temp root
+   path, and scan settings (`subprocess_timeout_secs`, `max_content_size_mb`,
+   `include`/`exclude`/`exclude_extra` from the client's `UploadScanHints`).
+3. Server spawns `find-scan --config <temp.toml> <abs_path>` and awaits completion.
+4. find-scan submits the result via the normal `/api/v1/bulk` path — no
+   special-casing needed on the server.
+5. A Drop guard cleans up the temp dir and TOML unconditionally on exit.
+
+**Config responsibility split:**
+- `subprocess_timeout_secs` and `max_content_size_mb` come from the server's
+  `[scan]` config block (`ServerScanConfig`) — never from the client.
+- `include`, `exclude`, `exclude_extra` are forwarded from the client via
+  `UploadScanHints` (a subset of `ScanConfig`).
+- `max_line_length` is a **server normalization concern** (owned by
+  `NormalizationSettings`) — it was removed from the client `ScanConfig` entirely
+  and is not passed to find-scan at all.
+
+**Key structs:**
+- `UploadScanHints` (`crates/common/src/api.rs`) — client→server boundary;
+  carries `exclude`, `exclude_extra`, `include`, `max_content_size_mb`.
+- `ServerScanConfig` (`crates/common/src/config.rs`) — server's `[scan]` block;
+  holds `subprocess_timeout_secs` (default 600) and `max_content_size_mb` (default 100).
+- `UploadMeta` (`crates/server/src/upload.rs`) — sidecar JSON stored alongside
+  each `.part` file; now includes `scan_hints: Option<UploadScanHints>`.
+
+**Upload routes body limit:** `upload_routes` uses `.layer(DefaultBodyLimit::disable())`
+so large file chunks (>2 MB) are accepted without 413 errors.
+
 ### Key invariants and non-obvious details
 
 - **`line_number = 0`** is always the file's own relative path, indexed so
@@ -231,8 +267,11 @@ subdirectories on expand.
 | `crates/server/src/db.rs` | All SQLite operations |
 | `crates/server/src/routes.rs` | HTTP route handlers (reads + bulk write) |
 | `crates/server/src/schema_v2.sql` | DB schema |
+| `crates/server/src/upload.rs` | Upload state management + find-scan delegation |
+| `crates/server/src/routes/upload.rs` | Upload HTTP route handlers (POST/PATCH/HEAD) |
 | `crates/client/src/scan.rs` | Filesystem walk, extraction, batch submission |
 | `crates/client/src/api.rs` | HTTP client (one method per endpoint) |
+| `crates/client/src/upload.rs` | Chunked upload implementation |
 | `web/src/lib/api.ts` | TypeScript API client |
 | `web/src/routes/+page.svelte` | Main page — view state machine |
 

@@ -13,7 +13,6 @@
 
 [scan]
 max_content_size_mb     = 10
-max_line_length         = 120
 follow_symlinks         = false
 include_hidden          = false
 noindex_file            = ".noindex"

@@ -9,7 +9,7 @@ use globset::GlobSet;
 use tracing::{info, warn};
 
 use find_common::{
-    api::{FileKind, IndexFile, IndexLine, IndexingFailure, SCANNER_VERSION, LINE_METADATA, LINE_CONTENT_START},
+    api::{FileKind, IndexFile, IndexLine, IndexingFailure, UploadScanHints, SCANNER_VERSION, LINE_METADATA, LINE_CONTENT_START},
     config::{extractor_config_from_scan, load_dir_override, ExternalExtractorMode, ScanConfig},
     path::is_composite,
 };
@@ -377,6 +377,15 @@ impl<'a> ScanContext<'a> {
     }
 }
 
+fn hints_from_scan(scan: &ScanConfig) -> UploadScanHints {
+    UploadScanHints {
+        exclude: scan.exclude.clone(),
+        exclude_extra: scan.exclude_extra.clone(),
+        include: vec![],
+        max_content_size_mb: Some(scan.max_content_size_mb),
+    }
+}
+
 /// Bundled parameters for `push_non_archive_files` — groups the per-file
 /// extraction results so the function signature stays under the argument limit.
 pub struct ExtractedFile {
@@ -507,7 +516,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                         }
                         subprocess::ExternalOutcome::Failed(e) => {
                             if eff_scan.server_fallback {
-                                if let Err(upload_err) = upload::upload_file(ctx.api, abs_path, rel_path, mtime, ctx.source_name).await {
+                                if let Err(upload_err) = upload::upload_file(ctx.api, abs_path, rel_path, mtime, ctx.source_name, hints_from_scan(&eff_scan)).await {
                                     warn!("server fallback upload failed for {rel_path}: {upload_err:#}");
                                 } else {
                                     return Ok(true);
@@ -519,7 +528,10 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                                     error: truncate_error(&e, MAX_ERROR_LEN),
                                 });
                             }
-                            vec![]
+                            // Do not upsert the file — avoids the server clearing the
+                            // indexing error via the successfully_indexed path.
+                            // The file retains its prior server state so next scan retries it.
+                            return Ok(true);
                         }
                     };
 
@@ -577,7 +589,15 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                                     error: truncate_error(&e, MAX_ERROR_LEN),
                                 });
                             }
-                            vec![]
+                            // Skip the completion upsert below — the start sentinel
+                            // (mtime=0) remains on the server, so the next scan will
+                            // detect a mtime mismatch and re-index this file.
+                            // Skipping also prevents the server from clearing the
+                            // indexing error via the successfully_indexed path.
+                            if !ctx.batch.is_empty() {
+                                ctx.submit(vec![]).await?;
+                            }
+                            return Ok(true);
                         }
                     };
 
@@ -751,7 +771,7 @@ async fn process_file(ctx: &mut ScanContext<'_>, rel_path: &str, abs_path: &Path
                 }
                 subprocess::SubprocessOutcome::Failed => {
                     if eff_scan.server_fallback {
-                        if let Err(e) = upload::upload_file(ctx.api, abs_path, rel_path, mtime, ctx.source_name).await {
+                        if let Err(e) = upload::upload_file(ctx.api, abs_path, rel_path, mtime, ctx.source_name, hints_from_scan(&eff_scan)).await {
                             warn!("server fallback upload failed for {rel_path}: {e:#}");
                             // Fall through: index filename-only so file appears in search.
                         } else {

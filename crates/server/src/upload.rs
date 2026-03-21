@@ -1,26 +1,24 @@
-/// Server-side file upload state management and extraction.
+/// Server-side file upload state management and find-scan delegation.
 ///
 /// Files are received as chunked uploads (via PATCH requests) and assembled
 /// into `.part` files in `data_dir/uploads/`. A companion `.meta` JSON file
-/// records source, path, mtime, and total size.
+/// records source, path, mtime, total size, and client scan hints.
 ///
-/// When all bytes are received, the server runs the appropriate extractor
-/// subprocess and writes the resulting BulkRequest to the inbox directory so
-/// the normal inbox worker can process it.
+/// When all bytes are received, the server places the file under a unique temp
+/// directory, writes a minimal client.toml, and invokes `find-scan` to handle
+/// extraction using its full pipeline (correct timeouts, TempDir mode, archive
+/// members, file_hash). find-scan submits the result through the normal bulk
+/// path; no special-casing is needed on the server.
 ///
 /// A background cleanup task removes stale uploads (no activity for 2 hours).
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use anyhow::{Context, Result};
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
-use find_common::api::{BulkRequest, IndexFile, IndexLine, LINE_PATH, LINE_METADATA};
-use find_common::config::ExtractorConfig;
-use find_common::subprocess::extract_lines_via_subprocess;
+use find_common::api::UploadScanHints;
+use find_common::config::ServerScanConfig;
 
 /// Sidecar metadata file for an in-progress upload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -30,6 +28,9 @@ pub struct UploadMeta {
     pub mtime: i64,
     pub total_size: u64,
     pub created_at: i64,
+    /// Client scan hints forwarded from the upload init request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scan_hints: Option<UploadScanHints>,
 }
 
 pub fn uploads_dir(data_dir: &Path) -> PathBuf {
@@ -70,109 +71,136 @@ pub fn part_size(uploads: &Path, id: &str) -> u64 {
 /// Touch the `.meta` file so the cleanup task can track activity.
 pub fn touch_meta(uploads: &Path, id: &str) {
     let path = meta_path(uploads, id);
-    // Update mtime by writing the file again (cross-platform).
     if let Ok(content) = std::fs::read(&path) {
         let _ = std::fs::write(&path, content);
     }
 }
 
-/// Extract the uploaded file and write results to the inbox.
+/// Delegate extraction of an uploaded file to `find-scan`.
 ///
-/// Called after the final PATCH chunk is received.
+/// Called after the final PATCH chunk is received. Creates a unique temp
+/// directory, places the file at its relative path within it, writes a
+/// minimal client.toml, and spawns find-scan. Cleans up temp files on exit.
 pub async fn index_upload(
     id: String,
     meta: UploadMeta,
     data_dir: PathBuf,
-    extractor_dir: Option<String>,
-    ext_cfg: ExtractorConfig,
+    server_url: String,
+    token: String,
+    server_scan: ServerScanConfig,
 ) {
     let uploads = uploads_dir(&data_dir);
-    let file_path = part_path(&uploads, &id);
-    let inbox_dir = data_dir.join("inbox");
+    let part = part_path(&uploads, &id);
 
-    info!(
-        "server-side extraction: {} ({} → {})",
-        id, file_path.display(), meta.rel_path
-    );
-
-    // Run the appropriate extractor subprocess.
-    let mut lines =
-        extract_lines_via_subprocess(&file_path, &ext_cfg, &extractor_dir).await;
-
-    // Always include the filename at line 0 so the file is discoverable by name.
-    if lines.iter().all(|l| l.line_number != LINE_PATH) {
-        lines.insert(
-            0,
-            IndexLine {
-                archive_path: None,
-                line_number: LINE_PATH,
-                content: meta.rel_path.clone(),
-            },
-        );
-    }
-    // Guarantee the metadata slot is always present.
-    if lines.iter().all(|l| l.line_number != LINE_METADATA) {
-        lines.push(IndexLine {
-            archive_path: None,
-            line_number: LINE_METADATA,
-            content: String::new(),
-        });
+    let result = run_index_upload(&id, &meta, &part, &server_url, &token, &server_scan).await;
+    if let Err(e) = result {
+        warn!("upload {id} extraction failed: {e:#}");
     }
 
-    let now = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-
-    let file_size = file_path.metadata().ok().map(|m| m.len() as i64);
-    let kind = find_common::api::FileKind::from_extension(
-        std::path::Path::new(&meta.rel_path)
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or(""),
-    );
-
-    let req = BulkRequest {
-        source: meta.source.clone(),
-        files: vec![IndexFile {
-            path: meta.rel_path.clone(),
-            mtime: meta.mtime,
-            size: file_size,
-            kind,
-            lines,
-            extract_ms: None,
-            file_hash: None,
-            scanner_version: find_common::api::SCANNER_VERSION,
-            is_new: false,
-        }],
-        delete_paths: vec![],
-        scan_timestamp: Some(now),
-        indexing_failures: vec![],
-        rename_paths: vec![],
-    };
-
-    // Gzip-compress and write to inbox so the normal worker processes it.
-    if let Err(e) = write_to_inbox(&req, &inbox_dir) {
-        warn!("failed to write upload {id} to inbox: {e:#}");
-    } else {
-        info!("upload {id} written to inbox for {}", meta.rel_path);
-    }
-
-    // Clean up upload files.
-    let _ = std::fs::remove_file(&file_path);
+    // Always clean up the .part and .meta files.
+    let _ = std::fs::remove_file(&part);
     let _ = std::fs::remove_file(meta_path(&uploads, &id));
 }
 
-/// Write a `BulkRequest` as a gzip-compressed JSON file in `inbox_dir`.
-fn write_to_inbox(req: &BulkRequest, inbox_dir: &Path) -> Result<()> {
-    let id = uuid::Uuid::new_v4().to_string();
-    let path = inbox_dir.join(format!("{id}.gz"));
+async fn run_index_upload(
+    id: &str,
+    meta: &UploadMeta,
+    part: &Path,
+    server_url: &str,
+    token: &str,
+    server_scan: &ServerScanConfig,
+) -> Result<()> {
+    let hints = meta.scan_hints.as_ref();
+    let max_content_size_mb = hints
+        .and_then(|h| h.max_content_size_mb)
+        .unwrap_or(server_scan.max_content_size_mb);
 
-    let file = std::fs::File::create(&path).context("creating inbox file")?;
-    let mut encoder = GzEncoder::new(file, Compression::default());
-    serde_json::to_writer(&mut encoder, req).context("serializing BulkRequest")?;
-    encoder.finish().context("finishing gzip")?;
+    // ── 1. Create a unique temp root ─────────────────────────────────────────
+    let temp_root = std::env::temp_dir().join(format!("find-upload-{id}"));
+    std::fs::create_dir_all(&temp_root)
+        .with_context(|| format!("creating temp dir {}", temp_root.display()))?;
+
+    // Ensure cleanup runs even if we bail out early.
+    let temp_toml = temp_root.with_extension("toml");
+    struct Cleanup(PathBuf, PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_file(&self.1);
+        }
+    }
+    let _cleanup = Cleanup(temp_root.clone(), temp_toml.clone());
+
+    // ── 2. Place file at <temp_root>/<rel_path> ───────────────────────────────
+    let dest = temp_root.join(&meta.rel_path);
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("creating parent dirs for {}", dest.display()))?;
+    }
+    std::fs::rename(part, &dest)
+        .or_else(|_| std::fs::copy(part, &dest).map(|_| ()))
+        .with_context(|| format!("placing upload file at {}", dest.display()))?;
+
+    // ── 3. Write temp client.toml ─────────────────────────────────────────────
+    let exclude_toml = toml_string_array(hints.map(|h| h.exclude.as_slice()).unwrap_or(&[]));
+    let exclude_extra_toml = toml_string_array(hints.map(|h| h.exclude_extra.as_slice()).unwrap_or(&[]));
+
+    let include_toml = toml_string_array(hints.map(|h| h.include.as_slice()).unwrap_or(&[]));
+
+    let toml = format!(
+        "[server]\nurl = \"{server_url}\"\ntoken = \"{token}\"\n\n\
+         [[sources]]\nname = \"{}\"\npath = \"{}\"\ninclude = {include_toml}\n\n\
+         [scan]\nsubprocess_timeout_secs = {}\nmax_content_size_mb = {}\n\
+         exclude = {exclude_toml}\nexclude_extra = {exclude_extra_toml}\n",
+        meta.source,
+        temp_root.display(),
+        server_scan.subprocess_timeout_secs,
+        max_content_size_mb,
+    );
+
+    std::fs::write(&temp_toml, &toml)
+        .with_context(|| format!("writing temp config {}", temp_toml.display()))?;
+
+    // ── 4. Resolve find-scan binary ───────────────────────────────────────────
+    let find_scan = resolve_find_scan();
+
+    // ── 5. Spawn find-scan and await ──────────────────────────────────────────
+    info!("upload {id}: running find-scan for {}", meta.rel_path);
+    let status = tokio::process::Command::new(&find_scan)
+        .arg("--config")
+        .arg(&temp_toml)
+        .arg(&dest)
+        .status()
+        .await
+        .with_context(|| format!("spawning {find_scan}"))?;
+
+    if !status.success() {
+        warn!("upload {id}: find-scan exited {:?} for {}", status.code(), meta.rel_path);
+    } else {
+        info!("upload {id}: find-scan completed for {}", meta.rel_path);
+    }
+
     Ok(())
+    // _cleanup drops here, removing temp_root and temp_toml
+}
+
+/// Resolve the path to the `find-scan` binary: same dir as current exe, then PATH.
+fn resolve_find_scan() -> String {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("find-scan");
+            if candidate.exists() {
+                return candidate.to_string_lossy().into_owned();
+            }
+        }
+    }
+    "find-scan".to_string()
+}
+
+/// Render a `&[String]` as a TOML inline array: `["a", "b"]`.
+fn toml_string_array(items: &[String]) -> String {
+    let inner: Vec<String> = items.iter().map(|s| format!("\"{s}\"")).collect();
+    format!("[{}]", inner.join(", "))
 }
 
 /// Background task: remove stale upload files (no activity for 2 hours).
@@ -207,7 +235,6 @@ pub async fn start_cleanup_task(data_dir: PathBuf) {
             let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
             if ext == "meta" {
-                // Check if the meta file is stale.
                 let is_stale = path
                     .metadata()
                     .and_then(|m| m.modified())
@@ -228,7 +255,6 @@ pub async fn start_cleanup_task(data_dir: PathBuf) {
                     let _ = std::fs::remove_file(&part);
                 }
             } else if ext == "part" {
-                // Orphan .part without a .meta — remove it.
                 let stem = path
                     .file_stem()
                     .and_then(|s| s.to_str())

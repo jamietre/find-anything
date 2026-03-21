@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
+use chrono::{Local, NaiveDate, NaiveDateTime, TimeZone};
 use find_common::config::{default_config_path, parse_client_config};
 use find_common::logging::LogIgnoreFilter;
 use scan::{ScanOptions, ScanSource};
@@ -33,11 +34,13 @@ struct Args {
 
     /// Force re-index of all files regardless of mtime or scanner version.
     /// Useful after changing normalizer/formatter config.
-    /// Optionally supply the epoch (Unix seconds) printed at the start of a
-    /// prior interrupted run to resume it; files with indexed_at >= EPOCH are
-    /// skipped. If omitted, uses the current time and prints the epoch so you
-    /// can resume if the run is interrupted.
-    #[arg(long, value_name = "EPOCH", num_args = 0..=1, default_missing_value = "now")]
+    /// Optionally supply a timestamp to resume an interrupted run; files with
+    /// indexed_at >= TIMESTAMP are skipped (already done). Accepts a Unix epoch
+    /// (seconds), a date ("2026-03-20"), or a local datetime ("2026-03-20T18:46:38"
+    /// or "2026-03-20 18:46:38"). Date-only values use midnight local time.
+    /// If omitted, uses the current time and prints the epoch so you can resume
+    /// if the run is interrupted.
+    #[arg(long, value_name = "TIME", num_args = 0..=1, default_missing_value = "now")]
     force: Option<String>,
 
     /// Suppress per-file processing logs (only log warnings, errors, and summary)
@@ -57,6 +60,48 @@ struct Args {
     /// For a directory: all files under it are re-indexed (mtime is ignored).
     #[arg(value_name = "PATH")]
     path: Option<PathBuf>,
+}
+
+/// Parse a `--force` timestamp value into a Unix epoch (seconds).
+///
+/// Accepts:
+/// - Unix epoch integer: `1742486798`
+/// - Date only (local midnight): `2026-03-20`
+/// - Local datetime (space or T separator): `2026-03-20 18:46:38` / `2026-03-20T18:46:38`
+fn parse_force_timestamp(s: &str) -> anyhow::Result<i64> {
+    // Try plain integer epoch first.
+    if let Ok(epoch) = s.parse::<i64>() {
+        return Ok(epoch);
+    }
+
+    // Try datetime with T separator, then space separator.
+    let fmts_dt = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"];
+    for fmt in &fmts_dt {
+        if let Ok(ndt) = NaiveDateTime::parse_from_str(s, fmt) {
+            return local_to_epoch(ndt);
+        }
+    }
+
+    // Try date-only (treat as start of day in local timezone).
+    if let Ok(nd) = NaiveDate::parse_from_str(s, "%Y-%m-%d") {
+        return local_to_epoch(nd.and_hms_opt(0, 0, 0).unwrap());
+    }
+
+    anyhow::bail!("unrecognised timestamp format")
+}
+
+fn epoch_to_human(epoch: i64) -> String {
+    Local.timestamp_opt(epoch, 0)
+        .single()
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+        .unwrap_or_else(|| epoch.to_string())
+}
+
+fn local_to_epoch(ndt: NaiveDateTime) -> anyhow::Result<i64> {
+    Local.from_local_datetime(&ndt)
+        .single()
+        .map(|dt| dt.timestamp())
+        .ok_or_else(|| anyhow::anyhow!("ambiguous or invalid local time (near DST transition)"))
 }
 
 #[tokio::main]
@@ -95,7 +140,8 @@ async fn main() -> Result<()> {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs() as i64;
-            eprintln!("Force re-index started (epoch {epoch}).");
+            let human = epoch_to_human(epoch);
+            eprintln!("Force re-index started at {human}.");
             eprintln!("If interrupted, resume with: find-scan --force {epoch}");
             tokio::spawn(async move {
                 if tokio::signal::ctrl_c().await.is_ok() {
@@ -106,8 +152,10 @@ async fn main() -> Result<()> {
             Some(epoch)
         }
         Some(s) => {
-            let epoch: i64 = s.parse().context("--force value must be a Unix timestamp in seconds")?;
-            eprintln!("Resuming force re-index from epoch {epoch}.");
+            let epoch = parse_force_timestamp(s)
+                .with_context(|| format!("--force value {s:?} is not a recognised timestamp (try a Unix epoch, \"2026-03-20\", \"2026-03-20T18:46:38\", or \"2026-03-20 18:46:38\")"))?;
+            let human = epoch_to_human(epoch);
+            eprintln!("Resuming force re-index from {human}.");
             Some(epoch)
         }
     };

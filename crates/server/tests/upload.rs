@@ -15,6 +15,7 @@ async fn init_upload(srv: &TestServer, source: &str, rel_path: &str, size: u64) 
             rel_path: rel_path.to_string(),
             mtime: 1_700_000_000,
             size,
+            scan_hints: None,
         })
         .send()
         .await
@@ -202,6 +203,7 @@ async fn upload_init_requires_auth() {
             rel_path: "secret.txt".to_string(),
             mtime: 0,
             size: 0,
+            scan_hints: None,
         })
         .send()
         .await

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
 
+use find_common::api::UploadScanHints;
 use find_common::config::{default_config_path, parse_client_config};
 
 #[derive(Parser)]
@@ -68,9 +69,16 @@ async fn main() -> Result<()> {
     let client = api::ApiClient::new(&config.server.url, &config.server.token);
     client.check_server_version().await?;
 
+    let scan_hints = UploadScanHints {
+        exclude: config.scan.exclude.clone(),
+        exclude_extra: config.scan.exclude_extra.clone(),
+        include: vec![],
+        max_content_size_mb: Some(config.scan.max_content_size_mb),
+    };
+
     eprintln!("Uploading {} as {rel_path} into source '{}'", abs_path.display(), args.source);
 
-    upload::upload_file(&client, &abs_path, &rel_path, mtime, &args.source)
+    upload::upload_file(&client, &abs_path, &rel_path, mtime, &args.source, scan_hints)
         .await
         .context("upload failed")?;
 

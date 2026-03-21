@@ -11,7 +11,6 @@ use tracing::warn;
 use uuid::Uuid;
 
 use find_common::api::{UploadInitRequest, UploadInitResponse, UploadPatchResponse, UploadStatusResponse};
-use find_common::config::extractor_config_from_extraction;
 
 use crate::upload::{index_upload, part_path, part_size, read_meta, touch_meta, uploads_dir, write_meta, UploadMeta};
 use crate::AppState;
@@ -45,6 +44,7 @@ pub async fn upload_init(
         mtime: req.mtime,
         total_size: req.size,
         created_at: now,
+        scan_hints: req.scan_hints,
     };
 
     if let Err(e) = write_meta(&uploads, &id, &meta) {
@@ -114,15 +114,16 @@ pub async fn upload_patch(
     let received = part_size(&uploads, &id);
     touch_meta(&uploads, &id);
 
-    // If fully received, trigger extraction asynchronously.
+    // If fully received, delegate extraction to find-scan asynchronously.
     if received >= meta.total_size {
         let data_dir = state.data_dir.clone();
-        let extractor_dir = state.config.server.extractor_dir.clone();
-        let ext_cfg = extractor_config_from_extraction(&state.config.extraction);
+        let server_url = format!("http://127.0.0.1:{}", port_from_bind(&state.config.server.bind));
+        let token = state.config.server.token.clone();
+        let server_scan = state.config.scan.clone();
         let meta_clone = meta.clone();
         let id_clone = id.clone();
         tokio::spawn(async move {
-            index_upload(id_clone, meta_clone, data_dir, extractor_dir, ext_cfg).await;
+            index_upload(id_clone, meta_clone, data_dir, server_url, token, server_scan).await;
         });
     }
 
@@ -158,6 +159,11 @@ pub async fn upload_status(
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Extract the port number from a bind address like "0.0.0.0:8765" or ":8765".
+fn port_from_bind(bind: &str) -> &str {
+    bind.rsplit_once(':').map(|(_, port)| port).unwrap_or("8765")
+}
 
 fn append_bytes(path: &std::path::Path, data: &[u8]) -> anyhow::Result<()> {
     use std::io::Write;

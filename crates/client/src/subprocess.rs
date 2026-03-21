@@ -458,7 +458,7 @@ pub async fn extract_via_subprocess(
     let binary = binary.to_string();
     let max_content_kb = (scan.max_content_size_mb * 1024).to_string();
     let max_depth = scan.archives.max_depth.to_string();
-    let max_line_length = scan.max_line_length.to_string();
+    let max_line_length = "0".to_string(); // line wrapping is a server normalization concern
 
     let ext = abs_path
         .extension()
@@ -560,7 +560,7 @@ pub fn start_archive_subprocess(
     let binary = binary.to_string();
     let max_content_kb = (scan.max_content_size_mb * 1024).to_string();
     let max_depth = scan.archives.max_depth.to_string();
-    let max_line_length = scan.max_line_length.to_string();
+    let max_line_length = "0".to_string(); // line wrapping is a server normalization concern
 
     let exclude_patterns_json = if scan.exclude.is_empty() {
         String::new()

@@ -9,6 +9,21 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **Plan 088 — find-upload delegates to find-scan** — uploaded files are now extracted by spawning `find-scan` against a temporary source directory, giving `find-upload` full extraction parity with the regular scan pipeline (archive members, PDF text, image EXIF, correct timeouts); the server no longer has its own inline extractor for uploads; new `ServerScanConfig` (`[scan]` block in `server.toml`) controls `subprocess_timeout_secs` and `max_content_size_mb`; `UploadScanHints` struct carries `include`/`exclude`/`exclude_extra`/`max_content_size_mb` from client to server; `find-upload` binary added to deployment scripts
+- **`--force` accepts human-readable timestamps** — `find-scan --force` now accepts ISO date (`YYYY-MM-DD`), local datetime (`YYYY-MM-DDTHH:MM:SS` / `YYYY-MM-DD HH:MM:SS`), or Unix epoch in addition to plain epoch integers; confirmation messages display the time in human-readable local format
+- **Integration tests for indexing error flow** — `crates/server/tests/indexing_errors.rs` covers recording failures, clearing errors on successful re-index, failure-survives-completion-upsert invariant, error count increment, and delete cleanup
+
+### Fixed
+
+- **Upload chunk 413 Payload Too Large** — `upload_routes` now uses `DefaultBodyLimit::disable()` so large file chunks (previously capped at Axum's 2 MB default) are accepted without error
+- **Indexing errors cleared by completion upsert** — `find-scan` no longer sends a completion upsert after a subprocess extraction failure (stdout/TempDir paths), preventing the server from treating the error as resolved
+
+### Changed
+
+- **`max_line_length` removed from client `ScanConfig`** — line wrapping is a server normalization concern (`NormalizationSettings`); clients no longer configure or forward this value; `find-scan` subprocesses receive `0` (disabled) for line length
+
 ### Changed
 
 - **Duplicate paths — universal accordion bar** — duplicate file paths are now shown in a dedicated bar below the toolbar for all file types (images, audio, video, text, PDFs); single duplicate is shown inline; 2+ use a collapsible accordion with an SVG triangle chevron; removed per-viewer duplicate display from `ImageViewer`, `AudioViewer`, and `VideoViewer`
