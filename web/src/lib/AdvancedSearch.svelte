@@ -139,8 +139,16 @@
 		class="trigger"
 		class:active={anyFilter}
 		on:click={() => (isOpen ? (isOpen = false) : openPanel())}
+		title="Advanced filters"
 	>
-		<span class="icon">⚙</span>
+		<svg class="filter-icon" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+			<line x1="1.5" y1="3.5" x2="13.5" y2="3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+			<line x1="1.5" y1="7.5" x2="13.5" y2="7.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+			<line x1="1.5" y1="11.5" x2="13.5" y2="11.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+			<circle cx="4.5" cy="3.5" r="1.5" fill="var(--bg-secondary)" stroke="currentColor" stroke-width="1.4"/>
+			<circle cx="10" cy="7.5" r="1.5" fill="var(--bg-secondary)" stroke="currentColor" stroke-width="1.4"/>
+			<circle cx="6" cy="11.5" r="1.5" fill="var(--bg-secondary)" stroke="currentColor" stroke-width="1.4"/>
+		</svg>
 		<span class="text">Advanced</span>
 		{#if anyFilter}
 			<span class="badge">{filterCount}</span>
@@ -150,125 +158,136 @@
 
 	{#if isOpen}
 		<div class="panel">
-			{#if sources.length > 0}
+			<div class="panel-mobile-header">
+				<span class="panel-mobile-title">Filters</span>
+				<button class="panel-mobile-close" on:click={() => (isOpen = false)} aria-label="Close filters">
+					<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+						<line x1="3" y1="3" x2="13" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+						<line x1="13" y1="3" x2="3" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+					</svg>
+				</button>
+			</div>
+			<div class="panel-body">
+				{#if sources.length > 0}
+					<div class="section">
+						<div class="section-header">
+							<span class="section-title">Sources</span>
+							{#if draftSources.length > 0 && draftSources.length < sources.length}
+								<button class="clear-link" on:click={() => (draftSources = [])}>All</button>
+							{/if}
+						</div>
+						<div class="source-list">
+							{#each sources as source}
+								<label class="source-item">
+									<input
+										type="checkbox"
+										checked={draftSources.includes(source)}
+										on:change={() => toggleDraftSource(source)}
+									/>
+									<span class="source-name">{source}</span>
+								</label>
+							{/each}
+						</div>
+					</div>
+				{/if}
+
 				<div class="section">
 					<div class="section-header">
-						<span class="section-title">Sources</span>
-						{#if draftSources.length > 0 && draftSources.length < sources.length}
-							<button class="clear-link" on:click={() => (draftSources = [])}>All</button>
+						<span class="section-title">File type</span>
+						{#if draftKinds.length > 0}
+							<button class="clear-link" on:click={() => (draftKinds = [])}>All</button>
 						{/if}
 					</div>
-					<div class="source-list">
-						{#each sources as source}
-							<label class="source-item">
+					<div class="kind-grid">
+						{#each KIND_OPTIONS as opt}
+							<label class="kind-item">
 								<input
 									type="checkbox"
-									checked={draftSources.includes(source)}
-									on:change={() => toggleDraftSource(source)}
+									checked={draftKinds.includes(opt.value)}
+									on:change={() => toggleDraftKind(opt.value)}
 								/>
-								<span class="source-name">{source}</span>
+								<span class="kind-label">{opt.label}</span>
 							</label>
 						{/each}
 					</div>
 				</div>
-			{/if}
 
-		<div class="section">
-				<div class="section-header">
-					<span class="section-title">File type</span>
-					{#if draftKinds.length > 0}
-						<button class="clear-link" on:click={() => (draftKinds = [])}>All</button>
-					{/if}
-				</div>
-				<div class="kind-grid">
-					{#each KIND_OPTIONS as opt}
-						<label class="kind-item">
+				<div class="section">
+					<div class="section-header">
+						<span class="section-title">Date range</span>
+						{#if draftFrom || draftTo}
+							<button class="clear-link" on:click={() => { draftFrom = ''; draftTo = ''; }}>Clear</button>
+						{/if}
+					</div>
+					<div class="date-row">
+						<label class="date-label" for="adv-date-from">From</label>
+						<div class="date-wrap">
 							<input
-								type="checkbox"
-								checked={draftKinds.includes(opt.value)}
-								on:change={() => toggleDraftKind(opt.value)}
+								id="adv-date-from"
+								class="date-input"
+								class:no-value={!draftFrom}
+								type="date"
+								bind:value={draftFrom}
 							/>
-							<span class="kind-label">{opt.label}</span>
-						</label>
-					{/each}
-				</div>
-			</div>
-
-			<div class="section">
-				<div class="section-header">
-					<span class="section-title">Date range</span>
-					{#if draftFrom || draftTo}
-						<button class="clear-link" on:click={() => { draftFrom = ''; draftTo = ''; }}>Clear</button>
-					{/if}
-				</div>
-				<div class="date-row">
-					<label class="date-label" for="adv-date-from">From</label>
-					<div class="date-wrap">
-						<input
-							id="adv-date-from"
-							class="date-input"
-							class:no-value={!draftFrom}
-							type="date"
-							bind:value={draftFrom}
-						/>
-						<button class="cal-btn" tabindex="-1" on:click={showFromPicker}>📅</button>
+							<button class="cal-btn" tabindex="-1" on:click={showFromPicker}>📅</button>
+						</div>
+					</div>
+					<div class="date-row">
+						<label class="date-label" for="adv-date-to">To</label>
+						<div class="date-wrap">
+							<input
+								id="adv-date-to"
+								class="date-input"
+								class:no-value={!draftTo}
+								type="date"
+								bind:value={draftTo}
+							/>
+							<button class="cal-btn" tabindex="-1" on:click={showToPicker}>📅</button>
+						</div>
 					</div>
 				</div>
-				<div class="date-row">
-					<label class="date-label" for="adv-date-to">To</label>
-					<div class="date-wrap">
-						<input
-							id="adv-date-to"
-							class="date-input"
-							class:no-value={!draftTo}
-							type="date"
-							bind:value={draftTo}
-						/>
-						<button class="cal-btn" tabindex="-1" on:click={showToPicker}>📅</button>
+
+				<div class="section">
+					<div class="section-header">
+						<span class="section-title">Scope</span>
+					</div>
+					<div class="toggle-group">
+						{#each SCOPE_OPTIONS as opt}
+							<button
+								class="toggle-btn"
+								class:active={draftScope === opt.value}
+								on:click={() => (draftScope = opt.value)}
+								type="button"
+							>{opt.label}</button>
+						{/each}
 					</div>
 				</div>
-			</div>
 
-			<div class="section">
-				<div class="section-header">
-					<span class="section-title">Scope</span>
+				<div class="section">
+					<div class="section-header">
+						<span class="section-title">Match type</span>
+					</div>
+					<div class="toggle-group">
+						{#each MATCH_OPTIONS as opt}
+							<button
+								class="toggle-btn"
+								class:active={draftMatchType === opt.value}
+								on:click={() => (draftMatchType = opt.value)}
+								type="button"
+							>{opt.label}</button>
+						{/each}
+					</div>
 				</div>
-				<div class="toggle-group">
-					{#each SCOPE_OPTIONS as opt}
-						<button
-							class="toggle-btn"
-							class:active={draftScope === opt.value}
-							on:click={() => (draftScope = opt.value)}
-							type="button"
-						>{opt.label}</button>
-					{/each}
-				</div>
-			</div>
 
-			<div class="section">
-				<div class="section-header">
-					<span class="section-title">Match type</span>
-				</div>
-				<div class="toggle-group">
-					{#each MATCH_OPTIONS as opt}
-						<button
-							class="toggle-btn"
-							class:active={draftMatchType === opt.value}
-							on:click={() => (draftMatchType = opt.value)}
-							type="button"
-						>{opt.label}</button>
-					{/each}
+				<div class="section">
+					<label class="option-item">
+						<input type="checkbox" bind:checked={draftCaseSensitive} />
+						<span class="option-label">Case sensitive</span>
+					</label>
 				</div>
 			</div>
 
-			<div class="section">
-				<label class="option-item">
-					<input type="checkbox" bind:checked={draftCaseSensitive} />
-					<span class="option-label">Case sensitive</span>
-				</label>
-			</div>
-
-		<div class="footer">
+			<div class="footer">
 				{#if anyFilter}
 					<button class="clear-all" on:click={clearAll}>Clear all</button>
 				{/if}
@@ -309,8 +328,9 @@
 		color: #fff;
 	}
 
-	.icon {
-		font-size: 13px;
+	.filter-icon {
+		display: block;
+		flex-shrink: 0;
 	}
 
 	.text {
@@ -340,12 +360,37 @@
 		top: calc(100% + 4px);
 		right: 0;
 		min-width: 240px;
+		max-height: calc(100vh - 80px);
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
 		background: var(--bg);
 		border: 1px solid var(--border);
 		border-radius: 6px;
 		box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
 		z-index: 1000;
-		overflow: hidden;
+	}
+
+	.panel-body {
+		flex: 1;
+		overflow-y: auto;
+		overflow-x: hidden;
+		min-height: 0;
+		scrollbar-width: thin;
+		scrollbar-color: var(--border) transparent;
+	}
+
+	.panel-body::-webkit-scrollbar {
+		width: 6px;
+	}
+
+	.panel-body::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	.panel-body::-webkit-scrollbar-thumb {
+		background: var(--border);
+		border-radius: 3px;
 	}
 
 	.section {
@@ -518,6 +563,7 @@
 		padding: 8px 12px;
 		background: var(--hover-bg);
 		border-top: 1px solid var(--border);
+		flex-shrink: 0;
 	}
 
 	.clear-all {
@@ -585,5 +631,56 @@
 		border-color: var(--accent);
 		background: var(--accent);
 		color: #fff;
+	}
+
+	.panel-mobile-header { display: none; }
+
+	@media (max-width: 768px) {
+		.trigger { padding: 5px 8px; gap: 4px; }
+		.text { display: none; }
+		.chevron { display: none; }
+
+		/* Full-screen modal on mobile */
+		.advanced-search { position: static; }
+		.panel {
+			position: fixed;
+			top: 0;
+			right: 0;
+			bottom: 0;
+			left: 0;
+			min-width: 0;
+			max-height: none;
+			border-radius: 0;
+			border: none;
+			z-index: 2000;
+		}
+		.panel-mobile-header {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			padding: 12px 16px;
+			border-bottom: 1px solid var(--border);
+			background: var(--bg-secondary);
+			flex-shrink: 0;
+		}
+		.panel-mobile-title {
+			font-size: 16px;
+			font-weight: 600;
+			color: var(--text);
+		}
+		.panel-mobile-close {
+			background: none;
+			border: none;
+			color: var(--text-muted);
+			cursor: pointer;
+			padding: 6px;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			border-radius: 4px;
+			min-width: 36px;
+			min-height: 36px;
+		}
+		.panel-mobile-close:hover { color: var(--text); background: var(--bg-hover); }
 	}
 </style>

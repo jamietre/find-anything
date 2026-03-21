@@ -82,14 +82,16 @@
 </script>
 
 <div class="topbar">
-	<span class="logo">find-anything</span>
+	<span class="logo" aria-label="find-anything">
+		<span class="logo-full">find-anything</span><span class="logo-short" aria-hidden="true">fa</span>
+	</span>
 	<button
 		class="tree-toggle"
 		class:active={showTree}
 		data-tooltip="Toggle file tree"
 		on:click={() => dispatch('treeToggle')}
 	>◫</button>
-	<SearchHelp />
+	<div class="help-wrap-outer"><SearchHelp /></div>
 	<div class="search-wrap">
 		<SearchBox
 			bind:this={searchBox}
@@ -101,17 +103,19 @@
 		/>
 	</div>
 	{#if sources.length > 0}
-		<AdvancedSearch
-			{sources}
-			{selectedSources}
-			{selectedKinds}
-			{dateFrom}
-			{dateTo}
-			{caseSensitive}
-			{scope}
-			{matchType}
-			on:change={(e) => dispatch('filterChange', e.detail)}
-		/>
+		<div class="advanced-wrap">
+			<AdvancedSearch
+				{sources}
+				{selectedSources}
+				{selectedKinds}
+				{dateFrom}
+				{dateTo}
+				{caseSensitive}
+				{scope}
+				{matchType}
+				on:change={(e) => dispatch('filterChange', e.detail)}
+			/>
+		</div>
 	{/if}
 	<button class="gear-btn" on:click={() => goto('/settings')}>⚙</button>
 </div>
@@ -197,6 +201,11 @@
 		white-space: nowrap;
 		flex-shrink: 0;
 	}
+
+	.logo-short { display: none; }
+
+	.help-wrap-outer { display: contents; }
+	.advanced-wrap { display: contents; }
 
 	.search-wrap {
 		min-width: 260px;
@@ -385,5 +394,17 @@
 
 	.stale-dismiss:hover {
 		opacity: 1;
+	}
+
+	@media (max-width: 768px) {
+		.topbar { gap: 6px; padding: 6px 10px; }
+		.tree-toggle { display: none; }
+		.help-wrap-outer { display: none; }
+		.logo { order: 1; }
+		.logo-full { display: none; }
+		.logo-short { display: inline; }
+		.search-wrap { order: 2; flex: 1 1 0; min-width: 0; }
+		.advanced-wrap { order: 3; display: block; }
+		.gear-btn { order: 4; min-width: 36px; min-height: 36px; display: flex; align-items: center; justify-content: center; }
 	}
 </style>

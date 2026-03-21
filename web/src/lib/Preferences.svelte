@@ -109,6 +109,7 @@
 	</div>
 </div>
 
+<div class="explorer-section">
 <div class="section-title" style="margin-top: 24px;">Open in Explorer</div>
 {#if !$profile.handlerInstalled}
 <div class="section-desc">
@@ -156,6 +157,7 @@
 </div>
 {/each}
 {/if}
+</div>
 
 <style>
 	.section-title {
@@ -284,5 +286,9 @@
 	.handler-hint {
 		font-size: 12px;
 		color: var(--text-dim);
+	}
+
+	@media (max-width: 768px) {
+		.explorer-section { display: none; }
 	}
 </style>

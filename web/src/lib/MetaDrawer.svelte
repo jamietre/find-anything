@@ -17,7 +17,7 @@
 			{/if}
 		</svg>
 	</button>
-	<div class="drawer-content" class:drawer-open={open}>
+	<div class="drawer-content drawer-always-open" class:drawer-open={open}>
 		<div class="drawer-inner">
 			<slot />
 		</div>
@@ -73,5 +73,23 @@
 		background: var(--bg-secondary);
 		border-left: 1px solid var(--border, rgba(255, 255, 255, 0.1));
 		box-sizing: border-box;
+	}
+
+	@media (max-width: 768px) {
+		.meta-drawer { flex-direction: column; }
+		.drawer-toggle { display: none; }
+		/* Always show content on mobile regardless of toggle state */
+		.drawer-content.drawer-always-open {
+			width: auto !important;
+			overflow: visible;
+			border-top: 1px solid var(--border);
+		}
+		.drawer-inner {
+			width: auto;
+			height: auto;
+			overflow-y: auto;
+			max-height: 40vh;
+			border-left: none;
+		}
 	}
 </style>

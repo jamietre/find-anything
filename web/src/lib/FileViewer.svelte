@@ -533,9 +533,11 @@
 			on:reload={reload}
 		/>
 		<div class="toolbar">
+			{#if !(showOriginal && canViewInline) && fileKind !== 'image' && fileKind !== 'video' && fileKind !== 'audio'}
 			<button class="toolbar-btn" on:click={toggleWordWrap}>
 				{wordWrap ? '⊟' : '⊞'} Wrap
 			</button>
+		{/if}
 			{#if isMarkdown && !markdownTooLarge}
 				<button class="toolbar-btn" on:click={toggleMarkdownFormat} title="Toggle markdown formatting">
 					{markdownFormat ? 'Plain' : 'Formatted'}
@@ -552,15 +554,15 @@
 				</button>
 			{/if}
 			{#if canDownloadMember}
-				<button class="toolbar-btn" on:click={() => triggerDownload(rawInlineUrl, memberFileName)}>Download</button>
-				<button class="toolbar-btn" on:click={() => triggerDownload(rawUrl, fileName)}>Download Archive</button>
+				<button class="toolbar-btn download-btn" on:click={() => triggerDownload(rawInlineUrl, memberFileName)}>Download</button>
+				<button class="toolbar-btn download-btn" on:click={() => triggerDownload(rawUrl, fileName)}>Download Archive</button>
 			{:else}
-				<button class="toolbar-btn" on:click={() => triggerDownload(rawUrl, fileName)}>
+				<button class="toolbar-btn download-btn" on:click={() => triggerDownload(rawUrl, fileName)}>
 					{isArchiveMember || fileKind === 'archive' ? 'Download Archive' : 'Download'}
 				</button>
 			{/if}
 			{#if canOpenInExplorer}
-				<button class="toolbar-btn" style={explorerLaunching ? 'cursor: progress' : ''} on:click={openInExplorer}>Open in Explorer</button>
+				<button class="toolbar-btn explorer-btn" style={explorerLaunching ? 'cursor: progress' : ''} on:click={openInExplorer}>Open in Explorer</button>
 			{/if}
 			<div class="metadata">
 				{#if fileKind && fileKind !== 'raw'}
@@ -993,5 +995,17 @@
 		color: var(--text-dim);
 		font-size: 13px;
 		text-align: center;
+	}
+
+	@media (max-width: 768px) {
+		.download-btn { display: none; }
+		.explorer-btn { display: none; }
+		.toolbar { flex-wrap: wrap; }
+		.metadata { margin-left: 0; }
+		.image-viewer-panel {
+			flex-direction: column;
+			overflow-y: auto;
+			flex: none;
+		}
 	}
 </style>

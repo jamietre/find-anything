@@ -11,6 +11,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **Mobile support (plan 089)** — responsive layout for narrow screens and mobile browsers: logo collapses to "fa", search input takes the full first row, Advanced filters moves below the search row with a sliders icon, tree sidebar and resize handle are hidden, "Open in Explorer" button and the related Preferences section are hidden, download buttons are hidden; PathBar splits into two rows (back/source on row 1, path on row 2); FileViewer toolbar metadata left-aligns on mobile; AdvancedSearch opens as a full-screen scrollable modal on mobile; Settings page uses an accordion layout instead of a fixed left nav; search results show filename on row 1 and kind/size/date on row 2; image EXIF metadata stacks below the preview
+- **AdvancedSearch panel scrolls on desktop** — panel is now capped at `calc(100vh - 80px)` with an internal scroll area (`panel-body`) so filters are reachable even on short viewports; Apply/Clear footer stays pinned at the bottom; scrollbar styled to match the dark theme
+- **Word Wrap button hidden for media** — the Wrap toolbar button is no longer shown when viewing images, video, audio, or a PDF in its original renderer
+
+### Added
+
 - **Plan 088 — find-upload delegates to find-scan** — uploaded files are now extracted by spawning `find-scan` against a temporary source directory, giving `find-upload` full extraction parity with the regular scan pipeline (archive members, PDF text, image EXIF, correct timeouts); the server no longer has its own inline extractor for uploads; new `ServerScanConfig` (`[scan]` block in `server.toml`) controls `subprocess_timeout_secs` and `max_content_size_mb`; `UploadScanHints` struct carries `include`/`exclude`/`exclude_extra`/`max_content_size_mb` from client to server; `find-upload` binary added to deployment scripts
 - **`--force` accepts human-readable timestamps** — `find-scan --force` now accepts ISO date (`YYYY-MM-DD`), local datetime (`YYYY-MM-DDTHH:MM:SS` / `YYYY-MM-DD HH:MM:SS`), or Unix epoch in addition to plain epoch integers; confirmation messages display the time in human-readable local format
 - **Integration tests for indexing error flow** — `crates/server/tests/indexing_errors.rs` covers recording failures, clearing errors on successful re-index, failure-survives-completion-upsert invariant, error count increment, and delete cleanup

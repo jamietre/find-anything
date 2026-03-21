@@ -790,4 +790,10 @@
 		opacity: 0.4;
 		cursor: not-allowed;
 	}
+
+	/* ── Mobile (≤768px) ────────────────────────────────────────────────────── */
+	@media (max-width: 768px) {
+		.global-sidebar { display: none; }
+		.resize-handle { display: none; }
+	}
 </style>

@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import { goto, replaceState } from '$app/navigation';
 	import { page } from '$app/stores';
 	import Preferences from '$lib/Preferences.svelte';
@@ -11,10 +12,15 @@
 	const _params = params;
 
 	let activeSection = $page.url.searchParams.get('section') ?? 'preferences';
+	let isMobile = false;
 
 	function setSection(section: string) {
 		activeSection = section;
 		replaceState(`?section=${section}`, {});
+	}
+
+	function toggleSection(section: string) {
+		setSection(activeSection === section ? '' : section);
 	}
 
 	function goBack() {
@@ -32,6 +38,22 @@
 		p.set('path', e.detail.path);
 		goto(`/?${p.toString()}`);
 	}
+
+	onMount(() => {
+		const mq = window.matchMedia('(max-width: 768px)');
+		isMobile = mq.matches;
+		const handler = (e: MediaQueryListEvent) => { isMobile = e.matches; };
+		mq.addEventListener('change', handler);
+		return () => mq.removeEventListener('change', handler);
+	});
+
+	const sections = [
+		{ id: 'preferences', label: 'Preferences' },
+		{ id: 'stats',       label: 'Stats' },
+		{ id: 'errors',      label: 'Errors' },
+		{ id: 'admin',       label: 'Admin' },
+		{ id: 'about',       label: 'About' },
+	] as const;
 </script>
 
 <div class="settings-page">
@@ -41,67 +63,77 @@
 		<a class="logo" href="/">find-anything</a>
 	</div>
 
-	<!-- Body: left nav + content -->
+	<!-- Body -->
 	<div class="body">
-		<nav class="sidebar">
-			<button
-				class="nav-item"
-				class:active={activeSection === 'preferences'}
-				on:click={() => setSection('preferences')}
-			>
-				Preferences
-			</button>
-			<button
-				class="nav-item"
-				class:active={activeSection === 'stats'}
-				on:click={() => setSection('stats')}
-			>
-				Stats
-			</button>
-			<button
-				class="nav-item"
-				class:active={activeSection === 'errors'}
-				on:click={() => setSection('errors')}
-			>
-				Errors
-			</button>
-			<button
-				class="nav-item"
-				class:active={activeSection === 'admin'}
-				on:click={() => setSection('admin')}
-			>
-				Admin
-			</button>
-			<button
-				class="nav-item"
-				class:active={activeSection === 'about'}
-				on:click={() => setSection('about')}
-			>
-				About
-			</button>
-		</nav>
+		{#if !isMobile}
+			<!-- Desktop: left nav + content pane -->
+			<nav class="sidebar">
+				{#each sections as s}
+					<button
+						class="nav-item"
+						class:active={activeSection === s.id}
+						on:click={() => setSection(s.id)}
+					>{s.label}</button>
+				{/each}
+			</nav>
 
-		<main class="content">
-			{#if activeSection === 'preferences'}
-				<h2 class="content-title">Preferences</h2>
-				<Preferences />
-			{:else if activeSection === 'stats'}
-				<h2 class="content-title">Index Statistics</h2>
-				<StatsPanel />
-			{:else if activeSection === 'errors'}
-				<h2 class="content-title">Indexing Errors</h2>
-				<ErrorsPanel on:navigate={handleErrorNavigate} />
-			{:else if activeSection === 'admin'}
-				<h2 class="content-title">Admin</h2>
-				<AdminPanel />
-			{:else if activeSection === 'about'}
-				<h2 class="content-title">About</h2>
-				<About />
-			{:else}
-				<h2 class="content-title">Preferences</h2>
-				<Preferences />
-			{/if}
-		</main>
+			<main class="content">
+				{#if activeSection === 'preferences'}
+					<h2 class="content-title">Preferences</h2>
+					<Preferences />
+				{:else if activeSection === 'stats'}
+					<h2 class="content-title">Index Statistics</h2>
+					<StatsPanel />
+				{:else if activeSection === 'errors'}
+					<h2 class="content-title">Indexing Errors</h2>
+					<ErrorsPanel on:navigate={handleErrorNavigate} />
+				{:else if activeSection === 'admin'}
+					<h2 class="content-title">Admin</h2>
+					<AdminPanel />
+				{:else if activeSection === 'about'}
+					<h2 class="content-title">About</h2>
+					<About />
+				{:else}
+					<h2 class="content-title">Preferences</h2>
+					<Preferences />
+				{/if}
+			</main>
+		{:else}
+			<!-- Mobile: accordion -->
+			<div class="accordion">
+				{#each sections as s}
+					<div class="accordion-item">
+						<button
+							class="accordion-header"
+							class:open={activeSection === s.id}
+							on:click={() => toggleSection(s.id)}
+						>
+							<span>{s.label}</span>
+							<svg
+								class="acc-chevron"
+								class:open={activeSection === s.id}
+								width="14" height="14" viewBox="0 0 14 14"
+								fill="none" stroke="currentColor" stroke-width="1.8"
+								stroke-linecap="round" stroke-linejoin="round"
+								aria-hidden="true"
+							>
+								<polyline points="2,4 7,10 12,4"/>
+							</svg>
+						</button>
+						{#if activeSection === s.id}
+							<div class="accordion-body">
+								{#if s.id === 'preferences'}<Preferences />
+								{:else if s.id === 'stats'}<StatsPanel />
+								{:else if s.id === 'errors'}<ErrorsPanel on:navigate={handleErrorNavigate} />
+								{:else if s.id === 'admin'}<AdminPanel />
+								{:else if s.id === 'about'}<About />
+								{/if}
+							</div>
+						{/if}
+					</div>
+				{/each}
+			</div>
+		{/if}
 	</div>
 </div>
 
@@ -148,9 +180,7 @@
 		text-decoration: none;
 	}
 
-	.logo:hover {
-		color: var(--accent, #58a6ff);
-	}
+	.logo:hover { color: var(--accent, #58a6ff); }
 
 	/* Body */
 	.body {
@@ -159,7 +189,8 @@
 		min-height: 0;
 	}
 
-	/* Left nav */
+	/* ── Desktop: left nav ───────────────────────────────── */
+
 	.sidebar {
 		width: 180px;
 		flex-shrink: 0;
@@ -209,5 +240,61 @@
 		font-weight: 600;
 		color: var(--text);
 		margin: 0 0 20px;
+	}
+
+	/* ── Mobile: accordion ───────────────────────────────── */
+
+	.accordion {
+		flex: 1;
+		overflow-y: auto;
+		display: flex;
+		flex-direction: column;
+	}
+
+	.accordion-item {
+		border-bottom: 1px solid var(--border);
+	}
+
+	.accordion-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		width: 100%;
+		padding: 16px 20px;
+		background: none;
+		border: none;
+		color: var(--text);
+		font-size: 15px;
+		font-weight: 500;
+		cursor: pointer;
+		text-align: left;
+		min-height: 52px;
+	}
+
+	.accordion-header:hover {
+		background: var(--bg-hover);
+	}
+
+	.accordion-header.open {
+		color: var(--accent);
+		background: var(--match-bg);
+	}
+
+	.acc-chevron {
+		flex-shrink: 0;
+		transition: transform 0.2s ease;
+		color: var(--text-dim);
+	}
+
+	.acc-chevron.open {
+		transform: rotate(180deg);
+		color: var(--accent);
+	}
+
+	.accordion-body {
+		padding: 20px;
+		border-top: 1px solid var(--border);
+		background: var(--bg);
+		overflow-x: hidden;
 	}
 </style>

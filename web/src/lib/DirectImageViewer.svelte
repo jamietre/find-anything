@@ -194,4 +194,9 @@
 		display: block;
 		pointer-events: none;
 	}
+
+	@media (max-width: 768px) {
+		.viewer-wrap { flex: none; }
+		.container { height: 60vh; max-height: 60vh; flex: none; }
+	}
 </style>

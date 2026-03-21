@@ -115,6 +115,14 @@
 		return r.archive_path ? `${r.path}::${r.archive_path}` : r.path;
 	}
 
+	function fileName(r: SearchResult): string {
+		const full = displayPath(r);
+		const slash = full.lastIndexOf('/');
+		const sep = full.lastIndexOf('::');
+		const cut = Math.max(slash, sep);
+		return cut >= 0 ? full.slice(cut + (full[cut] === ':' ? 2 : 1)) : full;
+	}
+
 	/** Convert raw line_number to user-visible display number. */
 	function displayLine(n: number): number {
 		return n >= $contentLineStart ? n - ($contentLineStart - 1) : n;
@@ -179,42 +187,54 @@
 		tabindex="0"
 		title={isContentMatch(result) ? `Open file at line ${displayLine(result.line_number)}` : 'Open file'}
 	>
-		<span class="badge">{result.source}</span>
-		<span class="file-path" title={displayPath(result)}>
-			{#if isPathMatch(result)}
-				{@html highlightPath(displayPath(result), query)}
-			{:else}
-				{displayPath(result)}
-			{/if}
-		</span>
-		{#if hits.length === 1 && isContentMatch(hits[0])}
-			<span class="line-ref">:{displayLine(hits[0].line_number)}</span>
-		{:else if hits.length > 1}
-			<!-- svelte-ignore a11y-no-static-element-interactions -->
-			<!-- svelte-ignore a11y-click-events-have-key-events -->
-			<span class="hit-nav" title="{activeHitIndex + 1} of {hits.length} hits" on:click|stopPropagation>
-				<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex === 0} on:click|stopPropagation={() => switchToHit(activeHitIndex - 1)} title="Previous hit (line {displayLine(hits[activeHitIndex - 1]?.line_number ?? 0)})">
-					<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-						<polyline points="5.5,1.5 2.5,4 5.5,6.5"/>
-					</svg>
-				</button>
-				<span class="line-ref nav-line-ref">:{displayLine(hits[activeHitIndex].line_number)}</span>
-				<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex >= hits.length - 1} on:click|stopPropagation={() => switchToHit(activeHitIndex + 1)} title="Next hit (line {displayLine(hits[activeHitIndex + 1]?.line_number ?? 0)})">
-					<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-						<polyline points="2.5,1.5 5.5,4 2.5,6.5"/>
-					</svg>
-				</button>
+		<div class="result-row1">
+			<span class="badge">{result.source}</span>
+			<span class="file-path" title={displayPath(result)}>
+				<span class="path-desktop">
+					{#if isPathMatch(result)}
+						{@html highlightPath(displayPath(result), query)}
+					{:else}
+						{displayPath(result)}
+					{/if}
+				</span>
+				<span class="path-mobile-name">
+					{#if isPathMatch(result)}
+						{@html highlightPath(fileName(result), query)}
+					{:else}
+						{fileName(result)}
+					{/if}
+				</span>
 			</span>
-		{/if}
-		{#if result.duplicate_paths && result.duplicate_paths.length > 0}
-			<!-- svelte-ignore a11y-click-events-have-key-events -->
-			<span
-				class="alias-badge"
-				title={aliasesExpanded ? 'Hide duplicate paths' : 'Show duplicate paths'}
-				on:click|stopPropagation={() => (aliasesExpanded = !aliasesExpanded)}
-			>+{result.duplicate_paths.length} duplicate{result.duplicate_paths.length === 1 ? '' : 's'}</span>
-		{/if}
-		<div class="file-meta">
+			{#if hits.length === 1 && isContentMatch(hits[0])}
+				<span class="line-ref">:{displayLine(hits[0].line_number)}</span>
+			{:else if hits.length > 1}
+				<!-- svelte-ignore a11y-no-static-element-interactions -->
+				<!-- svelte-ignore a11y-click-events-have-key-events -->
+				<span class="hit-nav" title="{activeHitIndex + 1} of {hits.length} hits" on:click|stopPropagation>
+					<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex === 0} on:click|stopPropagation={() => switchToHit(activeHitIndex - 1)} title="Previous hit (line {displayLine(hits[activeHitIndex - 1]?.line_number ?? 0)})">
+						<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							<polyline points="5.5,1.5 2.5,4 5.5,6.5"/>
+						</svg>
+					</button>
+					<span class="line-ref nav-line-ref">:{displayLine(hits[activeHitIndex].line_number)}</span>
+					<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex >= hits.length - 1} on:click|stopPropagation={() => switchToHit(activeHitIndex + 1)} title="Next hit (line {displayLine(hits[activeHitIndex + 1]?.line_number ?? 0)})">
+						<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+							<polyline points="2.5,1.5 5.5,4 2.5,6.5"/>
+						</svg>
+					</button>
+				</span>
+			{/if}
+		</div>
+		<div class="result-row2">
+			{#if result.duplicate_paths && result.duplicate_paths.length > 0}
+				<!-- svelte-ignore a11y-click-events-have-key-events -->
+				<span
+					class="alias-badge"
+					title={aliasesExpanded ? 'Hide duplicate paths' : 'Show duplicate paths'}
+					on:click|stopPropagation={() => (aliasesExpanded = !aliasesExpanded)}
+				>+{result.duplicate_paths.length} duplicate{result.duplicate_paths.length === 1 ? '' : 's'}</span>
+			{/if}
+			<div class="file-meta">
 			{#if result.kind && result.kind !== 'raw'}
 				<span class="meta-kind" title="File type">{result.kind}</span>
 			{/if}
@@ -223,7 +243,8 @@
 			{/if}
 			<span class="meta-item" title="Last modified">{formatDate(result.mtime)}</span>
 		</div>
-	</div>
+		</div><!-- result-row2 -->
+	</div><!-- result-header -->
 	{#if aliasesExpanded && result.duplicate_paths && result.duplicate_paths.length > 0}
 		<div class="aliases">
 			{#each result.duplicate_paths as alias}
@@ -291,6 +312,10 @@
 		user-select: none;
 	}
 
+	/* On desktop the row wrappers are invisible — children flow as flex items */
+	.result-row1 { display: contents; }
+	.result-row2 { display: contents; }
+
 	.result-header:hover {
 		background: var(--bg-hover);
 	}
@@ -313,6 +338,43 @@
 		white-space: nowrap;
 		flex: 1;
 		min-width: 0;
+	}
+
+	/* Desktop: show full path, hide mobile-only spans */
+	.path-mobile-name { display: none; }
+
+	@media (max-width: 768px) {
+		/* Two-row header layout */
+		.result-header {
+			flex-direction: column;
+			align-items: stretch;
+			gap: 4px;
+			padding: 8px 12px;
+		}
+		.result-row1 {
+			display: flex;
+			align-items: center;
+			gap: 8px;
+			min-width: 0;
+		}
+		.result-row2 {
+			display: flex;
+			align-items: center;
+			gap: 6px;
+			flex-wrap: wrap;
+		}
+
+		/* Row 1: show filename only, not full path */
+		.path-desktop { display: none; }
+		.path-mobile-name {
+			display: block;
+			font-size: 13px;
+			font-weight: 500;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.file-path { white-space: normal; }
 	}
 
 	.file-path :global(.path-match) {

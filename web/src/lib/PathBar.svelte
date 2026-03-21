@@ -108,8 +108,10 @@
 </script>
 
 <div class="path-bar">
-	<button class="back-btn" on:click={() => dispatch('back')}>← results</button>
-	<button class="badge" on:click={() => dispatch('navigate', { type: 'dir', prefix: '' })}>{source}</button>
+	<div class="path-controls">
+		<button class="back-btn" on:click={() => dispatch('back')}>← results</button>
+		<button class="badge" on:click={() => dispatch('navigate', { type: 'dir', prefix: '' })}>{source}</button>
+	</div>
 	<span class="path-plain">
 		{#each segments as seg}
 			{#if seg.separator}<span class="sep">{seg.separator}</span>{/if}
@@ -154,12 +156,20 @@
 	.path-bar {
 		display: flex;
 		align-items: center;
+		flex-wrap: wrap;
 		gap: 10px;
 		padding: 8px 16px;
 		background: var(--bg-secondary);
 		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
 		min-height: 38px;
+	}
+
+	.path-controls {
+		display: flex;
+		align-items: center;
+		gap: 6px;
+		flex-shrink: 0;
 	}
 
 	.back-btn {
@@ -285,6 +295,11 @@
 		font-family: var(--font-mono);
 		font-size: 11px;
 		white-space: nowrap;
+	}
+
+	@media (max-width: 768px) {
+		.path-bar { padding: 6px 12px; gap: 4px 6px; }
+		.path-plain { font-size: 11px; flex: 1 1 100%; }
 	}
 
 </style>
