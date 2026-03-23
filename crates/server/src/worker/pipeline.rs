@@ -434,8 +434,6 @@ mod tests {
     /// - old terms are no longer findable; new terms are
     #[test]
     fn re_index_cleans_fts_using_content_store() {
-        use find_common::api::{LINE_PATH, LINE_METADATA, LINE_CONTENT_START};
-
         let (_tmp, store) = open_store();
         let mut conn = test_conn();
 
