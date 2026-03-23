@@ -184,13 +184,25 @@ async fn run_index_upload(
     // _cleanup drops here, removing temp_root and temp_toml
 }
 
-/// Resolve the path to the `find-scan` binary: same dir as current exe, then PATH.
+/// Resolve the path to the `find-scan` binary.
+///
+/// Search order:
+/// 1. Same directory as the current executable (production: binaries co-located).
+/// 2. Parent of that directory (tests: binary is in `target/debug/deps/`, but
+///    `find-scan` is built into `target/debug/`).
+/// 3. Fall back to `"find-scan"` and let the OS PATH resolve it.
 fn resolve_find_scan() -> String {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join("find-scan");
             if candidate.exists() {
                 return candidate.to_string_lossy().into_owned();
+            }
+            if let Some(parent) = dir.parent() {
+                let candidate = parent.join("find-scan");
+                if candidate.exists() {
+                    return candidate.to_string_lossy().into_owned();
+                }
             }
         }
     }

@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- **`find-scan` not found in upload integration tests** — `resolve_find_scan` now also checks the parent of the current exe's directory; test binaries live in `target/debug/deps/` but `find-scan` is built one level up in `target/debug/`, so the previous code fell back to PATH (which works locally if `find-scan` is installed, but never in CI)
+
 ### Added
 
 - **SVG icon components** — all inline SVGs extracted to `web/src/lib/icons/` as reusable Svelte components (21 icons: Back, Check, Clear, Copy, Download, DupChevron, Email, Filter, FitViewport, Folder, MetaClose, MetaOpen, ShareAndroid, ShareApple, ShareWindows, Spinner, ChevronLeft, ChevronRight, ChevronDown, WrapOn, WrapOff); all consumers updated to import from the shared icon directory
