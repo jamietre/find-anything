@@ -11,7 +11,7 @@
 	import type { SearchResult, SourceInfo } from '$lib/api';
 	import { getToken, setToken } from '$lib/token';
 	import { startLiveUpdates, liveEvent } from '$lib/liveUpdates';
-	import { contextWindow, maxMarkdownRenderKb, fileViewPageSize, contentLineStart, tabWidth } from '$lib/settingsStore';
+	import { contextWindow, maxMarkdownRenderKb, fileViewPageSize, contentLineStart, tabWidth, publicUrl } from '$lib/settingsStore';
 	import { formatHash } from '$lib/lineSelection';
 	import type { LineSelection } from '$lib/lineSelection';
 	import { FilePath } from '$lib/filePath';
@@ -135,6 +135,7 @@
 			fileViewPageSize.set(s.file_view_page_size ?? 2000);
 			contentLineStart.set(s.content_line_start ?? 1);
 			tabWidth.set(p.tabWidth ?? s.tab_width ?? 4);
+			publicUrl.set(s.public_url);
 		} catch { /* silent */ }
 	}
 

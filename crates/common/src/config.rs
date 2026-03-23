@@ -769,6 +769,14 @@ pub struct ServerAppSettings {
     /// When absent, detection is automatic. Intended for integration tests.
     #[serde(default)]
     pub force_systemd: Option<bool>,
+    /// Public base URL of this server, e.g. `https://find.example.com`.
+    /// When set, share links returned to the browser will use this origin
+    /// instead of the browser's own `window.location.origin`.  Trailing
+    /// slashes are stripped.  If not set the browser constructs the URL
+    /// from its own origin (correct when accessed directly, wrong through
+    /// a reverse proxy on a different hostname).
+    #[serde(default)]
+    pub public_url: Option<String>,
 }
 
 fn default_max_markdown_render_kb() -> usize { 512 }

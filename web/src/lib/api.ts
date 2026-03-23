@@ -281,6 +281,8 @@ export interface AppSettings {
 	content_line_start?: number;
 	/** Number of spaces a tab character occupies in the file viewer. Defaults to 4. */
 	tab_width?: number;
+	/** Public base URL of the server (e.g. `https://find.example.com`). Used as the origin for share links. */
+	public_url?: string;
 }
 
 export async function getSettings(): Promise<AppSettings> {
@@ -389,16 +391,20 @@ export interface ResolveLinkResponse {
 	expires_at: number;
 }
 
-/** Create a share link for a file. Requires authentication. */
+/** Create a share link for a file. Requires authentication.
+ * @param expiresInSecs TTL in seconds. Omit = server default. 0 = never expires. */
 export async function createLink(
 	source: string,
 	path: string,
-	archivePath?: string | null
+	archivePath?: string | null,
+	expiresInSecs?: number
 ): Promise<CreateLinkResponse> {
+	const body: Record<string, unknown> = { source, path, archive_path: archivePath ?? null };
+	if (expiresInSecs !== undefined) body.expires_in_secs = expiresInSecs;
 	const resp = await apiFetch('/api/v1/links', {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
-		body: JSON.stringify({ source, path, archive_path: archivePath ?? null })
+		body: JSON.stringify(body)
 	});
 	if (!resp.ok) throw new Error(`createLink: ${resp.status} ${resp.statusText}`);
 	return resp.json();

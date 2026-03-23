@@ -17,3 +17,6 @@ export const contentLineStart = writable(1);
 
 /** Number of spaces a tab character occupies in the file viewer (server-configured, user-overridable). */
 export const tabWidth = writable(4);
+
+/** Public base URL of the server (e.g. `https://find.example.com`). Used as origin for share links. */
+export const publicUrl = writable<string | undefined>(undefined);

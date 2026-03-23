@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { createEventDispatcher, onMount, tick } from 'svelte';
-	import { getFile } from '$lib/api';
+	import { getFile, createLink } from '$lib/api';
 	import { fileViewPageSize, contentLineStart, tabWidth as serverTabWidth } from '$lib/settingsStore';
 	import { highlightFile } from '$lib/highlight';
 	import DirListing from './DirListing.svelte';
@@ -19,6 +19,7 @@
 		firstLine,
 	} from '$lib/lineSelection';
 	import { profile } from '$lib/profile';
+	import { publicUrl } from '$lib/settingsStore';
 	import { parseImageDimensions } from '$lib/imageMeta';
 	import { marked } from 'marked';
 	import { maxMarkdownRenderKb } from '$lib/settingsStore';
@@ -197,6 +198,71 @@
 	$: canOpenInExplorer = !!($profile.sourceRoots?.[source]?.trim()) && !!$profile.handlerInstalled;
 
 	let explorerLaunching = false;
+
+	// ── Share ────────────────────────────────────────────────────────────────────
+	// Detect client OS for icon selection (evaluated once in the browser).
+	const _ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+	const shareIconOs: 'apple' | 'windows' | 'android' =
+		/iPhone|iPad|iPod|Macintosh/i.test(_ua) ? 'apple' :
+		/Windows/i.test(_ua) ? 'windows' : 'android';
+
+	let shareDialogOpen = false;
+	let shareUrl = '';
+	let shareError: string | null = null;
+	let shareLinkBusy = false;
+	let shareLinkCopied = false;
+	// 86400 = 1 day, 604800 = 1 week, 2592000 = 30 days, 0 = never
+	let shareTtl: number = 604800;
+
+	function openShareDialog() {
+		shareUrl = '';
+		shareError = null;
+		shareLinkCopied = false;
+		shareDialogOpen = true;
+	}
+
+	async function createShareLink() {
+		if (shareLinkBusy) return;
+		shareLinkBusy = true;
+		shareError = null;
+		try {
+			const resp = await createLink(source, path, archivePath, shareTtl);
+			const origin = $publicUrl ?? window.location.origin;
+			const url = origin + resp.url;
+			shareUrl = url;
+			// On platforms with native share, hand off immediately.
+			if (navigator.share) {
+				shareDialogOpen = false;
+				await navigator.share({ url, title: fileName });
+			}
+		} catch (err) {
+			if (!(err instanceof DOMException && err.name === 'AbortError')) {
+				shareError = 'Failed to generate share link.';
+			}
+		} finally {
+			shareLinkBusy = false;
+		}
+	}
+
+	function fallbackCopy(text: string, done: () => void) {
+		const ta = document.createElement('textarea');
+		ta.value = text;
+		ta.style.cssText = 'position:fixed;opacity:0';
+		document.body.appendChild(ta);
+		ta.focus();
+		ta.select();
+		try { document.execCommand('copy'); done(); } finally { document.body.removeChild(ta); }
+	}
+
+	function copyShareLink() {
+		const url = shareUrl;
+		const done = () => { shareLinkCopied = true; setTimeout(() => (shareLinkCopied = false), 2000); };
+		if (navigator.clipboard) {
+			navigator.clipboard.writeText(url).then(done).catch(() => fallbackCopy(url, done));
+		} else {
+			fallbackCopy(url, done);
+		}
+	}
 
 	function openInExplorer() {
 		const root = ($profile.sourceRoots ?? {})[source] ?? '';
@@ -535,10 +601,15 @@
 		/>
 		<div class="toolbar">
 			{#if !(showOriginal && canViewInline) && fileKind !== 'image' && fileKind !== 'video' && fileKind !== 'audio'}
-			<button class="toolbar-btn" on:click={toggleWordWrap}>
-				{wordWrap ? '⊟' : '⊞'} Wrap
-			</button>
-		{/if}
+				<button class="toolbar-btn" on:click={toggleWordWrap}>
+					{wordWrap ? '⊟' : '⊞'} Wrap
+				</button>
+			{/if}
+			{#if canOpenInExplorer}
+				<button class="toolbar-btn explorer-btn download-icon-btn" style={explorerLaunching ? 'cursor: progress' : ''} on:click={openInExplorer} title="Open in Explorer">
+					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 5v7.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6.5a1 1 0 0 0-1-1H7.5L6 4H2.5a1 1 0 0 0-1 1z"/></svg>
+				</button>
+			{/if}
 			{#if isMarkdown && !markdownTooLarge}
 				<button class="toolbar-btn" on:click={toggleMarkdownFormat} title="Toggle markdown formatting">
 					{markdownFormat ? 'Plain' : 'Formatted'}
@@ -559,16 +630,46 @@
 				</button>
 			{/if}
 			{#if canDownloadMember}
-				<button class="toolbar-btn download-btn" on:click={() => triggerDownload(rawInlineUrl, memberFileName)}>Download</button>
-				<button class="toolbar-btn download-btn" on:click={() => triggerDownload(rawUrl, fileName)}>Download Archive</button>
+				<button class="toolbar-btn download-icon-btn" on:click={() => triggerDownload(rawInlineUrl, memberFileName)} title="Download">
+					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 2v8M4.5 7l3 3 3-3"/><path d="M1.5 11v2h12v-2"/></svg>
+				</button>
+				<button class="toolbar-btn download-archive-btn" on:click={() => triggerDownload(rawUrl, fileName)} title="Download Archive">
+					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 2v8M4.5 7l3 3 3-3"/><path d="M1.5 11v2h12v-2"/></svg>
+					archive
+				</button>
 			{:else}
-				<button class="toolbar-btn download-btn" on:click={() => triggerDownload(rawUrl, fileName)}>
-					{isArchiveMember || fileKind === 'archive' ? 'Download Archive' : 'Download'}
+				<button
+					class="toolbar-btn {isArchiveMember || fileKind === 'archive' ? 'download-archive-btn' : 'download-icon-btn'}"
+					on:click={() => triggerDownload(rawUrl, fileName)}
+					title={isArchiveMember || fileKind === 'archive' ? 'Download Archive' : 'Download'}>
+					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 2v8M4.5 7l3 3 3-3"/><path d="M1.5 11v2h12v-2"/></svg>
+					{#if isArchiveMember || fileKind === 'archive'} archive{/if}
 				</button>
 			{/if}
-			{#if canOpenInExplorer}
-				<button class="toolbar-btn explorer-btn" style={explorerLaunching ? 'cursor: progress' : ''} on:click={openInExplorer}>Open in Explorer</button>
-			{/if}
+			<button class="toolbar-btn share-icon-btn" on:click={openShareDialog} title="Share">
+				{#if shareIconOs === 'apple'}
+					<!-- Apple / iOS: tray with upward arrow -->
+					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+						<path d="M7.5 9.5V2M4.5 5l3-3 3 3"/>
+						<path d="M2 9.5v3a.5.5 0 0 0 .5.5h10a.5.5 0 0 0 .5-.5v-3"/>
+					</svg>
+				{:else if shareIconOs === 'windows'}
+					<!-- Windows: box with outward diagonal arrow at top-right -->
+					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+						<path d="M7 2H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V8"/>
+						<path d="M10 1.5h3.5v3.5M13.5 1.5 8 7"/>
+					</svg>
+				{:else}
+					<!-- Android / other: three circles connected by lines -->
+					<svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
+						<circle cx="11.5" cy="3" r="1.8" fill="currentColor"/>
+						<circle cx="3" cy="7.5" r="1.8" fill="currentColor"/>
+						<circle cx="11.5" cy="12" r="1.8" fill="currentColor"/>
+						<line x1="4.6" y1="6.7" x2="9.9" y2="3.8" stroke="currentColor" stroke-width="1.3"/>
+						<line x1="4.6" y1="8.3" x2="9.9" y2="11.2" stroke="currentColor" stroke-width="1.3"/>
+					</svg>
+				{/if}
+			</button>
 			<div class="metadata">
 				{#if fileKind && fileKind !== 'raw'}
 					<span class="meta-item kind-badge">{fileKind}</span>
@@ -728,6 +829,57 @@
 		{/if}
 	{/if}
 </div>
+
+{#if shareDialogOpen}
+<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+<div class="share-overlay" on:click|self={() => shareDialogOpen = false} on:keydown={(e) => e.key === 'Escape' && (shareDialogOpen = false)} role="dialog" aria-modal="true" aria-label="Share">
+	<div class="share-dialog">
+		<div class="share-dialog-header">
+			<span class="share-dialog-title">Share</span>
+			<button class="share-close" on:click={() => shareDialogOpen = false} aria-label="Close">✕</button>
+		</div>
+		<div class="share-dialog-body">
+			<p class="share-instructions">Creates a link to this file that anyone with the link can access.</p>
+			<div class="share-ttl-row">
+				<span class="share-ttl-label">Expires</span>
+				<div class="share-ttl-options">
+					{#each [{v:86400,l:'1 day'},{v:604800,l:'1 week'},{v:2592000,l:'1 month'},{v:0,l:'Never'}] as opt (opt.v)}
+						<label class="share-ttl-opt" class:selected={shareTtl === opt.v}>
+							<input type="radio" name="share-ttl" value={opt.v} bind:group={shareTtl} disabled={!!shareUrl} />
+							{opt.l}
+						</label>
+					{/each}
+				</div>
+			</div>
+			{#if shareError}
+				<p class="share-msg share-error">{shareError}</p>
+			{/if}
+			{#if shareUrl}
+				<div class="share-link-row">
+					<span class="share-link-text">{shareUrl}</span>
+					<button class="share-copy-btn" class:copied={shareLinkCopied} on:click={copyShareLink} title="Copy link">
+						{#if shareLinkCopied}
+							<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><polyline points="2,7 5,10 11,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+						{:else}
+							<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><rect x="4" y="1" width="8" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 4H1.5A1.5 1.5 0 0 0 0 5.5v6A1.5 1.5 0 0 0 1.5 13H8A1.5 1.5 0 0 0 9.5 11.5V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+						{/if}
+					</button>
+				</div>
+				<div class="share-actions">
+					<a class="share-action-btn" href="mailto:?subject={encodeURIComponent('Shared: ' + fileName)}&body={encodeURIComponent(shareUrl)}" rel="noopener">
+						<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="3" width="12" height="9" rx="1.5"/><path d="M1 4.5l6 4 6-4"/></svg>
+						Email
+					</a>
+				</div>
+			{:else}
+				<button class="share-create-btn" on:click={createShareLink} disabled={shareLinkBusy}>
+					{shareLinkBusy ? 'Creating…' : 'Create link'}
+				</button>
+			{/if}
+		</div>
+	</div>
+</div>
+{/if}
 
 <style>
 	.file-viewer {
@@ -918,6 +1070,226 @@
 		transform: translateY(1px);
 	}
 
+	.download-icon-btn,
+	.download-archive-btn,
+	.share-icon-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 5px;
+		padding: 4px 8px;
+	}
+
+	.share-overlay {
+		position: fixed;
+		inset: 0;
+		background: rgba(0, 0, 0, 0.5);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 500;
+	}
+
+	.share-dialog {
+		background: var(--bg-secondary);
+		border: 1px solid var(--border);
+		border-radius: 8px;
+		min-width: 300px;
+		max-width: 480px;
+		width: 90%;
+		box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+	}
+
+	.share-dialog-header {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		padding: 12px 16px;
+		border-bottom: 1px solid var(--border);
+	}
+
+	.share-dialog-title {
+		font-size: 14px;
+		font-weight: 600;
+		color: var(--text);
+	}
+
+	.share-close {
+		background: none;
+		border: none;
+		color: var(--text-muted);
+		cursor: pointer;
+		font-size: 14px;
+		padding: 2px 6px;
+		border-radius: 3px;
+	}
+
+	.share-close:hover {
+		color: var(--text);
+		background: var(--bg-hover);
+	}
+
+	.share-dialog-body {
+		padding: 16px;
+		display: flex;
+		flex-direction: column;
+		gap: 12px;
+	}
+
+	.share-instructions {
+		font-size: 13px;
+		color: var(--text-muted);
+		margin: 0;
+		line-height: 1.5;
+	}
+
+	.share-ttl-row {
+		display: flex;
+		align-items: center;
+		gap: 10px;
+	}
+
+	.share-ttl-label {
+		font-size: 12px;
+		color: var(--text-muted);
+		flex-shrink: 0;
+	}
+
+	.share-ttl-options {
+		display: flex;
+		gap: 4px;
+		flex-wrap: wrap;
+	}
+
+	.share-ttl-opt {
+		display: inline-flex;
+		align-items: center;
+		padding: 3px 10px;
+		font-size: 12px;
+		font-family: var(--font-mono);
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		cursor: pointer;
+		color: var(--text-muted);
+		background: var(--bg);
+		transition: background 0.1s, color 0.1s, border-color 0.1s;
+		user-select: none;
+	}
+
+	.share-ttl-opt input[type="radio"] {
+		display: none;
+	}
+
+	.share-ttl-opt:hover:not(.selected) {
+		background: var(--bg-hover);
+		color: var(--text);
+	}
+
+	.share-ttl-opt.selected {
+		background: var(--accent, #58a6ff);
+		border-color: var(--accent, #58a6ff);
+		color: #fff;
+	}
+
+	.share-msg {
+		font-size: 13px;
+		color: var(--text-muted);
+		margin: 0;
+	}
+
+	.share-error {
+		color: #f85149;
+	}
+
+	.share-create-btn {
+		align-self: flex-start;
+		padding: 6px 16px;
+		font-size: 13px;
+		font-family: var(--font-mono);
+		background: var(--accent, #58a6ff);
+		border: none;
+		border-radius: 4px;
+		color: #fff;
+		cursor: pointer;
+		transition: opacity 0.15s;
+	}
+
+	.share-create-btn:hover {
+		opacity: 0.85;
+	}
+
+	.share-create-btn:disabled {
+		opacity: 0.5;
+		cursor: default;
+	}
+
+	.share-link-row {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		background: var(--bg);
+		border: 1px solid var(--border);
+		border-radius: 6px;
+		padding: 8px 10px;
+	}
+
+	.share-link-text {
+		flex: 1;
+		min-width: 0;
+		font-family: var(--font-mono);
+		font-size: 12px;
+		color: var(--text-muted);
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.share-copy-btn {
+		background: none;
+		border: none;
+		padding: 2px 4px;
+		cursor: pointer;
+		color: var(--text-dim);
+		display: inline-flex;
+		align-items: center;
+		border-radius: 3px;
+		flex-shrink: 0;
+		transition: color 0.15s;
+	}
+
+	.share-copy-btn:hover {
+		color: var(--accent);
+	}
+
+	.share-copy-btn.copied {
+		color: #3fb950;
+	}
+
+	.share-actions {
+		display: flex;
+		gap: 8px;
+	}
+
+	.share-action-btn {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		padding: 6px 14px;
+		font-size: 12px;
+		font-family: var(--font-mono);
+		background: var(--bg-hover, rgba(255, 255, 255, 0.05));
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		color: var(--text);
+		cursor: pointer;
+		text-decoration: none;
+		transition: background 0.15s;
+	}
+
+	.share-action-btn:hover {
+		background: var(--bg-hover-strong, rgba(255, 255, 255, 0.1));
+	}
+
+
 	.meta-panel {
 		padding: 12px 16px;
 		font-family: var(--font-mono);
@@ -1024,7 +1396,7 @@
 	}
 
 	@media (max-width: 768px) {
-		.download-btn { display: none; }
+		.download-archive-btn { display: none; }
 		.explorer-btn { display: none; }
 		.toolbar { flex-wrap: wrap; }
 		.metadata { margin-left: 0; }

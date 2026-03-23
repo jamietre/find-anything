@@ -34,6 +34,9 @@ pub async fn get_settings(
         hash.to_string()
     };
 
+    let public_url = state.config.server.public_url.as_deref()
+        .map(|u| u.trim_end_matches('/').to_string());
+
     Json(AppSettingsResponse {
         context_window: state.config.search.context_window,
         version: version.to_string(),
@@ -44,6 +47,7 @@ pub async fn get_settings(
         file_view_page_size: state.config.server.file_view_page_size,
         content_line_start: LINE_CONTENT_START,
         tab_width: state.config.server.tab_width,
+        public_url,
     })
     .into_response()
 }

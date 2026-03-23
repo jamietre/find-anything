@@ -438,6 +438,11 @@ pub struct AppSettingsResponse {
     /// Defaults to 4. Can be overridden per-user in the browser.
     #[serde(default = "default_tab_width")]
     pub tab_width: usize,
+    /// Public base URL configured on the server (e.g. `https://find.example.com`).
+    /// When present, the UI should use this as the origin for share links instead
+    /// of `window.location.origin`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub public_url: Option<String>,
 }
 
 fn default_max_markdown_render_kb() -> usize { 512 }
@@ -744,6 +749,9 @@ pub struct CreateLinkRequest {
     pub source: String,
     pub path: String,
     pub archive_path: Option<String>,
+    /// TTL in seconds from now. `None` = use server default. `0` = never expires.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in_secs: Option<i64>,
 }
 
 /// `POST /api/v1/links` response.

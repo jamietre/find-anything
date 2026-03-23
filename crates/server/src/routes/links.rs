@@ -37,7 +37,11 @@ pub async fn post_link(
     };
 
     let now = unix_now();
-    let expires_at = now + state.config.links.ttl_secs as i64;
+    let expires_at = match body.expires_in_secs {
+        Some(0) => i64::MAX,                                  // never expires
+        Some(secs) if secs > 0 => now + secs,
+        _ => now + state.config.links.ttl_secs as i64,        // server default
+    };
     let data_dir = state.data_dir.clone();
     let source = body.source.clone();
     let path = body.path.clone();
