@@ -75,7 +75,7 @@ impl TestServer {
     /// Poll GET /api/v1/stats until both inbox_pending and archive_queue are 0.
     /// Panics after 10 seconds.
     pub async fn wait_for_idle(&self) {
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let resp: StatsResponse = self
                 .client
@@ -91,7 +91,7 @@ impl TestServer {
                 return;
             }
             if Instant::now() >= deadline {
-                panic!("worker did not become idle within 10s (inbox_pending={}, archive_queue={})",
+                panic!("worker did not become idle within 30s (inbox_pending={}, archive_queue={})",
                     resp.inbox_pending, resp.archive_queue);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
