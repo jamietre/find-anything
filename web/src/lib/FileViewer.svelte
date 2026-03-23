@@ -1,5 +1,16 @@
 <script lang="ts">
-	import { createEventDispatcher, onMount, tick } from 'svelte';
+	import { createEventDispatcher, onMount, afterUpdate, onDestroy, tick } from 'svelte';
+	import IconDownload from '$lib/icons/IconDownload.svelte';
+	import IconCopy from '$lib/icons/IconCopy.svelte';
+	import IconCheck from '$lib/icons/IconCheck.svelte';
+	import IconFolder from '$lib/icons/IconFolder.svelte';
+	import IconShareApple from '$lib/icons/IconShareApple.svelte';
+	import IconShareWindows from '$lib/icons/IconShareWindows.svelte';
+	import IconShareAndroid from '$lib/icons/IconShareAndroid.svelte';
+	import IconEmail from '$lib/icons/IconEmail.svelte';
+	import IconWrapOn from '$lib/icons/IconWrapOn.svelte';
+	import IconWrapOff from '$lib/icons/IconWrapOff.svelte';
+	import IconDupChevron from '$lib/icons/IconDupChevron.svelte';
 	import { getFile, createLink } from '$lib/api';
 	import { fileViewPageSize, contentLineStart, tabWidth as serverTabWidth } from '$lib/settingsStore';
 	import { highlightFile } from '$lib/highlight';
@@ -143,6 +154,23 @@
 
 	// Word wrap preference (default: false for code, true for text files)
 	$: wordWrap = $profile.wordWrap ?? false;
+
+	let hasOverflow = false;
+	let overflowObserver: ResizeObserver | null = null;
+
+	function checkOverflow() {
+		if (!codeContainer) return;
+		hasOverflow = codeContainer.scrollWidth > codeContainer.clientWidth;
+	}
+
+	afterUpdate(() => {
+		if (!codeContainer) return;
+		checkOverflow();
+		if (!overflowObserver) {
+			overflowObserver = new ResizeObserver(checkOverflow);
+			overflowObserver.observe(codeContainer);
+		}
+	});
 
 	// Tab width: user profile overrides server default.
 	$: tabWidth = $profile.tabWidth ?? $serverTabWidth;
@@ -534,6 +562,10 @@
 		await loadFile(true);
 	});
 
+	onDestroy(() => {
+		overflowObserver?.disconnect();
+	});
+
 	function openDuplicate(dupPath: string) {
 		const i = dupPath.indexOf('::');
 		const outerPath = i >= 0 ? dupPath.slice(0, i) : dupPath;
@@ -600,14 +632,22 @@
 			on:reload={reload}
 		/>
 		<div class="toolbar">
-			{#if !(showOriginal && canViewInline) && fileKind !== 'image' && fileKind !== 'video' && fileKind !== 'audio'}
-				<button class="toolbar-btn" on:click={toggleWordWrap}>
-					{wordWrap ? '⊟' : '⊞'} Wrap
+			{#if canViewInline && (fileKind === 'pdf' || fileKind === 'video')}
+				<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}>
+					{showOriginal ? 'View Extracted' : 'View Original'}
+				</button>
+			{:else if isSvg && canViewInline}
+				<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}>
+					{showOriginal ? 'View Source' : 'View SVG'}
 				</button>
 			{/if}
-			{#if canOpenInExplorer}
-				<button class="toolbar-btn explorer-btn download-icon-btn" style={explorerLaunching ? 'cursor: progress' : ''} on:click={openInExplorer} title="Open in Explorer">
-					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1.5 5v7.5a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V6.5a1 1 0 0 0-1-1H7.5L6 4H2.5a1 1 0 0 0-1 1z"/></svg>
+			{#if !(showOriginal && canViewInline) && fileKind !== 'image' && fileKind !== 'video' && fileKind !== 'audio' && (hasOverflow || wordWrap)}
+				<button class="toolbar-btn toolbar-icon-btn" on:click={toggleWordWrap} title={wordWrap ? 'Disable word wrap' : 'Enable word wrap'}>
+					{#if wordWrap}
+						<IconWrapOn />
+					{:else}
+						<IconWrapOff />
+					{/if}
 				</button>
 			{/if}
 			{#if isMarkdown && !markdownTooLarge}
@@ -620,21 +660,17 @@
 					{rtfFormat ? 'Plain' : 'Formatted'}
 				</button>
 			{/if}
-			{#if canViewInline && (fileKind === 'pdf' || fileKind === 'video')}
-				<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}>
-					{showOriginal ? 'View Extracted' : 'View Original'}
-				</button>
-			{:else if isSvg && canViewInline}
-				<button class="toolbar-btn" on:click={() => showOriginal = !showOriginal}>
-					{showOriginal ? 'View Source' : 'View SVG'}
+			{#if canOpenInExplorer}
+				<button class="toolbar-btn explorer-btn download-icon-btn" style={explorerLaunching ? 'cursor: progress' : ''} on:click={openInExplorer} title="Open in Explorer">
+					<IconFolder />
 				</button>
 			{/if}
 			{#if canDownloadMember}
 				<button class="toolbar-btn download-icon-btn" on:click={() => triggerDownload(rawInlineUrl, memberFileName)} title="Download">
-					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 2v8M4.5 7l3 3 3-3"/><path d="M1.5 11v2h12v-2"/></svg>
+					<IconDownload />
 				</button>
 				<button class="toolbar-btn download-archive-btn" on:click={() => triggerDownload(rawUrl, fileName)} title="Download Archive">
-					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 2v8M4.5 7l3 3 3-3"/><path d="M1.5 11v2h12v-2"/></svg>
+					<IconDownload />
 					archive
 				</button>
 			{:else}
@@ -642,32 +678,17 @@
 					class="toolbar-btn {isArchiveMember || fileKind === 'archive' ? 'download-archive-btn' : 'download-icon-btn'}"
 					on:click={() => triggerDownload(rawUrl, fileName)}
 					title={isArchiveMember || fileKind === 'archive' ? 'Download Archive' : 'Download'}>
-					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7.5 2v8M4.5 7l3 3 3-3"/><path d="M1.5 11v2h12v-2"/></svg>
+					<IconDownload />
 					{#if isArchiveMember || fileKind === 'archive'} archive{/if}
 				</button>
 			{/if}
 			<button class="toolbar-btn share-icon-btn" on:click={openShareDialog} title="Share">
 				{#if shareIconOs === 'apple'}
-					<!-- Apple / iOS: tray with upward arrow -->
-					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-						<path d="M7.5 9.5V2M4.5 5l3-3 3 3"/>
-						<path d="M2 9.5v3a.5.5 0 0 0 .5.5h10a.5.5 0 0 0 .5-.5v-3"/>
-					</svg>
+					<IconShareApple />
 				{:else if shareIconOs === 'windows'}
-					<!-- Windows: box with outward diagonal arrow at top-right -->
-					<svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-						<path d="M7 2H3a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V8"/>
-						<path d="M10 1.5h3.5v3.5M13.5 1.5 8 7"/>
-					</svg>
+					<IconShareWindows />
 				{:else}
-					<!-- Android / other: three circles connected by lines -->
-					<svg width="15" height="15" viewBox="0 0 15 15" aria-hidden="true">
-						<circle cx="11.5" cy="3" r="1.8" fill="currentColor"/>
-						<circle cx="3" cy="7.5" r="1.8" fill="currentColor"/>
-						<circle cx="11.5" cy="12" r="1.8" fill="currentColor"/>
-						<line x1="4.6" y1="6.7" x2="9.9" y2="3.8" stroke="currentColor" stroke-width="1.3"/>
-						<line x1="4.6" y1="8.3" x2="9.9" y2="11.2" stroke="currentColor" stroke-width="1.3"/>
-					</svg>
+					<IconShareAndroid />
 				{/if}
 			</button>
 			<div class="metadata">
@@ -690,9 +711,7 @@
 		{:else if duplicatePaths.length > 1}
 			<div class="dup-bar">
 				<button class="dup-toggle" on:click={() => duplicatesExpanded = !duplicatesExpanded}>
-					<svg class="dup-chevron" class:dup-chevron--open={duplicatesExpanded} width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round" aria-hidden="true">
-						<polygon points="2,1 10,6 2,11"/>
-					</svg>
+					<span class="dup-chevron" class:dup-chevron--open={duplicatesExpanded}><IconDupChevron /></span>
 					{duplicatePaths.length} duplicates
 				</button>
 				{#if duplicatesExpanded}
@@ -708,8 +727,8 @@
 		{/if}
 		{#if showOriginal && canViewInline}
 			{#if isSvg}
-				<div class="svg-viewer-panel">
-					<img src={rawInlineUrl} alt="" class="svg-img" />
+				<div class="image-viewer-panel">
+					<DirectImageViewer src={rawInlineUrl} svgMode={true} />
 				</div>
 			{:else if fileKind === 'image'}
 				<div class="image-viewer-panel">
@@ -859,22 +878,25 @@
 					<span class="share-link-text">{shareUrl}</span>
 					<button class="share-copy-btn" class:copied={shareLinkCopied} on:click={copyShareLink} title="Copy link">
 						{#if shareLinkCopied}
-							<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><polyline points="2,7 5,10 11,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+							<IconCheck />
 						{:else}
-							<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true"><rect x="4" y="1" width="8" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 4H1.5A1.5 1.5 0 0 0 0 5.5v6A1.5 1.5 0 0 0 1.5 13H8A1.5 1.5 0 0 0 9.5 11.5V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+							<IconCopy />
 						{/if}
 					</button>
 				</div>
 				<div class="share-actions">
 					<a class="share-action-btn" href="mailto:?subject={encodeURIComponent('Shared: ' + fileName)}&body={encodeURIComponent(shareUrl)}" rel="noopener">
-						<svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="1" y="3" width="12" height="9" rx="1.5"/><path d="M1 4.5l6 4 6-4"/></svg>
+						<IconEmail />
 						Email
 					</a>
 				</div>
 			{:else}
-				<button class="share-create-btn" on:click={createShareLink} disabled={shareLinkBusy}>
-					{shareLinkBusy ? 'Creating…' : 'Create link'}
-				</button>
+				<div class="share-actions">
+					<button class="share-create-btn" on:click={createShareLink} disabled={shareLinkBusy}>
+						{shareLinkBusy ? 'Creating…' : 'Create link'}
+					</button>
+					<button class="share-cancel-btn" on:click={() => shareDialogOpen = false}>Cancel</button>
+				</div>
 			{/if}
 		</div>
 	</div>
@@ -964,6 +986,8 @@
 
 	.dup-chevron {
 		flex-shrink: 0;
+		display: inline-flex;
+		align-items: center;
 		transition: transform 0.15s;
 		color: var(--text);
 		vertical-align: middle;
@@ -1068,6 +1092,13 @@
 
 	.toolbar-btn:active {
 		transform: translateY(1px);
+	}
+
+	.toolbar-icon-btn {
+		padding: 4px 7px;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 	}
 
 	.download-icon-btn,
@@ -1200,12 +1231,29 @@
 		color: #f85149;
 	}
 
+	.share-cancel-btn {
+		padding: 6px 16px;
+		font-size: 13px;
+		font-family: var(--font-mono);
+		background: transparent;
+		border: 1px solid var(--border);
+		border-radius: 4px;
+		color: var(--text-muted);
+		cursor: pointer;
+		transition: border-color 0.15s, color 0.15s;
+	}
+
+	.share-cancel-btn:hover {
+		border-color: var(--text-muted);
+		color: var(--text);
+	}
+
 	.share-create-btn {
-		align-self: flex-start;
 		padding: 6px 16px;
 		font-size: 13px;
 		font-family: var(--font-mono);
 		background: var(--accent, #58a6ff);
+		flex-shrink: 0;
 		border: none;
 		border-radius: 4px;
 		color: #fff;
@@ -1266,6 +1314,8 @@
 
 	.share-actions {
 		display: flex;
+		align-items: center;
+		justify-content: space-between;
 		gap: 8px;
 	}
 
@@ -1346,23 +1396,6 @@
 		background: var(--bg-hover);
 	}
 
-	.svg-viewer-panel {
-		flex: 1;
-		min-height: 0;
-		display: flex;
-		align-items: center;
-		justify-content: center;
-		padding: 24px;
-		overflow: auto;
-		background: var(--bg);
-	}
-
-	.svg-img {
-		max-width: 100%;
-		max-height: 100%;
-		object-fit: contain;
-	}
-
 	.image-viewer-panel {
 		flex: 1;
 		display: flex;
@@ -1399,7 +1432,6 @@
 		.download-archive-btn { display: none; }
 		.explorer-btn { display: none; }
 		.toolbar { flex-wrap: wrap; }
-		.metadata { margin-left: 0; }
 		.image-viewer-panel {
 			flex-direction: column;
 			overflow-y: auto;

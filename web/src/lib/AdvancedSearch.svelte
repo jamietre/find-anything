@@ -1,8 +1,11 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
 	import { clickOutside } from '$lib/clickOutside';
+	import IconBack from '$lib/icons/IconBack.svelte';
+	import IconFilter from '$lib/icons/IconFilter.svelte';
 	import { KIND_OPTIONS } from '$lib/kindOptions';
 	import type { SearchScope, SearchMatchType } from '$lib/searchPrefixes';
+	import MobilePanel from '$lib/MobilePanel.svelte';
 
 	/** All available source names. */
 	export let sources: string[] = [];
@@ -141,14 +144,7 @@
 		on:click={() => (isOpen ? (isOpen = false) : openPanel())}
 		title="Advanced filters"
 	>
-		<svg class="filter-icon" width="15" height="15" viewBox="0 0 15 15" fill="none" aria-hidden="true">
-			<line x1="1.5" y1="3.5" x2="13.5" y2="3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-			<line x1="1.5" y1="7.5" x2="13.5" y2="7.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-			<line x1="1.5" y1="11.5" x2="13.5" y2="11.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-			<circle cx="4.5" cy="3.5" r="1.5" fill="var(--bg-secondary)" stroke="currentColor" stroke-width="1.4"/>
-			<circle cx="10" cy="7.5" r="1.5" fill="var(--bg-secondary)" stroke="currentColor" stroke-width="1.4"/>
-			<circle cx="6" cy="11.5" r="1.5" fill="var(--bg-secondary)" stroke="currentColor" stroke-width="1.4"/>
-		</svg>
+		<IconFilter />
 		<span class="text">Advanced</span>
 		{#if anyFilter}
 			<span class="badge">{filterCount}</span>
@@ -159,13 +155,10 @@
 	{#if isOpen}
 		<div class="panel">
 			<div class="panel-mobile-header">
-				<span class="panel-mobile-title">Filters</span>
-				<button class="panel-mobile-close" on:click={() => (isOpen = false)} aria-label="Close filters">
-					<svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-						<line x1="3" y1="3" x2="13" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-						<line x1="13" y1="3" x2="3" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-					</svg>
+				<button class="panel-back" on:click={() => (isOpen = false)} aria-label="Close filters">
+					<IconBack />
 				</button>
+				<span class="panel-mobile-title">Filters</span>
 			</div>
 			<div class="panel-body">
 				{#if sources.length > 0}
@@ -328,7 +321,7 @@
 		color: #fff;
 	}
 
-	.filter-icon {
+	.trigger svg {
 		display: block;
 		flex-shrink: 0;
 	}
@@ -657,7 +650,7 @@
 		.panel-mobile-header {
 			display: flex;
 			align-items: center;
-			justify-content: space-between;
+			gap: 12px;
 			padding: 12px 16px;
 			border-bottom: 1px solid var(--border);
 			background: var(--bg-secondary);
@@ -668,19 +661,19 @@
 			font-weight: 600;
 			color: var(--text);
 		}
-		.panel-mobile-close {
+		.panel-back {
 			background: none;
 			border: none;
-			color: var(--text-muted);
+			color: var(--text);
 			cursor: pointer;
-			padding: 6px;
+			padding: 4px;
 			display: flex;
 			align-items: center;
 			justify-content: center;
 			border-radius: 4px;
-			min-width: 36px;
-			min-height: 36px;
+			min-width: 32px;
+			min-height: 32px;
 		}
-		.panel-mobile-close:hover { color: var(--text); background: var(--bg-hover); }
+		.panel-back:hover { background: var(--bg-hover); }
 	}
 </style>

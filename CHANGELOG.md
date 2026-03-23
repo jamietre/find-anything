@@ -9,6 +9,22 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **SVG icon components** — all inline SVGs extracted to `web/src/lib/icons/` as reusable Svelte components (21 icons: Back, Check, Clear, Copy, Download, DupChevron, Email, Filter, FitViewport, Folder, MetaClose, MetaOpen, ShareAndroid, ShareApple, ShareWindows, Spinner, ChevronLeft, ChevronRight, ChevronDown, WrapOn, WrapOff); all consumers updated to import from the shared icon directory
+- **`TopBar.svelte`** — shared topbar component used by both `SearchView` and `FileView`; eliminates the previous duplication where FileView's topbar lacked sticky positioning, search-help, and the logo help-toggle; `isSearchActive` and `nlpHighlightSpan` computed inside TopBar since it owns `isTyping`
+- **`AppLogo.svelte`** — magnifying-glass icon + "find-anything" text; logo text hidden on narrow widths (≤768 px), leaving just the icon; tapping the logo on mobile opens the search help panel
+- **`MobilePanel.svelte`** — reusable full-screen mobile panel with a back-arrow header button; uses a portal action (`document.body.appendChild`) so it renders above all ancestor overflow/display constraints; used for search help and filter panels
+- **`SearchHelpContent.svelte`** — extracted search-help markup shared between the desktop popup and the mobile panel
+- **Word-wrap overflow detection** — wrap toggle button is now shown only when content actually overflows (or word-wrap is already active), using `ResizeObserver` + `afterUpdate`; wrap toggle uses SVG icons (WrapOn/WrapOff) instead of text labels
+
+### Fixed
+
+- **Copy icon clipping and alignment** — redesigned as two overlapping rectangles with `fill` for the overlap area; `.copy-btn` uses `align-self: center` so it aligns with text in the PathBar row
+- **SVG background colour in light mode** — corrected CSS variable from non-existent `--bg-primary` to `--bg` in `DirectImageViewer`
+- **Metadata always right-aligned** — removed mobile breakpoint override that left-aligned file kind/size/date; metadata is now right-aligned at all widths
+- **FileViewer toolbar order** — view-mode buttons (View Source / View SVG) appear first, then Wrap toggle, then icon buttons (folder, download, share)
+
 ### Changed
 
 - **highlight.js language packs lazy-loaded per language** — 27 language packs are now dynamic imports instead of statically bundled; each pack is fetched on first use for that file type; `highlightFile` and `highlightLine` are now async; search result context lines render plain text immediately then update with highlighting once the pack loads

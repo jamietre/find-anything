@@ -4,48 +4,48 @@ Stream of consciousness for bugfixes and features approaching V1
 
 ## Bugs/Enhancements
 
-
+[ ] BUG: App ID is not persisted, each rebuild makes it not show up in pinned taskbar items
+[ ] BUG: Windows shows "stop watcher" before connecting to service, it should know right away status of watcher
+[ ] CHORE: Server install should also be able to chain client install
+[ ] CHORE: Include **/AppData/**, **/bin/**, **/obj/**, **/\*.log by default, "**/pnpm/\*\*", vscode-remote-wsl
+[ ] FEAT: admin email for: failed items (daily status); low disk space; overall statistics. "every day" or only warning
 [ ] FEAT: Guard against low disk space
-[ ] FEAT: Render SVG by default
-[ ] CHORE: address clippy too_many_arguments issues
 [ ] FEAT: Allow non-zip archive members to be streamable, if they are below a configrable threshold in size
-[ ] CHORE: Frontent factoring: stuff like     "showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal); " -- logic should be centralized. 
- - use general purpose functions to return type, not isMarkdown, isRTF etc
-[ ] CHORE: refactor front end to split svg assets out into files, etc
-
 [ ] Evaluate scoring algorithm: recent dates score higher; but if we use a better strategy for storing content, then 
 use the content
 [ ] BUG find-admin inbox-pause should also pause archiving. And it doesn't log except the API
 [ ] FEAT format times as 4m22s
 [ ] CHORE: frontent ux tests; frontend code quality. LOooks like lots of css duplication among other issues. Lots of components reimplemented everywhere
 [ ] FEAT: When [sources.nas-data] path = "/mnt/nas-data" is missing from server, show a clear inline error message or fallback UI in the client
-
 [ ] BUG: Fetching existing file list seems to not be targeted to a particular tree (e.g. find-scan /path/to/dir)
 [ ] FEAT: make "find-admin inbox" have subcommands
 [ ] FEAT: Run compaction scan only once a day, or on demand
-[ ] BUG: App ID is not persisted, each rebuild makes it not show up in pinned taskbar items
-[ ] BUG: Windows shows "stop watcher" before connecting to service, it should know right away status of watcher
 [ ] FEAT: Give higher priority to more recently modified documents
 [ ] FEAT: UX to retry failed scans (admin page)
-[ ] BUG: Searching on ".png" doesn't work is that improvable
-[ ] CHORE: Include **/AppData/**, **/bin/**, **/obj/**, **/\*.log by default, "**/pnpm/\*\*", vscode-remote-wsl
-[ ] CHORE: Server install should also be able to chain client install
-[ ] CHORE: Code quality: avoid optional typescript parameters; default values should be set at as high a level as possible and propagated conclusively. Add to claude.md
-[ ] FEAT: Custom protocol handler (chrome) to allow exploring the file location. Requires client config for roots.
-[ ] Write logs ferom extractors as structured json, optionally, for tool use error reporting: "As for why the member path isn't shown: the relay attaches file=Blog.zip because that's all the client knows at that point — the archive extractor subprocess's entire stderr is collected and relayed as a batch with the outer file as context. Symphonia fires inside that subprocess against a temp file, with no way to surface which archive member it was probing. There's no good fix for that without restructuring how the archive extractor emits its logs (e.g. writing structured JSON stderr instead of plain text)." (Symphonia errors don't show full path to file in client scanner)
-[ ] FEAT (planned): Add providing uname/password for share to config for each source
-[ ] FEAT (PLANNED) metrics - log start/end time of critical proceses to an external service - Grafana LGTM?
-[ ] FEAT (PLANNED): allow adding file extension -> content type mappers. Extract all hardcoded into config
+[ ] FEAT: Write logs from extractors as structured json, optionally, for tool use error reporting: "As for why the member path isn't shown: the relay attaches file=Blog.zip because that's all the client knows at that point — the archive extractor subprocess's entire stderr is collected and relayed as a batch with the outer file as context. Symphonia fires inside that subprocess against a temp file, with no way to surface which archive member it was probing. There's no good fix for that without restructuring how the archive extractor emits its logs (e.g. writing structured JSON stderr instead of plain text)." (Symphonia errors don't show full path to file in client scanner)
 
+### Code Quality
+
+[ ] CHORE: address clippy too_many_arguments issues
+[ ] CHORE: Code quality: avoid optional typescript parameters; default values should be set at as high a level as possible and propagated conclusively. Add to claude.md
+[ ] CHORE: Frontent factoring: stuff like     "showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal); " -- logic should be centralized. 
+ - use general purpose functions to return type, not isMarkdown, isRTF etc
+[ ] CHORE: refactor front end to split svg assets out into files, etc
 
 ### Major features/Integration
 
+[ ] FEAT (planned): Add providing uname/password for share to config for each source
+[ ] FEAT (PLANNED) metrics - log start/end time of critical proceses to an external service - Grafana LGTM?
+[ ] FEAT (PLANNED): allow adding file extension -> content type mappers. Extract all hardcoded into config
 [ ] WinGet
 [ ] Use Signpath code signing
 [ ] Stand up demo on fly.io
 
 ### Completed Items
 
+[x] BUG: Searching on ".png" doesn't work is that improvable
+[x] FEAT: Custom protocol handler (chrome) to allow exploring the file location. Requires client config for roots.
+[x] FEAT: Render SVG by default
 [x] FEAT: Mobile friendly layou
 [x] BUG: pictures/2014/Jamie Phone 2014/20140410_074302.jpg - no metadata available - why?
 [x] BUG: back arrow browser navigation doesn't work at all

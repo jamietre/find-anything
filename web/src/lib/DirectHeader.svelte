@@ -1,4 +1,5 @@
 <script lang="ts">
+	import AppLogo from './AppLogo.svelte';
 	export let filename: string;
 	export let mtime: number;
 	export let linkCode: string;
@@ -35,7 +36,7 @@
 </script>
 
 <header class="direct-header">
-	<a class="brand" href="/">find-anything</a>
+	<a class="brand" href="/"><AppLogo /></a>
 	<span class="filename">{filename}</span>
 	<span class="date">{dateStr}</span>
 	<div class="actions">
@@ -58,9 +59,7 @@
 	}
 
 	.brand {
-		font-size: 14px;
-		font-weight: 600;
-		color: var(--accent, #7aa2f7);
+		color: var(--accent);
 		text-decoration: none;
 		flex-shrink: 0;
 	}

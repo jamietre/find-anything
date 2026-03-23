@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher, onMount } from 'svelte';
+	import IconChevronLeft from '$lib/icons/IconChevronLeft.svelte';
+	import IconChevronRight from '$lib/icons/IconChevronRight.svelte';
 	import type { SearchResult } from '$lib/api';
 	import { getContext as fetchContext } from '$lib/api';
 	import { highlightLine } from '$lib/highlight';
@@ -228,15 +230,11 @@
 				<!-- svelte-ignore a11y-click-events-have-key-events -->
 				<span class="hit-nav" title="{activeHitIndex + 1} of {hits.length} hits" on:click|stopPropagation>
 					<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex === 0} on:click|stopPropagation={() => switchToHit(activeHitIndex - 1)} title="Previous hit (line {displayLine(hits[activeHitIndex - 1]?.line_number ?? 0)})">
-						<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-							<polyline points="5.5,1.5 2.5,4 5.5,6.5"/>
-						</svg>
+						<IconChevronLeft />
 					</button>
 					<span class="line-ref nav-line-ref">:{displayLine(hits[activeHitIndex].line_number)}</span>
 					<button class="hit-nav-btn" class:hit-nav-hidden={activeHitIndex >= hits.length - 1} on:click|stopPropagation={() => switchToHit(activeHitIndex + 1)} title="Next hit (line {displayLine(hits[activeHitIndex + 1]?.line_number ?? 0)})">
-						<svg width="8" height="8" viewBox="0 0 8 8" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-							<polyline points="2.5,1.5 5.5,4 2.5,6.5"/>
-						</svg>
+						<IconChevronRight />
 					</button>
 				</span>
 			{/if}

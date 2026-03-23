@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
+	import IconFitViewport from '$lib/icons/IconFitViewport.svelte';
 
 	export let src: string;
+	export let svgMode = false;
 
 	let container: HTMLDivElement;
 	let img: HTMLImageElement;
@@ -31,6 +33,16 @@
 	}
 
 	function onImageLoad() {
+		if (svgMode) {
+			// SVGs are vector-based; CSS handles fit via width/height 100%.
+			// JS fit calculation is skipped — fitScale stays 1.
+			scale = 1;
+			fitScale = 1;
+			offsetX = 0;
+			offsetY = 0;
+			applyTransform();
+			return;
+		}
 		const vw = container.clientWidth;
 		const vh = container.clientHeight;
 		const nw = img.naturalWidth;
@@ -101,6 +113,7 @@
 
 	onMount(() => {
 		container.addEventListener('wheel', onWheel, { passive: false });
+		if (img.complete) onImageLoad();
 	});
 
 	onDestroy(() => {
@@ -112,7 +125,9 @@
 	<div class="toolbar">
 		<button on:click={zoomIn} title="Zoom in">+</button>
 		<button on:click={zoomOut} title="Zoom out">−</button>
-		<button on:click={reset} title="Reset zoom">⊙</button>
+		<button on:click={reset} title="Fit to viewport">
+			<IconFitViewport />
+		</button>
 	</div>
 	<div
 		class="container"
@@ -130,6 +145,7 @@
 			bind:this={img}
 			{src}
 			alt=""
+			class:svg-fit={svgMode}
 			on:load={onImageLoad}
 			draggable="false"
 		/>
@@ -149,25 +165,28 @@
 		display: flex;
 		gap: 4px;
 		padding: 6px 12px;
-		background: var(--bg-secondary, #1a1a2e);
-		border-bottom: 1px solid var(--border, #333);
+		background: var(--bg-secondary);
+		border-bottom: 1px solid var(--border);
 		flex-shrink: 0;
 	}
 
 	.toolbar button {
-		background: var(--bg-tertiary, #222);
-		border: 1px solid var(--border, #333);
-		color: var(--text, #cdd6f4);
+		background: var(--badge-bg);
+		border: 1px solid var(--border);
+		color: var(--text);
 		padding: 2px 10px;
-		border-radius: var(--radius, 4px);
+		border-radius: var(--radius);
 		cursor: pointer;
 		font-size: 14px;
 		line-height: 1.4;
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
 	}
 
 	.toolbar button:hover {
-		border-color: var(--accent, #7aa2f7);
-		color: var(--accent, #7aa2f7);
+		border-color: var(--accent);
+		color: var(--accent);
 	}
 
 	.container {
@@ -179,7 +198,7 @@
 		justify-content: center;
 		cursor: grab;
 		user-select: none;
-		background: var(--bg-primary, #13131f);
+		background: var(--bg);
 	}
 
 	.container.dragging {
@@ -193,6 +212,12 @@
 		max-height: none;
 		display: block;
 		pointer-events: none;
+	}
+
+	img.svg-fit {
+		width: 100%;
+		height: 100%;
+		object-fit: contain;
 	}
 
 	@media (max-width: 768px) {

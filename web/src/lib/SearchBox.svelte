@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
+	import IconSpinner from '$lib/icons/IconSpinner.svelte';
+	import IconClear from '$lib/icons/IconClear.svelte';
 
 	export let query = '';
 	export let searching = false;
@@ -81,17 +83,11 @@
 	</div>
 	{#if showSpinner}
 		<div class="spinner" title="Searching...">
-			<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-				<circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" opacity="0.25"/>
-				<path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
-			</svg>
+			<IconSpinner />
 		</div>
 	{:else if query}
 		<button class="clear-btn" on:click={clearQuery} aria-label="Clear search">
-			<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-				<circle cx="8" cy="8" r="7" fill="currentColor" opacity="0.25"/>
-				<path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-			</svg>
+			<IconClear />
 		</button>
 	{/if}
 </div>

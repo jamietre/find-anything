@@ -1,5 +1,7 @@
 <script lang="ts">
 	import { createEventDispatcher } from 'svelte';
+	import IconCopy from '$lib/icons/IconCopy.svelte';
+	import IconCheck from '$lib/icons/IconCheck.svelte';
 	export let source: string;
 	export let path: string;
 	export let archivePath: string | null = null;
@@ -101,15 +103,10 @@
 		{/each}
 		<button class="copy-btn" class:copied on:click={copyPath} data-tooltip="Copy path">
 			{#if copied}
-				<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
-					<polyline points="2,7 5,10 11,3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-				</svg>
+				<IconCheck />
 				<span class="copied-label">Copied</span>
 			{:else}
-				<svg width="13" height="13" viewBox="0 0 13 13" fill="none" aria-hidden="true">
-					<rect x="4" y="1" width="8" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/>
-					<path d="M2 4H1.5A1.5 1.5 0 0 0 0 5.5v6A1.5 1.5 0 0 0 1.5 13H8A1.5 1.5 0 0 0 9.5 11.5V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
-				</svg>
+				<IconCopy />
 			{/if}
 		</button>
 	</span>
@@ -136,19 +133,18 @@
 	}
 
 	.back-btn {
-		background: none;
-		border: 1px solid var(--border);
-		color: var(--text-muted);
+		background: var(--badge-bg);
+		border: none;
+		color: var(--badge-text);
 		padding: 3px 10px;
-		border-radius: var(--radius);
+		border-radius: 20px;
 		font-size: 12px;
 		flex-shrink: 0;
 		cursor: pointer;
 	}
 
 	.back-btn:hover {
-		border-color: var(--accent);
-		color: var(--accent);
+		opacity: 0.75;
 	}
 
 	.badge {
@@ -173,7 +169,7 @@
 		min-width: 0;
 		display: flex;
 		flex-wrap: wrap;
-		align-items: baseline;
+		align-items: center;
 		gap: 0;
 		color: var(--accent);
 	}
@@ -216,6 +212,7 @@
 		color: var(--text-dim);
 		flex-shrink: 0;
 		display: inline-flex;
+		align-self: center;
 		align-items: center;
 		gap: 4px;
 		border-radius: 3px;
