@@ -6,17 +6,26 @@ use std::time::Duration;
 use find_common::config::{ExtractorEntry, ExternalExtractorConfig, ExternalExtractorMode};
 use find_client::watch::{WatchOptions, run_watch};
 
-/// Start the watcher in a background task. Returns a `JoinHandle` — call
-/// `handle.abort()` at the end of the test to stop it.
-async fn start_watcher(env: &TestEnv) -> tokio::task::JoinHandle<()> {
-    let config = env.client_config();
+/// Start the watcher with a given config and wait for it to finish
+/// registering inotify watches before returning.
+/// Returns a `JoinHandle` — call `handle.abort()` at the end of the test.
+async fn start_watcher_with_config(config: find_common::config::ClientConfig) -> tokio::task::JoinHandle<()> {
     let opts = WatchOptions {
         config_path: String::new(),
         scan_now: false,
     };
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         let _ = run_watch(&config, &opts).await;
-    })
+    });
+    // Give the watcher time to complete startup (server version check +
+    // walk to register inotify watches) before the test touches the filesystem.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    handle
+}
+
+/// Start the watcher with the default test config.
+async fn start_watcher(env: &TestEnv) -> tokio::task::JoinHandle<()> {
+    start_watcher_with_config(env.client_config()).await
 }
 
 /// Wait a short period for filesystem events to propagate and be processed.
@@ -132,6 +141,51 @@ async fn w4_renamed_file_updates_index() {
     handle.abort();
 }
 
+// ── W6 — File created empty then updated with content is fully indexed ────────
+//
+// Regression test for a bug where find-watch never computed the blake3 hash,
+// so content lines were inserted into FTS5 (making the file searchable) but the
+// raw bytes were never stored in the blob store — leaving the file viewer empty.
+
+#[ignore]
+#[tokio::test]
+async fn w6_empty_file_then_content_is_stored() {
+    let env = TestEnv::new().await;
+    let handle = start_watcher(&env).await;
+
+    // 1. Create the file empty.
+    let path = env.write_file("watch_content.txt", "");
+    settle(&env).await;
+
+    // File should be indexed but have no searchable content yet.
+    assert!(
+        env.search("w6_unique_phrase_content").await.is_empty(),
+        "content found before it was written"
+    );
+
+    // 2. Write content (bump mtime so the watcher sees a change).
+    let new_mtime = std::time::SystemTime::now() + std::time::Duration::from_secs(2);
+    filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(new_mtime))
+        .expect("set mtime");
+    std::fs::write(&path, "w6_unique_phrase_content").expect("write content");
+    settle(&env).await;
+
+    // 3. Content must be searchable.
+    assert!(
+        !env.search("w6_unique_phrase_content").await.is_empty(),
+        "content not found after writing"
+    );
+
+    // 4. Content must be retrievable from the blob store (file viewer).
+    let lines = env.get_file_lines("watch_content.txt").await;
+    assert!(
+        lines.iter().any(|l| l.contains("w6_unique_phrase_content")),
+        "content not in stored blob after update; lines={lines:?}"
+    );
+
+    handle.abort();
+}
+
 // ── W5 — External extractor honoured by watch ────────────────────────────────
 
 #[ignore]
@@ -144,11 +198,9 @@ async fn w5_external_extractor_honoured_by_watch() {
         .to_string_lossy()
         .to_string();
 
-    let config = env.client_config_with(|_watch| {
+    let mut config = env.client_config_with(|_watch| {
         // watch config doesn't carry extractor overrides; those live in scan config
     });
-    // Rebuild config with scan.extractors set.
-    let mut config = config;
     config.scan.extractors.insert(
         "nd1".to_string(),
         ExtractorEntry::External(ExternalExtractorConfig {
@@ -158,13 +210,7 @@ async fn w5_external_extractor_honoured_by_watch() {
         }),
     );
 
-    let opts = WatchOptions {
-        config_path: String::new(),
-        scan_now: false,
-    };
-    let handle = tokio::spawn(async move {
-        let _ = run_watch(&config, &opts).await;
-    });
+    let handle = start_watcher_with_config(config).await;
 
     let fixture_nd1 = std::path::Path::new(&fixtures).join("test.nd1");
     let nd1_bytes = std::fs::read(&fixture_nd1).expect("read test.nd1");

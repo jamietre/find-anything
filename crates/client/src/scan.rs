@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::UNIX_EPOCH;
@@ -24,24 +24,7 @@ use crate::upload;
 
 
 
-/// Hash a file's contents using blake3 without reading the whole file into memory.
-/// Returns `None` for empty files so they are not deduped against each other
-/// (the hash of 0 bytes is a fixed value, which would falsely mark all empty
-/// files as duplicates).
-fn hash_file(path: &Path) -> Option<String> {
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut hasher = blake3::Hasher::new();
-    let mut buf = [0u8; 65536];
-    let mut total = 0usize;
-    loop {
-        let n = file.read(&mut buf).ok()?;
-        if n == 0 { break; }
-        hasher.update(&buf[..n]);
-        total += n;
-    }
-    if total == 0 { return None; }
-    Some(hasher.finalize().to_hex().to_string())
-}
+use crate::batch::hash_file;
 const MAX_FAILURES_PER_BATCH: usize = 100;
 const MAX_ERROR_LEN: usize = 500;
 

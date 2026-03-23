@@ -1,12 +1,31 @@
 #![allow(dead_code)] // functions are used by different binaries in this crate
 
 use std::collections::HashMap;
+use std::io::Read;
 use std::path::Path;
 
 use anyhow::Result;
 use find_common::api::{BulkRequest, FileKind, IndexFile, IndexingFailure, IndexLine, SCANNER_VERSION, LINE_PATH, LINE_METADATA, LINE_CONTENT_START};
 
 use crate::api::ApiClient;
+
+/// Blake3 hash of a file's raw bytes, used as the content-store key.
+/// Returns `None` for empty files (the all-zeros hash would falsely
+/// deduplicate all empty files against each other).
+pub(crate) fn hash_file(path: &Path) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = [0u8; 65536];
+    let mut total = 0usize;
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 { break; }
+        hasher.update(&buf[..n]);
+        total += n;
+    }
+    if total == 0 { return None; }
+    Some(hasher.finalize().to_hex().to_string())
+}
 
 /// Ensure the metadata slot (line 1) is present, inserting an empty placeholder if needed.
 ///

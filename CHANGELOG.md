@@ -11,6 +11,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **`find-watch` file content not stored in blob store** — `handle_update` never computed the blake3 hash, so `file_hash` was always `None` in the bulk request; Phase 2 had no key to store the blob, leaving the file viewer empty even though the file was searchable via FTS5; fix: compute hash via shared `batch::hash_file` and attach it to the `IndexFile`; `hash_file` consolidated from duplicate copies in `scan.rs` and `watch.rs` into `batch.rs`
 - **`find-watch` hang during startup on older kernels** — separated directory walk from inotify watch registration; walkdir was generating inotify OPEN events for every directory it opened, flooding the notify background thread's read loop and deadlocking the `watch()` channel on kernel 3.10; all directories are now collected first (before any watches exist), then registered in a second pass
 - **`find-watch` only watched 1 directory when no `include` patterns configured** — `include_dir_prefixes(&[])` returns `Some({})` (an empty terminal set that prunes everything); guard added so an empty include list yields `None` (watch everything), matching the behaviour of `find-scan`
 - **`.index` include patterns now prune directory traversal in `find-watch`** — `walk_source_tree` (shared by `find-scan` and `find-watch`) now reads `.index` files during the DFS and skips sibling subtrees excluded by their `include` field, giving both binaries identical directory-pruning behaviour
@@ -18,6 +19,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **`find-scan` not found in upload integration tests** — `resolve_find_scan` now also checks the parent of the current exe's directory; test binaries live in `target/debug/deps/` but `find-scan` is built one level up in `target/debug/`, so the previous code fell back to PATH (which works locally if `find-scan` is installed, but never in CI)
 
 ### Added
+
+- **Watch integration tests W1–W6** — all watch tests now reliably pass: `batch_window_secs` set to 50 ms in test config (default 5 s caused timeouts); `start_watcher` waits 500 ms for inotify registration before tests touch the filesystem; `start_watcher_with_config` extracted so W5 (external extractor) shares the same startup wait; W6 added as regression test for the blob-store bug (create empty file, add content, verify both search and file-viewer content are correct); `get_file_lines` helper added to `TestEnv`
 
 - **SVG icon components** — all inline SVGs extracted to `web/src/lib/icons/` as reusable Svelte components (21 icons: Back, Check, Clear, Copy, Download, DupChevron, Email, Filter, FitViewport, Folder, MetaClose, MetaOpen, ShareAndroid, ShareApple, ShareWindows, Spinner, ChevronLeft, ChevronRight, ChevronDown, WrapOn, WrapOff); all consumers updated to import from the shared icon directory
 - **`TopBar.svelte`** — shared topbar component used by both `SearchView` and `FileView`; eliminates the previous duplication where FileView's topbar lacked sticky positioning, search-help, and the logo help-toggle; `isSearchActive` and `nlpHighlightSpan` computed inside TopBar since it owns `isTyping`

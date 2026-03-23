@@ -17,7 +17,7 @@ use find_common::{
 
 use walkdir::WalkDir;
 use crate::api::ApiClient;
-use crate::batch::build_index_files;
+use crate::batch::{build_index_files, hash_file};
 use crate::subprocess;
 
 /// Options passed to `run_watch` from the CLI entry point.
@@ -601,9 +601,11 @@ async fn handle_update(
         FileKind::from_extension(ext)
     };
 
+    let file_hash = hash_file(abs_path);
     let mut files = build_index_files(rel_path.to_string(), mtime, size, kind, lines);
     if let Some(f) = files.first_mut() {
         f.is_new = is_new;
+        f.file_hash = file_hash;
     }
 
     api.bulk(&BulkRequest {
@@ -1062,6 +1064,7 @@ fn mtime_of(path: &Path) -> Option<i64> {
 fn size_of(path: &Path) -> Option<i64> {
     path.metadata().ok().map(|m| m.len() as i64)
 }
+
 
 #[cfg(test)]
 mod tests {

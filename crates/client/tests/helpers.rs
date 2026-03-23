@@ -188,6 +188,7 @@ impl TestEnv {
     pub fn client_config_with<F: FnOnce(&mut WatchConfig)>(&self, f: F) -> ClientConfig {
         let mut watch = WatchConfig {
             scan_interval_hours: 0.0, // disable periodic find-scan subprocess
+            batch_window_secs: 0.05,  // flush quickly in tests (default is 5s)
             ..WatchConfig::default()
         };
         f(&mut watch);
@@ -251,5 +252,26 @@ impl TestEnv {
         api.list_files(&self.source_name)
             .await
             .expect("list_files failed")
+    }
+
+    /// Fetch the stored content lines for a file via GET /api/v1/file.
+    /// Returns an empty vec if the file has no stored content (blob not found).
+    pub async fn get_file_lines(&self, rel_path: &str) -> Vec<String> {
+        use find_common::api::FileResponse;
+        let url = format!(
+            "{}/api/v1/file?source={}&path={}",
+            self.server.base_url,
+            self.source_name,
+            rel_path,
+        );
+        let resp: FileResponse = self.server.client
+            .get(&url)
+            .send()
+            .await
+            .expect("GET /api/v1/file")
+            .json()
+            .await
+            .expect("FileResponse json");
+        resp.lines
     }
 }
