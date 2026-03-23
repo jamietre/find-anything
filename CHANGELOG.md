@@ -9,6 +9,15 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+- **highlight.js language packs lazy-loaded per language** — 27 language packs are now dynamic imports instead of statically bundled; each pack is fetched on first use for that file type; `highlightFile` and `highlightLine` are now async; search result context lines render plain text immediately then update with highlighting once the pack loads
+- **RTF.js build warning suppressed** — Vite `onwarn` handler silences the chunk-too-large warning for the rtf.js chunk, which is intentionally large and lazy-loaded only when an RTF file is opened
+
+### Fixed
+
+- **`CreateLinkRequest` struct literals in integration tests** — added missing `expires_in_secs: None` to all test struct initialisers after the field was added to the type
+
 ### Added
 
 - **Share button in file viewer toolbar** — OS-aware share icon (iOS tray-arrow, Windows box-arrow, Android three-circle graph) opens a dialog with expiry selector (1 day / 1 week / 1 month / Never) and a "Create link" button; once the link is generated it appears with a copy icon and an Email button; on iOS/Android/browsers that support `navigator.share` the native share sheet is invoked instead; the PathBar inline share-link button is removed in favour of this dialog

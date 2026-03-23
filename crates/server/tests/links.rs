@@ -22,6 +22,7 @@ async fn test_create_and_resolve_link() {
             source: "docs".to_string(),
             path: "notes/important.txt".to_string(),
             archive_path: None,
+            expires_in_secs: None,
         })
         .send()
         .await
@@ -69,6 +70,7 @@ async fn test_two_links_have_different_codes() {
                     source: "docs".to_string(),
                     path: path.to_string(),
                     archive_path: None,
+                    expires_in_secs: None,
                 })
                 .send()
                 .await
@@ -114,6 +116,7 @@ async fn test_create_link_requires_auth() {
             source: "docs".to_string(),
             path: "file.txt".to_string(),
             archive_path: None,
+            expires_in_secs: None,
         })
         .send()
         .await
@@ -136,6 +139,7 @@ async fn test_repeated_link_creation_returns_new_code() {
         source: "docs".to_string(),
         path: "shared.txt".to_string(),
         archive_path: None,
+        expires_in_secs: None,
     };
 
     let first: CreateLinkResponse = srv

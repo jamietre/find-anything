@@ -64,9 +64,18 @@
 			);
 			contextStart = resp.start;
 			contextMatchIndex = resp.match_index;
-			contextLines = resp.lines;
+			const lines = resp.lines;
+			if (lines.length > 0) {
+				const highlighted = await Promise.all(lines.map(l => highlightLine(l, hit.path)));
+				contextLines = lines;
+				highlightedContextLines = highlighted;
+			} else {
+				contextLines = lines;
+				highlightedSnippet = await highlightLine(hit.snippet, hit.path);
+			}
 		} catch {
 			// silently fall back to snippet
+			try { highlightedSnippet = await highlightLine(hit.snippet, hit.path); } catch { /* ignore */ }
 		} finally {
 			contextLoaded = true;
 		}
@@ -77,6 +86,8 @@
 		activeHitIndex = i;
 		contextLoaded = false;
 		contextLines = [];
+		highlightedContextLines = [];
+		highlightedSnippet = '';
 		contextStart = 0;
 		contextMatchIndex = null;
 		loadContext();
@@ -175,6 +186,11 @@
 	}
 
 	let aliasesExpanded = false;
+
+	/** Highlighted HTML for context lines (set after loadContext resolves). */
+	let highlightedContextLines: string[] = [];
+	/** Highlighted HTML for the snippet fallback (set after loadContext resolves). */
+	let highlightedSnippet = '';
 </script>
 
 <article class="result" bind:this={el}>
@@ -269,14 +285,14 @@
 				<div class="line" class:match={isMatch}>
 					<span class="ln">{displayLine(lineNum)}</span>
 					<span class="arrow">{isMatch ? '▶' : ' '}</span>
-					<code class="lc">{@html highlightLine(content, result.path)}</code>
+					<code class="lc">{@html highlightedContextLines[i] ?? escapeHtml(content)}</code>
 				</div>
 			{/each}
 		{:else if contextLoaded}
 			<div class="line match">
 				<span class="ln">{displayLine(result.line_number)}</span>
 				<span class="arrow">▶</span>
-				<code class="lc">{@html highlightLine(result.snippet, result.path)}</code>
+				<code class="lc">{@html highlightedSnippet || escapeHtml(result.snippet)}</code>
 			</div>
 		{:else}
 			{#each Array(2 * $contextWindow + 1) as _, i}

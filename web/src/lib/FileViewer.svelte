@@ -350,13 +350,13 @@
 	}
 
 	/** Rebuild rawContent / highlightedCode / lineOffsets from accumulated lines. */
-	function updateCodeState() {
+	async function updateCodeState() {
 		lineOffsets = allLineOffsets;
 		rawContent = allContentLines.join('\n');
-		highlightedCode = highlightFile(allContentLines, path);
+		highlightedCode = await highlightFile(allContentLines, path);
 	}
 
-	function applyFileData(data: import('$lib/api').FileResponse, isInitial: boolean) {
+	async function applyFileData(data: import('$lib/api').FileResponse, isInitial: boolean) {
 		contentUnavailable = data.content_unavailable ?? false;
 		if (contentUnavailable) return;
 		error = null;
@@ -383,7 +383,7 @@
 			? adjustOffsets(data.line_offsets)
 			: data.lines.map((_, i) => i + 1);
 		rawContent = data.lines.join('\n');
-		highlightedCode = highlightFile(data.lines, path);
+		highlightedCode = await highlightFile(data.lines, path);
 		mtime = data.mtime;
 		size = data.size;
 		fileKind = data.file_kind ?? null;
@@ -462,10 +462,10 @@
 				backwardOffset = anchorOffset;
 				noMoreForward = forwardOffset >= totalLines;
 				noMoreBackward = anchorOffset === 0;
-				updateCodeState();
+				await updateCodeState();
 			} else {
 				// Single-page (full file) mode — identical to previous behaviour.
-				applyFileData(data, isInitial);
+				await applyFileData(data, isInitial);
 			}
 		} catch (e) {
 			error = String(e);
@@ -495,7 +495,7 @@
 			allLineOffsets = [...allLineOffsets, ...pageOffsets];
 			forwardOffset += data.lines.length;
 			noMoreForward = forwardOffset >= totalLines;
-			updateCodeState();
+			await updateCodeState();
 			await tick();
 		} catch { /* silent — user can scroll again to retry */ }
 		loadingForward = false;
@@ -522,7 +522,7 @@
 			allLineOffsets = [...pageOffsets, ...allLineOffsets];
 			backwardOffset = prevOffset;
 			noMoreBackward = prevOffset === 0;
-			updateCodeState();
+			await updateCodeState();
 
 			await tick();
 			codeContainer.scrollTop = oldScrollTop + (codeContainer.scrollHeight - oldScrollHeight);

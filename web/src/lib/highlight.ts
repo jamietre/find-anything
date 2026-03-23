@@ -1,65 +1,54 @@
 import hljs from 'highlight.js/lib/core';
+import type { LanguageFn } from 'highlight.js';
 
-// ── Language imports ──────────────────────────────────────────────────────────
-import bash from 'highlight.js/lib/languages/bash';
-import c from 'highlight.js/lib/languages/c';
-import csharp from 'highlight.js/lib/languages/csharp';
-import cpp from 'highlight.js/lib/languages/cpp';
-import css from 'highlight.js/lib/languages/css';
-import dockerfile from 'highlight.js/lib/languages/dockerfile';
-import go from 'highlight.js/lib/languages/go';
-import ini from 'highlight.js/lib/languages/ini'; // also used for TOML
-import java from 'highlight.js/lib/languages/java';
-import javascript from 'highlight.js/lib/languages/javascript';
-import json from 'highlight.js/lib/languages/json';
-import kotlin from 'highlight.js/lib/languages/kotlin';
-import lua from 'highlight.js/lib/languages/lua';
-import makefile from 'highlight.js/lib/languages/makefile';
-import markdown from 'highlight.js/lib/languages/markdown';
-import php from 'highlight.js/lib/languages/php';
-import python from 'highlight.js/lib/languages/python';
-import r from 'highlight.js/lib/languages/r';
-import ruby from 'highlight.js/lib/languages/ruby';
-import rust from 'highlight.js/lib/languages/rust';
-import scala from 'highlight.js/lib/languages/scala';
-import shell from 'highlight.js/lib/languages/shell';
-import sql from 'highlight.js/lib/languages/sql';
-import swift from 'highlight.js/lib/languages/swift';
-import typescript from 'highlight.js/lib/languages/typescript';
-import vim from 'highlight.js/lib/languages/vim';
-import xml from 'highlight.js/lib/languages/xml'; // HTML, XML, SVG
-import yaml from 'highlight.js/lib/languages/yaml';
+// ── Lazy language loaders ─────────────────────────────────────────────────────
 
-hljs.registerLanguage('bash', bash);
-hljs.registerLanguage('c', c);
-hljs.registerLanguage('csharp', csharp);
-hljs.registerLanguage('cpp', cpp);
-hljs.registerLanguage('css', css);
-hljs.registerLanguage('dockerfile', dockerfile);
-hljs.registerLanguage('go', go);
-hljs.registerLanguage('ini', ini);
-hljs.registerLanguage('java', java);
-hljs.registerLanguage('javascript', javascript);
-hljs.registerLanguage('json', json);
-hljs.registerLanguage('kotlin', kotlin);
-hljs.registerLanguage('lua', lua);
-hljs.registerLanguage('makefile', makefile);
-hljs.registerLanguage('markdown', markdown);
-hljs.registerLanguage('php', php);
-hljs.registerLanguage('python', python);
-hljs.registerLanguage('r', r);
-hljs.registerLanguage('ruby', ruby);
-hljs.registerLanguage('rust', rust);
-hljs.registerLanguage('scala', scala);
-hljs.registerLanguage('shell', shell);
-hljs.registerLanguage('sql', sql);
-hljs.registerLanguage('swift', swift);
-hljs.registerLanguage('typescript', typescript);
-hljs.registerLanguage('vim', vim);
-hljs.registerLanguage('xml', xml);
-hljs.registerLanguage('yaml', yaml);
+type Loader = () => Promise<{ default: LanguageFn }>;
+
+const LANG_LOADERS: Record<string, Loader> = {
+	bash:       () => import('highlight.js/lib/languages/bash'),
+	c:          () => import('highlight.js/lib/languages/c'),
+	csharp:     () => import('highlight.js/lib/languages/csharp'),
+	cpp:        () => import('highlight.js/lib/languages/cpp'),
+	css:        () => import('highlight.js/lib/languages/css'),
+	dockerfile: () => import('highlight.js/lib/languages/dockerfile'),
+	go:         () => import('highlight.js/lib/languages/go'),
+	ini:        () => import('highlight.js/lib/languages/ini'),
+	java:       () => import('highlight.js/lib/languages/java'),
+	javascript: () => import('highlight.js/lib/languages/javascript'),
+	json:       () => import('highlight.js/lib/languages/json'),
+	kotlin:     () => import('highlight.js/lib/languages/kotlin'),
+	lua:        () => import('highlight.js/lib/languages/lua'),
+	makefile:   () => import('highlight.js/lib/languages/makefile'),
+	markdown:   () => import('highlight.js/lib/languages/markdown'),
+	php:        () => import('highlight.js/lib/languages/php'),
+	python:     () => import('highlight.js/lib/languages/python'),
+	r:          () => import('highlight.js/lib/languages/r'),
+	ruby:       () => import('highlight.js/lib/languages/ruby'),
+	rust:       () => import('highlight.js/lib/languages/rust'),
+	scala:      () => import('highlight.js/lib/languages/scala'),
+	shell:      () => import('highlight.js/lib/languages/shell'),
+	sql:        () => import('highlight.js/lib/languages/sql'),
+	swift:      () => import('highlight.js/lib/languages/swift'),
+	typescript: () => import('highlight.js/lib/languages/typescript'),
+	vim:        () => import('highlight.js/lib/languages/vim'),
+	xml:        () => import('highlight.js/lib/languages/xml'),
+	yaml:       () => import('highlight.js/lib/languages/yaml'),
+};
+
+const loaded = new Set<string>();
+
+async function ensureLanguage(lang: string): Promise<void> {
+	if (loaded.has(lang)) return;
+	const loader = LANG_LOADERS[lang];
+	if (!loader) return;
+	const mod = await loader();
+	hljs.registerLanguage(lang, mod.default);
+	loaded.add(lang);
+}
 
 // ── Extension → language map ──────────────────────────────────────────────────
+
 const EXT_MAP: Record<string, string> = {
 	// Systems
 	rs: 'rust',
@@ -150,15 +139,18 @@ function escapeHtml(text: string): string {
  * suitable for rendering inside a <pre><code> block.
  * Rendering as a single block preserves multi-line spans (strings, comments).
  */
-export function highlightFile(lines: string[], filePath: string): string {
+export async function highlightFile(lines: string[], filePath: string): Promise<string> {
 	const lang = getLanguage(filePath);
 	const code = lines.join('\n');
 
 	try {
-		if (lang && hljs.getLanguage(lang)) {
-			return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+		if (lang) {
+			await ensureLanguage(lang);
+			if (hljs.getLanguage(lang)) {
+				return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value;
+			}
 		}
-		return hljs.highlightAuto(code).value;
+		return escapeHtml(code);
 	} catch {
 		return escapeHtml(code);
 	}
@@ -168,11 +160,14 @@ export function highlightFile(lines: string[], filePath: string): string {
  * Highlight a single line snippet for search result context.
  * Returns escaped HTML (no full-file context, so syntax may be approximate).
  */
-export function highlightLine(content: string, filePath: string): string {
+export async function highlightLine(content: string, filePath: string): Promise<string> {
 	const lang = getLanguage(filePath);
 	try {
-		if (lang && hljs.getLanguage(lang)) {
-			return hljs.highlight(content, { language: lang, ignoreIllegals: true }).value;
+		if (lang) {
+			await ensureLanguage(lang);
+			if (hljs.getLanguage(lang)) {
+				return hljs.highlight(content, { language: lang, ignoreIllegals: true }).value;
+			}
 		}
 		return escapeHtml(content);
 	} catch {
