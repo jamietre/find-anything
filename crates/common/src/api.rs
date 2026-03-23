@@ -263,6 +263,10 @@ pub struct SearchResult {
 pub struct SearchResponse {
     pub results: Vec<SearchResult>,
     pub total: usize,
+    /// True when the result set was capped — more results likely exist beyond what was processed.
+    /// The UI should display "N+" rather than "N" when this is set.
+    #[serde(default)]
+    pub capped: bool,
 }
 
 /// One line in a context window.

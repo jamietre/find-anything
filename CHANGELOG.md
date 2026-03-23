@@ -26,6 +26,9 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **`file:pdf` / `file:jpg` search returning too few results** — two bugs caused filename-scoped searches to miss most matches: (1) archive members (e.g. `archive.zip::report.pdf`) were scored against the outer archive path (`archive.zip`) which fails fuzzy matching for queries like "pdf"; now scored against the composite path; (2) SQLite applies `LIMIT` before the `rowid % 1_000_000 = 0` filename filter, so only a handful of filename rows survived a small candidate limit; filename-only queries now use `fts_limit` (2000) as the SQL `LIMIT` and truncate to `scoring_limit` after the rowid filter
+- **Search result count shows "N+" when results are capped** — the result count now displays a "+" suffix (e.g. "2000+") when the server's candidate cap is reached, giving users an immediate signal that more results exist beyond the current page; the suffix disappears on the final page when the exact total is known
+
 - **Upload chunk 413 Payload Too Large** — `upload_routes` now uses `DefaultBodyLimit::disable()` so large file chunks (previously capped at Axum's 2 MB default) are accepted without error
 - **Indexing errors cleared by completion upsert** — `find-scan` no longer sends a completion upsert after a subprocess extraction failure (stdout/TempDir paths), preventing the server from treating the error as resolved
 

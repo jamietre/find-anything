@@ -21,6 +21,7 @@
 	export let caseSensitive = false;
 	export let results: SearchResult[] = [];
 	export let totalResults = 0;
+	export let resultsCapped = false;
 	export let searchError: string | null = null;
 	export let searchId = 0;
 	export let showTree = false;
@@ -158,7 +159,7 @@
 	{:else if query.trim().length >= 3}
 		{#if !isSearchActive || totalResults > 0}
 			<div class="result-meta">
-				{totalResults.toLocaleString()} result{totalResults !== 1 ? 's' : ''}{resultDateSuffix}
+				{totalResults.toLocaleString()}{resultsCapped ? '+' : ''} result{totalResults !== 1 ? 's' : ''}{resultDateSuffix}
 			</div>
 		{/if}
 		{#if resultsStale}

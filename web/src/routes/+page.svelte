@@ -71,6 +71,7 @@
 
 	let results: SearchResult[] = [];
 	let totalResults = 0;
+	let resultsCapped = false;
 	let searching = false;
 	let searchError: string | null = null;
 	let searchId = 0;
@@ -295,6 +296,7 @@
 				const merged = mergePage(results, resp.results, loadOffset);
 				results = merged.results;
 				totalResults = resp.total;
+				resultsCapped = resp.capped;
 				loadOffset = merged.newOffset;
 			}
 			await tick();
@@ -311,7 +313,7 @@
 		resultsStale = false;
 		deletedPaths = new Set();
 		if (q.trim().length < 3) {
-			results = []; totalResults = 0; noMoreResults = false; loadOffset = 0; searchError = null;
+			results = []; totalResults = 0; resultsCapped = false; noMoreResults = false; loadOffset = 0; searchError = null;
 			return;
 		}
 
@@ -361,13 +363,14 @@
 			const merged = mergePage([], resp.results, 0);
 			results = merged.results;
 			totalResults = resp.total;
+			resultsCapped = resp.capped;
 			loadOffset = merged.newOffset;
 			if (resp.results.length === 0) noMoreResults = true;
 			if (push) fileView = null;
 		} catch (e) {
 			if (mySearchId !== searchId) return;
 			searchError = String(e);
-			results = []; totalResults = 0; noMoreResults = true; loadOffset = 0;
+			results = []; totalResults = 0; resultsCapped = false; noMoreResults = true; loadOffset = 0;
 			if (push) fileView = null;
 		} finally {
 			if (mySearchId === searchId) searching = false;
@@ -585,6 +588,7 @@
 				dateTo={dateToStr}
 				{results}
 				{totalResults}
+				resultsCapped={resultsCapped}
 				{searchError}
 				{searchId}
 				{showTree}

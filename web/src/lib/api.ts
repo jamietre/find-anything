@@ -31,6 +31,8 @@ export interface SearchResult {
 export interface SearchResponse {
 	results: SearchResult[];
 	total: number;
+	/** True when the result set was capped; display "N+" instead of "N". */
+	capped: boolean;
 }
 
 export interface FileResponse {

@@ -379,13 +379,22 @@ pub async fn search(
                     _ /* Exact | FileExact */ => (true, query.clone()),
                 };
 
-                // Score only as many candidates as needed for this page.
-                let mut candidates = db::fts_candidates(&conn, &fts_query, scoring_limit, fts_phrase, date_filter)?;
+                // For filename-only mode the SQL rowid filter (line_number == 0) is applied
+                // after SQLite has already consumed the LIMIT from the FTS5 posting list.
+                // The posting list contains both filename rows and content rows; using
+                // scoring_limit as the SQL LIMIT would cut off most filename rows before
+                // they are examined.  Use fts_limit (the global ceiling) as the SQL LIMIT
+                // so that enough raw rows are fetched to produce scoring_limit filename rows
+                // after the rowid filter.
+                let candidate_limit = if filename_only { fts_limit } else { scoring_limit };
+                let mut candidates = db::fts_candidates(&conn, &fts_query, candidate_limit, fts_phrase, date_filter)?;
 
                 // For file-* modes, restrict to line_number == 0 (filename rows).
-                // The FTS SQL already enforces this via SQL_FTS_FILENAME_ONLY; this is a safety check.
+                // The FTS SQL already enforces this via SQL_FTS_FILENAME_ONLY; this is a
+                // safety check, and also trims any excess rows beyond scoring_limit.
                 if filename_only {
                     candidates.retain(|c| c.line_number == 0);
+                    candidates.truncate(scoring_limit);
                 }
 
                 // Build ScoredResult pairs for alias lookup.
@@ -423,14 +432,27 @@ pub async fn search(
                         candidates.into_iter()
                             .filter_map(|c| {
                                 // After plan 080, content is not populated for non-regex modes.
-                                // For FileFuzzy (filename search): score against the file path.
+                                // For FileFuzzy (filename search): score against the composite path.
+                                // Archive members are stored as "outer.zip::member.pdf"; after
+                                // split_composite_path, file_path = "outer.zip" and archive_path =
+                                // "member.pdf".  Scoring only against file_path drops valid matches
+                                // (e.g. "pdf" won't fuzzy-match "archive.zip").  We therefore score
+                                // against the member path when one exists.
                                 // For Fuzzy (content search): FTS already validated the match;
                                 //   score against the path for ranking, or accept with score=1.
+                                let composite_buf;
                                 let score_text: &str = if !c.content.is_empty() {
                                     &c.content
                                 } else if filename_only {
-                                    // FileFuzzy: path is the right thing to score against.
-                                    &c.file_path
+                                    // FileFuzzy: score against archive member path if present,
+                                    // otherwise against the full file path.
+                                    match &c.archive_path {
+                                        Some(ap) => {
+                                            composite_buf = format!("{}::{}", c.file_path, ap);
+                                            &composite_buf
+                                        }
+                                        None => &c.file_path,
+                                    }
                                 } else {
                                     // Fuzzy content search: FTS validated match; score by path
                                     // for relative ranking (files whose path matches score higher).
@@ -439,7 +461,7 @@ pub async fn search(
                                 // In case-sensitive mode, require every query term to appear
                                 // as a literal substring.
                                 if !query_terms.is_empty()
-                                    && !query_terms.iter().all(|t| c.content.contains(*t) || c.file_path.contains(*t))
+                                    && !query_terms.iter().all(|t| c.content.contains(*t) || score_text.contains(*t))
                                 {
                                     return None;
                                 }
@@ -501,5 +523,7 @@ pub async fn search(
     let unique_total = unique.len();
     let results: Vec<_> = unique.into_iter().skip(offset).take(limit).collect();
 
-    Json(SearchResponse { results, total: unique_total }).into_response()
+    // capped = the current page is full, meaning more results are likely available.
+    let capped = results.len() == limit;
+    Json(SearchResponse { results, total: unique_total, capped }).into_response()
 }
