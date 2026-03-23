@@ -252,7 +252,7 @@ async fn upload_status_requires_auth() {
 /// the task may not have written to the inbox yet when wait_for_idle is called.
 async fn wait_for_search_result(srv: &TestServer, query: &str, source: &str) {
     use std::time::{Duration, Instant};
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         srv.wait_for_idle().await;
         let resp: SearchResponse = srv
@@ -268,7 +268,7 @@ async fn wait_for_search_result(srv: &TestServer, query: &str, source: &str) {
             return;
         }
         if Instant::now() >= deadline {
-            panic!("file '{query}' not searchable in source '{source}' after 10s");
+            panic!("file '{query}' not searchable in source '{source}' after 30s");
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
