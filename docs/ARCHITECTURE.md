@@ -5,7 +5,7 @@
 find-anything is a two-process system for full-text indexing and search of local files.
 
 ```
-find-scan ──POST /api/v1/bulk──▶ find-server ──▶ SQLite + ZIP archives
+find-scan ──POST /api/v1/bulk──▶ find-server ──▶ SQLite + blobs.db
                                       │
                               GET /api/v1/search
                                       │
@@ -16,6 +16,8 @@ find-scan ──POST /api/v1/bulk──▶ find-server ──▶ SQLite + ZIP ar
 |--------|------|
 | `find-server` | Receives indexed content, stores it, serves search queries |
 | `find-scan`   | Walks the filesystem, extracts content, batches to server |
+| `find-watch`  | inotify/FSEvents watcher; spawns extractor subprocesses and submits to server |
+| `find-upload` | Chunked HTTP upload client; delegates extraction to find-scan on the server |
 
 ---
 
@@ -25,16 +27,19 @@ find-scan ──POST /api/v1/bulk──▶ find-server ──▶ SQLite + ZIP ar
 crates/
 ├── common/                   # Shared API types, config, fuzzy search
 │                             # Deliberately lean: no extractor deps
-├── server/                   # HTTP server, SQLite, ZIP archive management
+├── extract-types/            # IndexLine, ExtractorConfig, SCANNER_VERSION
+├── content-store/            # ContentStore trait + SqliteContentStore
+├── server/                   # HTTP server, SQLite, blobs.db management
 ├── client/                   # find-scan binary; dispatches to extractor libs
 └── extractors/
     ├── text/                 # Plain text, source code, Markdown + frontmatter
     ├── pdf/                  # PDF text extraction (pdf-extract)
-    ├── media/                # Image EXIF, audio tags, video metadata
+    ├── media/                # Image EXIF, audio tags, video metadata (+ ffprobe)
     ├── html/                 # HTML tag stripping, title/description metadata
     ├── office/               # DOCX, XLSX, PPTX extraction
     ├── epub/                 # EPUB spine + metadata extraction
     ├── pe/                   # PE (Windows executable) metadata
+    ├── dicom/                # DICOM medical image metadata extraction
     ├── dispatch/             # Unified bytes-based dispatch — single source of truth
     └── archive/              # ZIP / TAR / GZ / BZ2 / XZ / 7Z + orchestration
 ```
@@ -44,7 +49,7 @@ crates/
 Each extractor is **both a library and a standalone binary**:
 
 - **Library** – linked into `find-scan` for zero-overhead in-process extraction
-- **Binary** – standalone CLI for future use by `find-scan-watch` (subprocess mode)
+- **Binary** – standalone CLI used by `find-watch` in subprocess mode
 
 ```
 find-extract-text    [~2 MB]   gray_matter, serde_yaml, content_inspector
@@ -54,6 +59,7 @@ find-extract-html    [~3 MB]   scraper (html5ever)
 find-extract-office  [~5 MB]   calamine, quick-xml
 find-extract-epub    [~3 MB]   quick-xml
 find-extract-pe      [~2 MB]   goblin
+find-extract-dicom   [~3 MB]   dicom-rs
 find-extract-dispatch [~1 MB]  infer + all above extractor libs (unified dispatch)
 find-extract-archive  [~6 MB]  zip, tar, flate2, bzip2, xz2, sevenz-rust2
                                + find-extract-dispatch (member delegation via dispatch)
@@ -63,8 +69,9 @@ Dependency diagram (runtime linkage in `find-scan`):
 
 ```
 find-common
+find-extract-types
     ↑
-find-extract-{text, pdf, media, html, office, epub, pe}
+find-extract-{text, pdf, media, html, office, epub, pe, dicom}
     ↑
 find-extract-dispatch   ← single source of truth for bytes-based dispatch
     ↑               ↑
@@ -72,6 +79,7 @@ find-extract-archive   find-client (find-scan)
 
 find-server
   └─ find-common          (no extractors – lean binary)
+  └─ find-content-store   (blobs.db management)
 ```
 
 ---
@@ -81,30 +89,38 @@ find-server
 ```
 find-scan → POST /api/v1/bulk (gzip JSON) → inbox/{id}.gz on disk
                                                     │
-                                   Phase 1: indexing thread (SQLite only)
-                                      delete old rows, queue chunk removes,
-                                      upsert files/lines/FTS5 (chunk_archive=NULL)
+                                   Phase 1: inbox worker (SQLite only)
+                                      delete old FTS5 rows (reading old blob via content_store),
+                                      upsert files table + insert FTS5 rows,
+                                      write normalised .gz → inbox/to-archive/
                                                     │
                                             inbox/to-archive/{id}.gz
                                                     │
-                                   Phase 2: archive thread (ZIP I/O)
-                                      remove old chunks from ZIPs,
-                                      chunk content → append to content_NNNNN.zip,
-                                      UPDATE lines SET chunk_archive=...
+                                   Phase 2: archive worker
+                                      parse gz, verify content_hash matches DB,
+                                      content_store.put_overwrite(file_hash, blob)
+                                      → stored in blobs.db
 ```
 
 Key invariants:
 - **All DB writes go through the inbox worker** — no route handler writes SQLite directly.
 - The bulk route handler only writes a `.gz` file to `data_dir/inbox/` and returns `202 Accepted`.
 - Within a `BulkRequest`, the worker processes **deletes first, then upserts** so renames work correctly.
+- **Phase 1** (worker/request.rs) handles all SQLite writes synchronously. When re-indexing a modified
+  file, it reads the old blob from the content store (via `file_hash`) and issues the FTS5 `'delete'`
+  command for each old line before inserting new content — keeping the contentless FTS5 index clean.
+  Empty lines are skipped in the delete pass (issuing `'delete'` with `""` corrupts FTS5 state).
+  At the end it writes a normalised `.gz` to `inbox/to-archive/` and notifies the archive worker.
+- **Phase 2** (worker/archive_batch.rs) reads from `to-archive/`, verifies each file's `content_hash`
+  matches the current DB record (to skip stale batches), then calls `content_store.put_overwrite(key, blob)`.
+  Always overwrites — extraction output may differ even when raw bytes are unchanged (e.g. SCANNER_VERSION bump).
+  Line content is `trim_end()`-stripped before being stored in the blob.
 
 ---
 
 ## Two-Phase Inbox Processing
 
-Inbox processing is split into two phases handled by two independent threads.
-Files stay in `inbox/` until phase 1 completes; the router never pre-claims
-them into a separate directory.
+Inbox processing is split into two phases.
 
 ```
 router loop (every 1 s)
@@ -112,83 +128,24 @@ router loop (every 1 s)
   → try_send to indexing worker (capacity-1 channel, non-blocking)
   → track in-flight paths in HashSet to avoid re-dispatching
 
-Phase 1 — indexing thread (SQLite only, no ZIP I/O):
-  receive path → spawn_blocking(process_request_phase1) with timeout
-    → delete_files_phase1: remove DB rows, queue old chunk refs to
-      pending_chunk_removes table for phase 2
-    → upsert files/lines/FTS5 with NULL chunk_archive (deferred)
-    → inline small files (≤ inline_threshold_bytes) directly to file_content
-  → move .gz from inbox/ to inbox/to-archive/
-  → signal archive thread via Notify
+Phase 1 — inbox worker (SQLite only, no blob I/O):
+  receive path → spawn_blocking(process_request) with timeout
+    → deletes: read old blob from content_store, issue FTS5 'delete' per old line,
+               delete files rows
+    → upserts: insert/update files table, insert FTS5 rows
+    → write normalised .gz to inbox/to-archive/
+    → signal archive worker via Notify
 
-Phase 2 — archive thread (ZIP I/O + SQLite update):
-  wait for Notify (or 60 s timeout)
-  sleep 5 s to let queue accumulate
+Phase 2 — archive worker (blob I/O):
+  wait for Notify (or timeout)
   loop until drained:
-    read up to archive_batch_size .gz files from inbox/to-archive/
-    per source:
-      → take_pending_chunk_removes (clears pending removes table)
-      → rewrite ZIPs to remove old chunks
-      → coalesce upserts (last-writer-wins per path)
-      → append new content chunks to ZIPs
-      → UPDATE lines SET chunk_archive=... in a single transaction
+    read up to archive_batch_size .gz files from inbox/to-archive/ (sorted by mtime)
+    for each file:
+      → verify content_hash in gz matches DB (skip stale)
+      → build blob: sort lines by line_number, trim_end, join with '\n'
+      → content_store.put_overwrite(file_hash, blob) → writes to blobs.db
     → delete processed .gz files
 ```
-
-### Why two phases?
-
-SQLite WAL mode uses POSIX `fcntl` byte-range locks to coordinate writers.
-A critical POSIX property is that **a process cannot conflict with its own
-locks**: when two file descriptors in the same process try to acquire the same
-byte-range lock, the OS grants both immediately (same PID = same owner).
-This means two connections from the same process to the same SQLite file do
-not mutually exclude each other at the OS level, undermining WAL's write
-serialisation regardless of `busy_timeout`.
-
-The two-phase design avoids this by ensuring only one thread ever writes to a
-given source DB at a time — enforced by a per-source `Mutex` in application
-memory (see below), not by OS file locks.
-
-### Per-source write lock (`SharedArchiveState::source_locks`)
-
-`SharedArchiveState` holds a `Mutex<HashMap<String, Arc<Mutex<()>>>>` — one
-inner mutex per source name. Both the indexing thread and the archive thread
-**must hold this mutex for the duration of any SQLite write transaction** to
-that source's DB.
-
-```
-indexing thread                        archive thread
-───────────────────────────────────    ──────────────────────────────────
-acquire source_lock("music")           // phase 2a: drain pending removes
-  delete_files_phase1(...)             acquire source_lock("music")
-  upsert files/lines/FTS5               take_pending_chunk_removes(...)
-release source_lock("music")          release source_lock("music")
-                                       // ZIP I/O (no lock held)
-                                       rewrite ZIPs, append new chunks
-                                       // phase 2b: update line refs
-                                       acquire source_lock("music")
-                                         UPDATE lines SET chunk_archive=...
-                                       release source_lock("music")
-```
-
-The lock is **released between** the two archive-thread write segments so ZIP
-I/O (potentially seconds) does not block the indexing thread. A plain
-`std::sync::Mutex` is used — no timeout, no filesystem involvement — so it
-waits indefinitely with no overhead and is immune to POSIX same-process lock
-semantics.
-
-### ZIP archive allocation (`SharedArchiveState`)
-
-The archive thread owns a single **in-progress ZIP archive** for appending.
-Archive numbers are allocated from a shared `AtomicU32` counter, so the
-archive thread and any concurrent admin operation never write to the same
-archive simultaneously on the append path.
-
-The only other contention point is **rewriting** a sealed archive to remove
-old chunks. This is serialised via a per-archive `Mutex` in
-`SharedArchiveState::rewrite_locks`. `SharedArchiveState` is stored in
-`AppState` and shared with admin routes (e.g. `DELETE /api/v1/admin/source`)
-so rewrite locks are globally coordinated.
 
 ### Timeout
 
@@ -198,41 +155,88 @@ thread hangs, the worker logs an error and moves the file to `inbox/failed/`.
 
 ---
 
-## Content Storage (ZIP Archives)
+## Content Storage (blobs.db)
 
-File content is stored in rotating ZIP archives, not inline in SQLite.
+All file content is stored in **`data_dir/blobs.db`** — a single SQLite database
+managed by `SqliteContentStore` (`crates/content-store/`). There are no ZIP archives.
 
 ```
-data_dir/sources/content/
-  0000/content_00001.zip
-  0000/content_00002.zip
-  ...
-  0001/content_01000.zip
-  ...
+data_dir/
+  blobs.db          ← all file content (content-addressable)
+  sources/
+    {source}.db     ← files table + FTS5 index (per source)
+  inbox/            ← incoming bulk requests (temporary)
+  inbox/to-archive/ ← awaiting phase 2 blob storage (temporary)
 ```
 
-- Folder: `content/{archive_num / 1000:04}` (4-digit zero-padded subfolder)
-- Archive: `content_{archive_num:05}.zip` (5-digit zero-padded)
-- Target: ~10 MB per archive (measured by compressed on-disk size)
-- Maximum: 9,999 × 1,000 = 9,999,000 archives (~99.99 TB)
+- Content is **content-addressable**: keyed by `file_hash` (blake3 of raw file bytes).
+  Two files with identical bytes share one stored blob.
+- Each blob is split into chunks of configurable size (default 1 KB). Each chunk
+  records `(key, chunk_num, start_line, end_line, data_bytes)`. Chunk data is lines
+  joined by `\n` with **no trailing newline**; `get_lines` uses `str::lines()` to
+  reconstruct them, which naturally handles the empty-blob sentinel and preserves
+  interior blank lines.
+- Reads use a PK-indexed range query: `get_lines(key, lo, hi)` returns only the
+  chunk(s) that overlap the requested line range — no full-blob load.
+- WAL mode + a read-connection pool (`SqliteContentStore`) allow unlimited concurrent
+  readers while a single write mutex serialises puts.
+- Compaction (`POST /api/v1/admin/compact`) deletes blobs whose key no longer appears
+  in any source DB's `files.file_hash` column, then VACUUMs.
 
-Each file's content is split into ~1 KB chunks:
-- Chunk name: `{relative_path}.chunk{N}.txt`
-- The `lines` table stores `(chunk_archive, chunk_name, line_offset_in_chunk)`
-- No content inline in SQLite — all content lives in ZIPs
+There is **no** separate `lines` table. The FTS5 rowid encodes both the `file_id`
+and `line_number` arithmetically:
+
+```
+rowid = file_id × 1_000_000 + line_number
+```
+
+This lets the search query decode file and line position from the FTS result without
+a JOIN to an auxiliary table.
+
+---
+
+## ContentStore Abstraction
+
+The `ContentStore` trait (`crates/content-store/src/store.rs`) is the interface between
+the server worker and blob storage:
+
+```rust
+pub trait ContentStore: Send + Sync {
+    fn put(&self, key: &ContentKey, blob: &str) -> anyhow::Result<bool>;
+    fn put_overwrite(&self, key: &ContentKey, blob: &str) -> anyhow::Result<bool>;
+    fn delete(&self, key: &ContentKey) -> anyhow::Result<()>;
+    fn get_lines(&self, key: &ContentKey, lo: usize, hi: usize)
+        -> anyhow::Result<Option<Vec<(usize, String)>>>;
+    fn contains(&self, key: &ContentKey) -> anyhow::Result<bool>;
+    fn compact(&self, live_keys: &HashSet<ContentKey>, dry_run: bool) -> anyhow::Result<CompactResult>;
+    fn storage_stats(&self) -> Option<(u64, u64)>;
+}
+```
+
+- `put` is idempotent: returns `Ok(false)` if the key already exists (no re-write).
+- `put_overwrite` deletes then puts — used by phase 2 to handle SCANNER_VERSION bumps where
+  the raw file bytes (and therefore the key/hash) are unchanged but the extracted content changes.
+- `get_lines(key, lo, hi)` returns `(position, line_content)` pairs for all lines in `[lo, hi]`.
+
+The concrete implementation is `SqliteContentStore`, which stores all data in `blobs.db`:
+- **Writes**: single `Mutex<Connection>` serialises all puts/deletes.
+- **Reads**: elastic pool of read-only connections (up to `DEFAULT_MAX_READ_CONNECTIONS = 100`);
+  WAL mode allows unlimited concurrent readers.
+- Chunk data may optionally be gzip-compressed (controlled by a config flag; off by default).
 
 ---
 
 ## Read Path (Search)
 
 ```
-GET /api/v1/search → FTS5 query → candidate rows (chunk_archive, chunk_name, line_offset)
-                   → read chunk from ZIP (cached per request)
+GET /api/v1/search → FTS5 query → decode (file_id, line_number) from rowid
+                   → JOIN files → fetch content via content_store.get_lines(file_hash, lo, hi)
                    → return matched lines + snippets
 ```
 
-Context retrieval (`/api/v1/context`, `/api/v1/file`) reads chunks the same way, with a
-per-request `HashMap` cache to avoid re-reading the same chunk file twice.
+Context retrieval (`/api/v1/context`, `/api/v1/file`) uses the same
+`content_store.get_lines` path. A per-request cache avoids re-fetching the same
+chunk for files with many matched lines.
 
 ---
 
@@ -276,10 +280,6 @@ the outer file retains `mtime=0` in the database. Any real file mtime is always 
 the next scan sees a mtime mismatch and re-indexes the archive from scratch — no manual
 intervention required.
 
-This also applies to the server-side error fallback path: if the worker fails to process
-an outer archive, it writes a stub with `mtime=0` (via `outer_archive_stub`) so the
-archive is retried on the next scan.
-
 ---
 
 ## Archive Extractor: Member Delegation
@@ -293,15 +293,15 @@ archive.zip
   ├── report.pdf   → dispatch_from_bytes() → find_extract_pdf
   ├── notes.txt    → dispatch_from_bytes() → find_extract_text
   ├── photo.jpg    → dispatch_from_bytes() → find_extract_media
-  ├── document.docx→ dispatch_from_bytes() → find_extract_office   ← same as regular files
-  ├── page.html    → dispatch_from_bytes() → find_extract_html      ← same as regular files
+  ├── document.docx→ dispatch_from_bytes() → find_extract_office
+  ├── page.html    → dispatch_from_bytes() → find_extract_html
   ├── nested.zip   → recursive extraction (in-memory via Cursor)
   ├── data.log.gz  → decompress in-memory, dispatch as text
   └── qjs (ELF)   → dispatch_from_bytes() → MIME fallback → [FILE:mime] application/x-elf
 ```
 
 **Dispatch priority order** (identical for archive members and regular files):
-PDF → Media → HTML → Office → EPUB → PE → Text → MIME fallback
+PDF → DICOM → Media → HTML → Office → EPUB → PE → Text → MIME fallback
 
 **MIME fallback**: For unrecognised binary content, dispatch emits a `line_number=0` line
 `[FILE:mime] <mime>` (e.g. `application/x-elf`). The caller uses this to set the file's
@@ -330,7 +330,7 @@ read. Each individual member is still fully buffered.
 
 ### Memory cap (`max_size_kb`)
 
-`ExtractorConfig::max_size_kb` (derived from `scan.archives.max_member_size_mb` in
+`ExtractorConfig::max_content_kb` (derived from `scan.archives.max_member_size_mb` in
 `scan.toml`) is the per-member memory limit:
 
 - **Regular files**: skipped entirely if `fs::metadata().len() > max_size_kb * 1024`
@@ -344,29 +344,24 @@ The `take()` guard is the critical safeguard against OOM. Some archive formats
 (notably solid 7z blocks) report `entry.size() = 0` for all entries, so a
 pre-read size check alone cannot prevent allocating the full decompressed member.
 
-### Future: streaming extractor API
-
-The intended long-term improvement is to allow extractors to accept `impl Read`
-in addition to `&[u8]`, so large members can be piped through without buffering.
-See the Roadmap section "Memory-Safe Archive Extraction (Streaming)".
-
 ---
 
 ## Extractor Binary Protocol
 
-Each extractor binary can be invoked standalone (for future use by `find-scan-watch`):
+Each extractor binary is invoked by `find-watch` in subprocess mode:
 
 ```bash
-find-extract-text   [--max-size-kb N] <file-path>   → JSON array of IndexLine
-find-extract-pdf    [--max-size-kb N] <file-path>   → JSON array of IndexLine
-find-extract-media  [--max-size-kb N] <file-path>   → JSON array of IndexLine
-find-extract-archive <file-path> [max-size-kb] [max-depth]  → JSON array of IndexLine
+find-extract-text   [--max-size-kb N] <file-path>          → JSON array of IndexLine
+find-extract-pdf    [--max-size-kb N] <file-path>          → JSON array of IndexLine
+find-extract-media  <file-path> [max-content-kb] [ffprobe-path]  → JSON array of IndexLine
+find-extract-archive <file-path> [max-size-kb] [max-depth] → JSON array of IndexLine
+find-extract-dicom  <file-path>                            → JSON array of IndexLine
 ```
 
 **IndexLine** fields:
 - `line_number` — 0 = metadata (see convention below); 1+ = content lines
 - `content` — text content of the line
-- `archive_path` — member path within archive (None for regular files)
+- `archive_path` — member path within archive (deprecated, None for new output)
 
 **`line_number=0` prefix convention**: every metadata row must begin with a bracketed
 tag so entries are unambiguously identifiable. The standard tags are:
@@ -378,11 +373,20 @@ tag so entries are unambiguously identifiable. The standard tags are:
 | `[IMAGE:key] ` | find-extract-media (basic image header) | `[IMAGE:width] 1920` |
 | `[IMAGE] ` | find-extract-media (fallback) | `[IMAGE] no metadata available` |
 | `[TAG:key] ` | find-extract-media (audio tags) | `[TAG:title] Hey Jude` |
+| `[VIDEO:key] ` | find-extract-media (video via ffprobe) | `[VIDEO:codec] h264` |
+| `[DICOM:tag] ` | find-extract-dicom | `[DICOM:PatientName] Doe^John` |
 | `[PE:key] ` | find-extract-pe | `[PE:ProductName] Notepad` |
 | `[FILE:mime] ` | find-extract-dispatch (MIME fallback) | `[FILE:mime] image/jpeg` |
+| `[fa:duplicate] ` | server (search results) | `[fa:duplicate] /other/path/file.txt` |
 
 The `[PATH]` row is always present and is the canonical "findable by filename" entry.
-Consumers that need only the path row filter on `content LIKE '[PATH] %'`.
+
+**`[VIDEO:key]` tags** are produced when `ffprobe_path` is configured in `[scan]`.
+Keys include: `format`, `codec`, `resolution`, `fps`, `audio_codec`, `audio_channels`, `duration`.
+
+**SCANNER_VERSION** is currently `7` (defined in `crates/extract-types/src/index_line.rs`).
+The server forces re-extraction of files whose stored `scanner_version` is below the
+current value, ensuring new metadata tags are indexed when the extractor is updated.
 
 ---
 
@@ -398,6 +402,32 @@ WHERE path >= 'foo/bar/' AND path < 'foo/bar0'
 Results are grouped server-side into virtual directory nodes and file nodes.
 Only immediate children are returned; the UI lazy-loads subdirectories on expand.
 
+`GET /api/v1/tree/expand?source=X&path=foo/bar/file.txt` returns all ancestor directory
+listings needed to reveal a specific file path in the tree — used by the web UI to
+expand the tree to the currently-open file without multiple round trips.
+
+---
+
+## find-upload → find-scan Delegation
+
+`find-upload` sends files to the server as chunked PATCH uploads. When the
+final chunk arrives, the server delegates extraction to `find-scan` rather than
+running extractors inline:
+
+1. Server creates a UUID temp dir (`$TMPDIR/find-upload-<uuid>/`) and places
+   the file at `<temp_root>/<rel_path>`.
+2. Server writes a minimal `<temp_root>.toml` with the source name, temp root
+   path, and scan settings.
+3. Server spawns `find-scan --config <temp.toml> <abs_path>` and awaits completion.
+4. find-scan submits the result via the normal `/api/v1/bulk` path.
+5. A Drop guard cleans up the temp dir and TOML unconditionally on exit.
+
+**Config responsibility split:**
+- `subprocess_timeout_secs` and `max_content_size_mb` come from the server's
+  `[scan]` config block (`ServerScanConfig`) — never from the client.
+- `include`, `exclude`, `exclude_extra` are forwarded from the client via
+  `UploadScanHints`.
+
 ---
 
 ## Server Routes
@@ -408,12 +438,20 @@ The server's HTTP handlers live in `crates/server/src/routes/`, split by concern
 |------|-----------|
 | `routes/mod.rs` | Shared helpers (`check_auth`, `source_db_path`, `compact_lines`); `GET /api/v1/metrics` |
 | `routes/search.rs` | `GET /api/v1/search` — fuzzy / exact / regex modes, multi-source parallel query |
-| `routes/context.rs` | `GET /api/v1/context`, `POST /api/v1/context-batch`; returns `{start, match_index, lines[], kind}` |
+| `routes/context.rs` | `GET /api/v1/context`, `POST /api/v1/context-batch` |
 | `routes/file.rs` | `GET /api/v1/file`, `GET /api/v1/files` |
-| `routes/tree.rs` | `GET /api/v1/sources`, `GET /api/v1/tree` |
+| `routes/tree.rs` | `GET /api/v1/sources`, `GET /api/v1/tree`, `GET /api/v1/tree/expand` |
 | `routes/bulk.rs` | `POST /api/v1/bulk` — writes gzip to inbox, returns 202 immediately |
-
-`check_auth` and `source_db_path` are `pub(super)` so only submodules can call them.
+| `routes/view.rs` | `GET /api/v1/view` — unified image/DICOM viewer (serves inline image bytes) |
+| `routes/raw.rs` | `GET /api/v1/raw` — raw file download (with optional `?convert=png`) |
+| `routes/links.rs` | `POST /api/v1/links`, `GET /api/v1/links/{code}` — share links with expiry |
+| `routes/upload.rs` | `POST /api/v1/upload`, `PATCH /api/v1/upload/{id}`, `HEAD /api/v1/upload/{id}` |
+| `routes/admin.rs` | `GET/DELETE /api/v1/admin/inbox`, `POST /api/v1/admin/inbox/retry`, `POST /api/v1/admin/inbox/pause`, `POST /api/v1/admin/inbox/resume`, `GET /api/v1/admin/inbox/show`, `POST /api/v1/admin/compact`, `DELETE /api/v1/admin/source`, `GET /api/v1/admin/update/check`, `POST /api/v1/admin/update/apply` |
+| `routes/settings.rs` | `GET /api/v1/settings` |
+| `routes/stats.rs` | `GET /api/v1/stats`, `GET /api/v1/stats/stream` |
+| `routes/errors.rs` | `GET /api/v1/errors` |
+| `routes/recent.rs` | `GET /api/v1/recent`, `GET /api/v1/recent/stream` |
+| `routes/session.rs` | `POST /api/v1/auth/session`, `DELETE /api/v1/auth/session` |
 
 ---
 
@@ -429,7 +467,9 @@ lib/
   FileView.svelte       — file topbar + sidebar (DirectoryTree) + viewer panel
   ResultList.svelte     — pure display component; renders result cards, no scroll logic
   SearchResult.svelte   — single result card with lazy-loaded context lines
-  FileViewer.svelte     — full file display (text, markdown, binary, image, PDF)
+  FileViewer.svelte     — full file display (text, markdown, binary, image, PDF, SVG, RTF)
+  DirectImageViewer.svelte — unified image viewer with adjustment panel (invert, flip, brightness/contrast)
+  VideoViewer.svelte    — video player with codec warning banner
   api.ts                — typed fetch wrappers for all server endpoints
 ```
 
@@ -441,37 +481,27 @@ in `+page.svelte`. Child components receive props and emit typed Svelte events u
 in `+page.svelte` calls `triggerLoad()` when within 600 px of the bottom.
 
 **Pagination**: `+page.svelte` fetches the next batch (limit 50, offset = current length)
-and deduplicates by `source:path:line_number` before appending — the search API can return
-overlapping results across page boundaries. A new search resets `results` and scrolls to
-top. No virtual DOM recycling — plain `{#each}` with dedup is adequate for these batch sizes.
+and deduplicates by `source:path:archive_path:line_number` before appending. A new search
+resets `results` and scrolls to top.
 
 **Context lines**: `SearchResult` fetches context lazily via `IntersectionObserver` — only
-when the card scrolls into view — to avoid a burst of N requests on initial load. A
-placeholder bar is shown until loaded. Falls back silently to the `snippet` field if the
-request fails or returns empty lines. The `ContextResponse` returns `{start, match_index,
-lines: string[], kind}` where `start` is the first line number and `match_index` locates
-the matched line within the window (null if the match falls in a sparse gap).
+when the card scrolls into view — to avoid a burst of N requests on initial load.
 
 **URL / history**: `buildUrl` encodes `q`, `mode`, `source[]`, `path`, and `panelMode`
 into query params. `restoreFromParams` reconstructs `AppState` from `URLSearchParams`.
 `history.pushState` / `replaceState` are called directly in `+page.svelte`.
 
----
-
-## Snippet Retrieval
-
-The `snippet` field in search results is **not stored in SQLite**. It is read live from
-ZIP archives at query time:
-
-1. FTS5 trigram index matches the query → returns `rowid`s (no text stored, `content=''`)
-2. Join to `lines` table → gets `(chunk_archive, chunk_name, line_offset_in_chunk)`
-3. Read chunk text from ZIP → index into lines by offset → that string is the snippet
-
-A per-request `HashMap` cache avoids re-reading the same chunk for multiple results.
-
-**Implication**: For files with very long lines (e.g., PDFs with no line breaks), the
-snippet can be very large because there is no truncation in the pipeline. The full line
-content is returned verbatim in the JSON response.
+**Notable UI features:**
+- Mobile-responsive layout
+- Command palette (Ctrl+P) for file navigation — includes archive members as `zip → member`
+- Directory tree with lazy-load via `GET /api/v1/tree` + `GET /api/v1/tree/expand`
+- Share button (creates links via `POST /api/v1/links`)
+- Duplicates modal (files with same content hash)
+- `source:` search prefix with typeahead
+- SVG viewer, RTF viewer, DICOM viewer, unified image viewer
+- Image adjustment panel (invert, flip, brightness, contrast)
+- Video viewer with codec warning banner
+- `findanything://` protocol handler (for `find-upload`)
 
 ---
 
@@ -481,79 +511,67 @@ content is returned verbatim in the JSON response.
 |------|---------|
 | `crates/common/src/api.rs` | All HTTP request/response types |
 | `crates/common/src/config.rs` | Client + server config structs |
+| `crates/extract-types/src/index_line.rs` | `IndexLine`, `SCANNER_VERSION` |
+| `crates/extract-types/src/extractor_config.rs` | `ExtractorConfig` (max_content_kb, ffprobe_path, etc.) |
+| `crates/content-store/src/store.rs` | `ContentStore` trait |
+| `crates/content-store/src/sqlite_store/mod.rs` | `SqliteContentStore` implementation |
 | `crates/extractors/text/src/lib.rs` | Text + Markdown frontmatter extraction |
 | `crates/extractors/pdf/src/lib.rs` | PDF extraction (with catch_unwind) |
-| `crates/extractors/media/src/lib.rs` | Image EXIF, audio tags, video metadata |
+| `crates/extractors/media/src/lib.rs` | Image EXIF, audio tags, video metadata (ffprobe) |
 | `crates/extractors/html/src/lib.rs` | HTML text extraction + metadata |
 | `crates/extractors/office/src/lib.rs` | DOCX / XLSX / PPTX extraction |
 | `crates/extractors/epub/src/lib.rs` | EPUB spine + metadata extraction |
 | `crates/extractors/pe/src/lib.rs` | PE (Windows executable) metadata |
+| `crates/extractors/dicom/src/lib.rs` | DICOM medical image metadata |
 | `crates/extractors/dispatch/src/lib.rs` | Unified bytes-based dispatch + `mime_to_kind` |
 | `crates/extractors/archive/src/lib.rs` | Archive format iteration + orchestration |
 | `crates/client/src/extract.rs` | Top-level dispatcher: archive vs. dispatch_from_path |
 | `crates/client/src/scan.rs` | Filesystem walk, batch building, submission |
-| `crates/server/src/worker.rs` | Inbox worker pool: router loop + N workers sharing a channel; `process_request` |
-| `crates/server/src/archive.rs` | `SharedArchiveState` (atomic counter + rewrite locks); `ArchiveManager` per worker; `chunk_lines()` |
-| `crates/server/src/db.rs` | All SQLite operations |
-| `crates/server/src/routes/` | HTTP route handlers (see Server Routes above) |
+| `crates/server/src/worker.rs` | Inbox polling loop + phase 1 request processing |
+| `crates/server/src/worker/archive_batch.rs` | Phase 2: reads to-archive/ gz, stores blobs in content_store |
+| `crates/server/src/db.rs` | All SQLite operations (files table, FTS5, tree queries) |
+| `crates/server/src/routes/mod.rs` | HTTP route helpers + `GET /api/v1/metrics` |
+| `crates/server/src/routes/tree.rs` | `GET /api/v1/tree`, `GET /api/v1/tree/expand` |
+| `crates/server/src/routes/upload.rs` | Upload HTTP route handlers (POST/PATCH/HEAD) |
+| `crates/server/src/upload.rs` | Upload state management + find-scan delegation |
 | `crates/server/src/schema_v2.sql` | DB schema |
 | `web/src/lib/api.ts` | TypeScript API client |
 | `web/src/lib/appState.ts` | URL serialisation + AppState type |
 | `web/src/routes/+page.svelte` | Main page — coordinator, owns all state |
 | `web/src/lib/SearchView.svelte` | Search topbar + result list |
 | `web/src/lib/FileView.svelte` | File topbar + sidebar + viewer panel |
+| `web/src/lib/DirectImageViewer.svelte` | Unified image viewer with adjustment panel |
 
 ---
 
 ## Key Invariants
 
 - **`line_number = 0`** rows are metadata. Every such row carries a bracketed prefix
-  tag (`[PATH]`, `[EXIF:…]`, `[TAG:…]`, `[PE:…]`, `[IMAGE:…]`, `[FILE:mime]`) that
-  identifies its type. The `[PATH] <relative-path>` row is always present, ensuring
-  every file is findable by name even if content extraction yields nothing. Consumers
-  that need only the path row filter `content LIKE '[PATH] %'`.
-- **FTS5 index is contentless** (`content=''`); content lives only in ZIPs. FTS5 is
-  populated manually by the worker at insert time. The `lines` table stores only
-  `(chunk_archive, chunk_name, line_offset_in_chunk)` — no content column in SQLite.
+  tag (`[PATH]`, `[EXIF:…]`, `[TAG:…]`, `[VIDEO:…]`, `[DICOM:…]`, `[PE:…]`, `[IMAGE:…]`,
+  `[FILE:mime]`, `[fa:duplicate]`) that identifies its type. The `[PATH] <relative-path>`
+  row is always present, ensuring every file is findable by name even if content extraction
+  yields nothing.
+- **FTS5 index is contentless** (`content=''`); all content lives in `blobs.db`.
+  FTS5 is populated manually by the worker at insert time. The source DB has no content
+  column — only `(file_id, line_number)` encoded in the FTS5 rowid.
 - **`archive_path` on `IndexLine`** is deprecated (schema v3) — composite paths in
   `files.path` replaced it. For backward compatibility, API endpoints still accept an
   `archive_path` query param.
 - **The `files` table is per-source** — one SQLite DB per source name, stored at
-  `data_dir/sources/{source}.db`. ZIP archives are shared across sources.
+  `data_dir/sources/{source}.db`. `blobs.db` is shared across all sources.
 - **PDF extraction** wraps `pdf-extract` in `std::panic::catch_unwind` because the
-  library panics on malformed PDFs rather than returning errors.
-- **Locked / inaccessible files are skipped gracefully.** On Windows, some files
-  (e.g. the live WSL2 `ext4.vhdx` held open by Hyper-V) cause `File::open` to block
-  indefinitely rather than returning an error. Three defences are layered in
-  `dispatch_from_path` and `process_file` to prevent hangs:
+  library panics on malformed PDFs rather than returning errors. Uses a fork at
+  `https://github.com/jamietre/pdf-extract` pinned by git rev in
+  `crates/extractors/pdf/Cargo.toml`.
+- **Locked / inaccessible files are skipped gracefully.** Three defences are layered in
+  `dispatch_from_path` and `process_file`:
   1. **Known binary extension — no I/O at all.** `find_extract_text::is_binary_ext_path`
      recognises extensions like `.vhdx`, `.vmdk`, `.vdi`, `.ova`, `.iso` and returns
-     early in `dispatch_from_path` **before** calling `File::open`. The same check in
-     `process_file` skips the `hash_file` call (which also opens the file).
+     early before calling `File::open`.
   2. **Sniff-before-read for unknown extensions.** For files not claimed by a specialist
-     extractor and not on the known-binary list, `dispatch_from_path` reads only 512
-     bytes first. It reads the full file only if those bytes look like text. Binary
-     content is rejected after 512 bytes — not after reading gigabytes.
-  3. **I/O errors → skip with warning.** Any `File::open` or `read` error in
-     `dispatch_from_path` returns `Ok(vec![])` and logs a warning so the scan
-     continues. The file is indexed by name only and will be retried on the next scan.
-
----
-
-## Plan 015 Status: Extractor Architecture Refactor
-
-Phase 1 is **complete**:
-
-| Goal | Status |
-|------|--------|
-| Extractor crates created (`text`, `pdf`, `media`, `archive`) | ✅ Done |
-| Each extractor is both a library and a CLI binary | ✅ Done |
-| `find-scan` links all extractor libraries statically | ✅ Done |
-| Archive extractor orchestrates PDF, media, text, nested archives | ✅ Done |
-| bz2/xz archive format support | ✅ Done |
-| `max_depth` passed through from config to archive extractor | ✅ Done |
-| Old extractors removed from `find-common` | ✅ Done |
-| `find-common` has zero extractor dependencies (lean server binary) | ✅ Done |
-
-Phase 2 (incremental client `find-scan-watch`) and Phase 3 (subprocess spawning in the
-archive extractor) are **not yet implemented**. See `docs/plans/015-extractor-architecture-refactor.md`.
+     extractor, `dispatch_from_path` reads only 512 bytes first.
+  3. **I/O errors → skip with warning.** Any `File::open` or `read` error returns
+     `Ok(vec![])` and logs a warning.
+- **ffprobe integration**: When `ffprobe_path` is set in `[scan]`, `find-extract-media`
+  runs ffprobe exclusively for video files and emits `[VIDEO:…]` metadata tags. The binary
+  protocol accepts `ffprobe_path` as a positional argument: `find-extract-media <path> [max-content-kb] [ffprobe-path]`.

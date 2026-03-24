@@ -250,7 +250,7 @@ so large file chunks (>2 MB) are accepted without 413 errors.
   directly and handling errors gracefully.
 - The `files` table is per-source (one SQLite DB per source name, stored at
   `data_dir/sources/{source}.db`). Archives are shared across sources.
-- The **FTS5 index is contentless** (`content=''`); content lives only in ZIPs.
+- The **FTS5 index is contentless** (`content=''`); content lives only in `blobs.db`.
   FTS5 is populated manually by the worker at insert time.
 - **Archive depth limit:** Nested archives are extracted recursively up to
   `scan.archives.max_depth` (default: 10) to prevent zip bomb attacks. When
@@ -261,11 +261,16 @@ so large file chunks (>2 MB) are accepted without 413 errors.
 | File | Purpose |
 |------|---------|
 | `crates/common/src/api.rs` | All HTTP request/response types |
-| `crates/common/src/extract/` | Content extractors (text, pdf, image, audio, archive) |
-| `crates/server/src/worker.rs` | Inbox polling loop + `BulkRequest` processing |
-| `crates/server/src/archive.rs` | ZIP archive management + `chunk_lines()` |
+| `crates/common/src/config.rs` | Client + server config structs |
+| `crates/extract-types/src/index_line.rs` | `IndexLine`, `SCANNER_VERSION` (currently 7) |
+| `crates/extract-types/src/extractor_config.rs` | `ExtractorConfig` (max_content_kb, ffprobe_path, etc.) |
+| `crates/content-store/src/store.rs` | `ContentStore` trait |
+| `crates/content-store/src/sqlite_store/mod.rs` | `SqliteContentStore` — blobs.db implementation |
+| `crates/server/src/worker.rs` | Inbox polling loop + phase 1 request processing |
+| `crates/server/src/worker/archive_batch.rs` | Phase 2: reads to-archive/ gz, stores blobs in content_store |
 | `crates/server/src/db.rs` | All SQLite operations |
-| `crates/server/src/routes.rs` | HTTP route handlers (reads + bulk write) |
+| `crates/server/src/routes/mod.rs` | HTTP route helpers + shared auth/path utilities |
+| `crates/server/src/routes/tree.rs` | `GET /api/v1/tree`, `GET /api/v1/tree/expand` |
 | `crates/server/src/schema_v2.sql` | DB schema |
 | `crates/server/src/upload.rs` | Upload state management + find-scan delegation |
 | `crates/server/src/routes/upload.rs` | Upload HTTP route handlers (POST/PATCH/HEAD) |
