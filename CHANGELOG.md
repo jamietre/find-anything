@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+---
+
+## [0.7.1] - 2026-03-24
+
 ### Added
 
 - **`GET /api/v1/tree/expand` endpoint** — returns all ancestor directory listings needed to reveal a given path in a single response, replacing N parallel round-trips with one request per navigation
