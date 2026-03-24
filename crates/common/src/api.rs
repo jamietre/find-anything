@@ -17,6 +17,7 @@ pub use find_extract_types::index_line::{
 #[serde(rename_all = "lowercase")]
 pub enum FileKind {
     Text,
+    Code,
     Pdf,
     Archive,
     Image,
@@ -38,7 +39,7 @@ impl FileKind {
 
     /// True for kinds whose extracted lines are passed through the text normalizer.
     pub fn is_text_like(&self) -> bool {
-        matches!(self, Self::Text | Self::Pdf)
+        matches!(self, Self::Text | Self::Code | Self::Pdf)
     }
 }
 
@@ -46,6 +47,7 @@ impl std::fmt::Display for FileKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Text       => "text",
+            Self::Code       => "code",
             Self::Pdf        => "pdf",
             Self::Archive    => "archive",
             Self::Image      => "image",
@@ -64,6 +66,7 @@ impl From<&str> for FileKind {
     fn from(s: &str) -> Self {
         match s {
             "text"       => Self::Text,
+            "code"       => Self::Code,
             "pdf"        => Self::Pdf,
             "archive"    => Self::Archive,
             "image"      => Self::Image,
@@ -921,7 +924,7 @@ mod file_kind_tests {
         assert_eq!(FileKind::from_extension("mp3"),  FileKind::Audio);
         assert_eq!(FileKind::from_extension("mp4"),  FileKind::Video);
         assert_eq!(FileKind::from_extension("docx"), FileKind::Document);
-        assert_eq!(FileKind::from_extension("rs"),   FileKind::Text);
+        assert_eq!(FileKind::from_extension("rs"),   FileKind::Code);
         assert_eq!(FileKind::from_extension("txt"),  FileKind::Text);
         assert_eq!(FileKind::from_extension(""),     FileKind::Unknown);
     }

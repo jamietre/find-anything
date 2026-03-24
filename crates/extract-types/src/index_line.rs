@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// that `find-scan --upgrade` can selectively re-index files that were indexed
 /// by an older version of the client. Increment this when extraction logic
 /// changes in a way that produces meaningfully different output.
-pub const SCANNER_VERSION: u32 = 7;
+pub const SCANNER_VERSION: u32 = 8;
 
 // ── Reserved line number slots ────────────────────────────────────────────────
 
@@ -45,7 +45,10 @@ pub fn detect_kind_from_ext(ext: &str) -> &'static str {
         | "tiff" | "tif" | "raw" | "cr2" | "nef" | "arw" => "image",
         "mp3" | "flac" | "ogg" | "m4a" | "aac" | "wav" | "wma" | "opus" => "audio",
         "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "m4v" | "flv" => "video",
-        "docx" | "xlsx" | "xls" | "xlsm" | "pptx" | "epub" => "document",
+        "docx" | "docm" | "dotx" | "dotm"
+        | "xlsx" | "xls" | "xlsm" | "xltx" | "xltm"
+        | "pptx" | "pptm" | "potx" | "potm" => "document",
+        "epub" => "epub",
         "dcm" | "dicom" => "dicom",
         // Known binary formats
         "exe" | "dll" | "so" | "dylib" | "sys" | "scr" | "efi"
@@ -56,7 +59,7 @@ pub fn detect_kind_from_ext(ext: &str) -> &'static str {
         | "db" | "sqlite" | "sqlite3" | "mdb"
         | "ttf" | "otf" | "woff" | "woff2"
         => "binary",
-        // Known text formats — we are confident these are human-readable
+        // Source code — programming and scripting languages
         "rs" | "ts" | "js" | "mjs" | "cjs" | "jsx" | "tsx"
         | "py" | "rb" | "go" | "java" | "c" | "cpp" | "cc" | "cxx" | "h" | "hpp"
         | "cs" | "swift" | "kt" | "scala" | "r" | "m" | "pl"
@@ -66,12 +69,15 @@ pub fn detect_kind_from_ext(ext: &str) -> &'static str {
         | "html" | "htm" | "xhtml" | "xml" | "svg" | "css" | "scss" | "sass" | "less"
         | "json" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "env"
         | "properties" | "plist" | "nix" | "hcl" | "tf"
-        | "csv" | "tsv" | "sql" | "graphql" | "gql" | "proto"
-        | "md" | "markdown" | "rst" | "tex" | "adoc" | "org"
-        | "txt" | "log" | "diff" | "patch" | "lock"
+        | "sql" | "graphql" | "gql" | "proto"
+        | "diff" | "patch"
         | "gitignore" | "gitattributes" | "gitmodules" | "dockerignore"
         | "makefile" | "dockerfile" | "procfile" | "gemfile" | "rakefile"
         | "mod" | "sum" | "cabal" | "gradle" | "sln" | "csproj" | "vcxproj"
+        => "code",
+        // Plain text — human-readable documents, data, and logs
+        "md" | "markdown" | "rst" | "tex" | "adoc" | "org"
+        | "txt" | "log" | "csv" | "tsv" | "lock"
         => "text",
         // Everything else: don't guess — let content inspection decide
         _ => "unknown",
@@ -117,8 +123,15 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_kind_known_text_exts() {
-        for ext in &["rs", "py", "toml", "md", "txt", "json"] {
+    fn test_detect_kind_code_exts() {
+        for ext in &["rs", "py", "js", "ts", "go", "toml", "json", "yaml", "sql"] {
+            assert_eq!(detect_kind_from_ext(ext), "code", "ext={ext}");
+        }
+    }
+
+    #[test]
+    fn test_detect_kind_text_exts() {
+        for ext in &["md", "txt", "log", "csv", "rst"] {
             assert_eq!(detect_kind_from_ext(ext), "text", "ext={ext}");
         }
     }
@@ -132,9 +145,14 @@ mod tests {
 
     #[test]
     fn test_detect_kind_documents() {
-        for ext in &["docx", "xlsx", "xls", "xlsm", "pptx", "epub"] {
+        for ext in &["docx", "xlsx", "xls", "xlsm", "pptx", "dotm", "dotx"] {
             assert_eq!(detect_kind_from_ext(ext), "document", "ext={ext}");
         }
+    }
+
+    #[test]
+    fn test_detect_kind_epub() {
+        assert_eq!(detect_kind_from_ext("epub"), "epub");
     }
 
     #[test]

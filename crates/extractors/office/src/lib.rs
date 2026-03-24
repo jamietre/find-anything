@@ -13,7 +13,9 @@ pub fn accepts(path: &Path) -> bool {
             .unwrap_or("")
             .to_lowercase()
             .as_str(),
-        "docx" | "xlsx" | "xls" | "xlsm" | "pptx"
+        "docx" | "docm" | "dotx" | "dotm"
+        | "xlsx" | "xls" | "xlsm" | "xltx" | "xltm"
+        | "pptx" | "pptm" | "potx" | "potm"
     )
 }
 
@@ -48,9 +50,9 @@ pub fn extract(path: &Path, _cfg: &ExtractorConfig) -> anyhow::Result<Vec<IndexL
         .to_lowercase();
 
     match ext.as_str() {
-        "docx" => extract_docx(path),
-        "xlsx" | "xls" | "xlsm" => extract_xlsx(path),
-        "pptx" => extract_pptx(path),
+        "docx" | "docm" | "dotx" | "dotm" => extract_docx(path),
+        "xlsx" | "xls" | "xlsm" | "xltx" | "xltm" => extract_xlsx(path),
+        "pptx" | "pptm" | "potx" | "potm" => extract_pptx(path),
         _ => Ok(vec![]),
     }
 }

@@ -24,6 +24,7 @@
 	import { parseNlpQuery } from '$lib/nlpQuery';
 	import type { NlpResult } from '$lib/nlpQuery';
 	import { parseSearchPrefixes, toServerMode, fromServerMode, hasSearchableContent } from '$lib/searchPrefixes';
+	import { expandKindsForServer } from '$lib/kindOptions';
 	import type { SearchScope, SearchMatchType } from '$lib/searchPrefixes';
 
 	// SvelteKit passes params to every layout/page component. Declare it to avoid
@@ -65,7 +66,6 @@
 
 	// NLP-extracted date state.
 	let nlpResult: NlpResult | null = null;
-	let nlpSuppressed = false;
 	// Effective dates used in API calls (manual wins over NLP).
 	let effectiveDateFrom: number | undefined;
 	let effectiveDateTo: number | undefined;
@@ -288,7 +288,7 @@
 			const serverMode = isSourcePathOnlyLoad ? 'file-exact' : toServerMode(effectiveScope, effectiveMatch);
 			const loadSrcs = prefixResult.dirSource ? [prefixResult.dirSource] : selectedSources;
 			const loadPathPrefix = prefixResult.dirSource && prefixResult.dirPrefix ? prefixResult.dirPrefix : undefined;
-			const resp = await search({ q: loadQ, mode: serverMode, sources: loadSrcs, kinds: effectiveKindsLoad, limit: 50, offset: loadOffset, dateFrom: effectiveDateFrom, dateTo: effectiveDateTo, caseSensitive, pathPrefix: loadPathPrefix });
+			const resp = await search({ q: loadQ, mode: serverMode, sources: loadSrcs, kinds: expandKindsForServer(effectiveKindsLoad), limit: 50, offset: loadOffset, dateFrom: effectiveDateFrom, dateTo: effectiveDateTo, caseSensitive, pathPrefix: loadPathPrefix });
 			if (resp.results.length === 0) {
 				noMoreResults = true;
 			} else {
@@ -330,6 +330,8 @@
 
 		if (!hasSearchableContent(q) && !isSourcePathOnly) {
 			results = []; totalResults = 0; resultsCapped = false; noMoreResults = false; loadOffset = 0; searchError = null;
+			nlpResult = null;
+			if (push) replaceSearchState();
 			return;
 		}
 
@@ -349,7 +351,7 @@
 			: toServerMode(effectiveScope, effectiveMatch);
 
 		// NLP parse for normal (non source-path-only) searches.
-		nlpResult = (isSourcePathOnly || nlpSuppressed) ? null : parseNlpQuery(baseQuery, serverMode);
+		nlpResult = isSourcePathOnly ? null : parseNlpQuery(baseQuery, serverMode);
 		effectiveDateFrom = dateFromTs ?? nlpResult?.dateFrom;
 		effectiveDateTo = dateToTs ?? nlpResult?.dateTo;
 
@@ -392,7 +394,7 @@
 		try {
 			const effectiveSrcs = prefixResult.dirSource ? [prefixResult.dirSource] : srcs;
 		const effectivePathPrefix = prefixResult.dirSource && prefixResult.dirPrefix ? prefixResult.dirPrefix : undefined;
-		const resp = await search({ q: apiQuery, mode: serverMode, sources: effectiveSrcs, kinds: effectiveKinds, limit: 50, offset: 0, dateFrom: effectiveDateFrom, dateTo: effectiveDateTo, caseSensitive, pathPrefix: effectivePathPrefix });
+		const resp = await search({ q: apiQuery, mode: serverMode, sources: effectiveSrcs, kinds: expandKindsForServer(effectiveKinds), limit: 50, offset: 0, dateFrom: effectiveDateFrom, dateTo: effectiveDateTo, caseSensitive, pathPrefix: effectivePathPrefix });
 			if (mySearchId !== searchId) return;
 			const merged = mergePage([], resp.results, 0);
 			results = merged.results;
@@ -420,17 +422,19 @@
 
 	function handleSearch(e: CustomEvent<{ query: string }>) {
 		// New query text = fresh NLP parse (clear any prior suppression).
-		if (e.detail.query !== query) nlpSuppressed = false;
 		query = e.detail.query;
 		doSearch(query, selectedSources);
 	}
 
 	function handleClearNlpDate() {
-		nlpSuppressed = true;
+		// Strip the detected date phrase from the query so NLP won't re-detect it.
+		// nlpResult.query is the cleaned query with the date phrase already removed.
+		const stripped = nlpResult?.query ?? query;
 		nlpResult = null;
+		query = stripped;
 		effectiveDateFrom = dateFromTs;
 		effectiveDateTo = dateToTs;
-		doSearch(query, selectedSources);
+		doSearch(stripped, selectedSources);
 	}
 
 	function handleFilterChange(e: CustomEvent<{ sources: string[]; kinds: string[]; dateFrom?: number; dateTo?: number; caseSensitive: boolean; scope: SearchScope; matchType: SearchMatchType }>) {

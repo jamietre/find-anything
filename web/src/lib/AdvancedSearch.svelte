@@ -3,7 +3,7 @@
 	import { clickOutside } from '$lib/clickOutside';
 	import IconBack from '$lib/icons/IconBack.svelte';
 	import IconFilter from '$lib/icons/IconFilter.svelte';
-	import { KIND_OPTIONS } from '$lib/kindOptions';
+	import { KIND_GROUPS, KIND_OPTIONS } from '$lib/kindOptions';
 	import type { SearchScope, SearchMatchType } from '$lib/searchPrefixes';
 	import MobilePanel from '$lib/MobilePanel.svelte';
 
@@ -186,13 +186,16 @@
 
 				<div class="section">
 					<div class="section-header">
-						<span class="section-title">File type</span>
 						{#if draftKinds.length > 0}
 							<button class="clear-link" on:click={() => (draftKinds = [])}>All</button>
 						{/if}
 					</div>
+					{#each KIND_GROUPS as group}
+					{#if group.label}
+						<div class="kind-group-label">{group.label}</div>
+					{/if}
 					<div class="kind-grid">
-						{#each KIND_OPTIONS as opt}
+						{#each group.kinds as opt}
 							<label class="kind-item">
 								<input
 									type="checkbox"
@@ -203,6 +206,7 @@
 							</label>
 						{/each}
 					</div>
+				{/each}
 				</div>
 
 				<div class="section">
@@ -442,10 +446,24 @@
 		color: var(--text);
 	}
 
+	.kind-group-label {
+		font-size: 11px;
+		font-weight: 600;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: var(--text-muted, #888);
+		margin: 8px 0 2px;
+	}
+
+	.kind-group-label:first-child {
+		margin-top: 0;
+	}
+
 	.kind-grid {
 		display: grid;
 		grid-template-columns: 1fr 1fr;
 		gap: 2px 8px;
+		margin-bottom: 4px;
 	}
 
 	.kind-item {

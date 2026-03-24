@@ -13,12 +13,19 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - **`GET /api/v1/tree/expand` endpoint** — returns all ancestor directory listings needed to reveal a given path in a single response, replacing N parallel round-trips with one request per navigation
 - **ffprobe video metadata extraction** — opt-in via `ffprobe_path` in `[scan]` config; when configured, ffprobe is used exclusively for video files (replacing nom-exif) and emits `[VIDEO:format]`, `[VIDEO:codec]`, `[VIDEO:resolution]`, `[VIDEO:fps]`, `[VIDEO:audio_codec]`, `[VIDEO:audio_channels]`, and `[VIDEO:duration]`; `SCANNER_VERSION` bumped to 7 to trigger re-extraction
+- **`code` file kind** — source code, config, and markup files (`.rs`, `.py`, `.js`, `.ts`, `.json`, `.yaml`, `.html`, `.css`, `.sql`, etc.) now use kind `"code"` instead of `"text"`; plain text kind (`"text"`) is now reserved for human-readable documents (`.md`, `.txt`, `.log`, `.csv`, `.rst`); `FileKind::Code` added; `SCANNER_VERSION` bumped to 8
+- **File type filter grouped and refined** — kind checkboxes are now grouped into Documents / Media / Other with category labels; Code and Text are separate entries; DICOM merged under Image (UI sends `['image', 'dicom']` to server via `expandKindsForServer`); eBook and Office are separate entries
 - **Video codec warning in player** — shows an amber banner when the browser can't decode the video track (`videoWidth === 0` after `loadedmetadata`) advising the user to open in VLC; container name is shown in the message
 - **Image adjustment panel** — new toolbar button in the image viewer opens a floating panel with Invert, Flip H, Flip V toggles and Brightness/Contrast sliders; applied as pure CSS filters with no library dependency
 
 ### Fixed
 
 - **Content store not updated on re-extraction** — `archive_batch` previously skipped storing a blob if the `file_hash` key already existed, so re-indexing an unchanged file (e.g. after a `SCANNER_VERSION` bump) never updated the stored content; `put_overwrite` now deletes the old blob and writes the new one unconditionally
+- **Office template files not extracted** — `.dotm`, `.dotx`, `.docm`, `.xltx`, `.xltm`, `.pptm`, `.potx`, `.potm` were misidentified as ZIP files; they are now handled by the Office extractor
+- **epub files misclassified as `document`** — `detect_kind_from_ext("epub")` now returns `"epub"` instead of `"document"`; `SCANNER_VERSION` bumped to 8 to trigger re-extraction
+- **Code viewer triangle causes layout shift** — clicking a line now keeps the `▶` arrow column at constant width using `visibility: hidden` instead of toggling empty text
+- **NLP date pill X button did not dismiss** — clicking X now strips the detected date phrase from the query text (`nlpResult.query`) instead of setting a suppression flag; the NLP result is therefore not re-triggered on the next search
+- **URL not updated when NLP-cleared query is empty** — the early-return path in `doSearch` now calls `replaceSearchState()` so the URL reflects the cleared query
 
 ### Fixed
 
@@ -29,6 +36,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Changed
 
+- **find-watch: stale inotify watch errors logged at debug** — when a watched directory is deleted the kernel auto-removes the watch descriptor; `notify` may surface this as `PathNotFound` / `WatchNotFound` / `Io(NotFound)`; these are now logged at `debug` instead of `warn` since no action is needed
 - **Tree sidebar expansion optimised to one request** — `prefetchTreePath` now calls `/api/v1/tree/expand` instead of N parallel `/api/v1/tree` calls; concurrent `TreeRow` auto-expansions share a single in-flight promise via `treeCache`; `DirectoryTree` root fetch is skipped when the expand response already populated the cache; prefetch is now also fired on search-result navigation (not just command-palette)
 
 ---

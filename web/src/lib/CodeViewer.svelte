@@ -53,7 +53,7 @@
 				on:click={(e) => handleLineClick(lineNum, e)}
 			>
 				<td class="td-ln">{lineNum}</td>
-				<td class="td-arrow">{lineNum === arrowLine ? '▶' : ''}</td>
+				<td class="td-arrow" style:visibility={lineNum === arrowLine ? 'visible' : 'hidden'}>▶</td>
 				<td class="td-code" class:wrap={wordWrap}><code>{@html line}</code></td>
 			</tr>
 		{/each}

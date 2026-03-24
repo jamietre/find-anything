@@ -461,7 +461,25 @@ fn accumulate(
 ) {
     let event = match res {
         Ok(e) => e,
-        Err(e) => { warn!("watch error: {e:#}"); return; }
+        Err(e) => {
+            // When a watched directory is deleted the kernel automatically
+            // removes the inotify watch descriptor (IN_IGNORED).  notify may
+            // surface this as a PathNotFound or WatchNotFound error — that is
+            // expected and needs no action on our side.
+            let is_stale_watch = matches!(
+                e.kind,
+                notify::ErrorKind::PathNotFound | notify::ErrorKind::WatchNotFound
+            ) || matches!(
+                &e.kind,
+                notify::ErrorKind::Io(io) if io.kind() == std::io::ErrorKind::NotFound
+            );
+            if is_stale_watch {
+                tracing::debug!("watch auto-removed (directory deleted): {e:#}");
+            } else {
+                warn!("watch error: {e:#}");
+            }
+            return;
+        }
     };
 
     if !matches!(event.kind, EventKind::Access(_)) {
