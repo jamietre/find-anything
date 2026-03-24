@@ -186,6 +186,35 @@ async fn w6_empty_file_then_content_is_stored() {
     handle.abort();
 }
 
+// ── W7 — File in newly-created directory is indexed ──────────────────────────
+//
+// Regression test for the bug where creating a new directory did not register
+// an inotify watch, so files already inside the directory (created before or
+// during the batch window) were never indexed.
+
+#[ignore]
+#[tokio::test]
+async fn w7_file_in_new_directory_is_indexed() {
+    let env = TestEnv::new().await;
+    let handle = start_watcher(&env).await;
+
+    // Create the directory and immediately write a file inside it. Because no
+    // inotify watch existed on the new directory before the batch fires, the
+    // file-create event is never delivered. The fix must walk the directory
+    // when it processes the directory-create event.
+    std::fs::create_dir(env.source_dir.path().join("newdir")).expect("mkdir newdir");
+    env.write_file("newdir/hello.txt", "w7_unique_content_newdir_xyz");
+    settle(&env).await;
+
+    let results = env.search("w7_unique_content_newdir_xyz").await;
+    assert!(
+        !results.is_empty(),
+        "w7_unique_content_newdir_xyz not found after creating file in new directory"
+    );
+
+    handle.abort();
+}
+
 // ── W5 — External extractor honoured by watch ────────────────────────────────
 
 #[ignore]

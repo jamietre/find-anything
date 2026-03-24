@@ -13,6 +13,13 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - **`GET /api/v1/tree/expand` endpoint** — returns all ancestor directory listings needed to reveal a given path in a single response, replacing N parallel round-trips with one request per navigation
 
+### Fixed
+
+- **find-watch: new directory contents not indexed** — when a directory is created while the watcher runs, any files already inside it were never indexed because no inotify watch existed yet; the directory-create handler now walks the new directory and submits any existing files immediately after registering the watch (W7 regression test added)
+- **Tree sidebar not showing new directories via SSE** — `TreeRow` live-update check only refreshed on immediate-parent events; changed to refresh on any descendant path so new subdirectories appear without a page reload
+- **Stray `▶` arrow on metadata matches with empty snippet** — the match-line arrow is now suppressed when the FTS5 snippet is empty (e.g. short DICOM tag values)
+- **find-watch debug log flooded with Access events** — `Access(Open)` events from file reads (e.g. cargo) are no longer logged at debug level since they are always silently dropped
+
 ### Changed
 
 - **Tree sidebar expansion optimised to one request** — `prefetchTreePath` now calls `/api/v1/tree/expand` instead of N parallel `/api/v1/tree` calls; concurrent `TreeRow` auto-expansions share a single in-flight promise via `treeCache`; `DirectoryTree` root fetch is skipped when the expand response already populated the cache; prefetch is now also fired on search-result navigation (not just command-palette)

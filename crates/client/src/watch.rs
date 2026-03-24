@@ -276,6 +276,38 @@ where
                     // area (we got an event for it), so no further path pruning is needed.
                     if abs_path.is_dir() {
                         register_dir(&abs_path);
+                        // Walk the new directory and index any files that are
+                        // already present. Because no inotify watch existed on
+                        // the directory before this point, create events for
+                        // those files were never delivered.
+                        let mut to_index: Vec<(PathBuf, String)> = Vec::new();
+                        crate::walk::walk_source_tree(
+                            &abs_path,
+                            &source_root,
+                            &eff_scan,
+                            &eff_excludes,
+                            None,
+                            |item| {
+                                if let crate::walk::WalkItem::File { abs, rel, .. } = item {
+                                    to_index.push((abs, rel));
+                                }
+                            },
+                        );
+                        for (file_abs, file_rel) in to_index {
+                            if let Err(e) = handle_update(
+                                api,
+                                &source_name,
+                                &file_abs,
+                                &file_rel,
+                                &eff_scan,
+                                extractor_dir,
+                                true,
+                            )
+                            .await
+                            {
+                                warn!("update {}: {e:#}", file_abs.display());
+                            }
+                        }
                         continue;
                     }
                     // Only process if it exists and is a regular file.
@@ -432,7 +464,9 @@ fn accumulate(
         Err(e) => { warn!("watch error: {e:#}"); return; }
     };
 
-    tracing::debug!("watch event: {:?} paths={:?}", event.kind, event.paths);
+    if !matches!(event.kind, EventKind::Access(_)) {
+        tracing::debug!("watch event: {:?} paths={:?}", event.kind, event.paths);
+    }
     for path in event.paths {
         let new_kind = match &event.kind {
             EventKind::Create(_) => AccumulatedKind::Create,

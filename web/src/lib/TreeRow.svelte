@@ -46,12 +46,13 @@
 	$: myPrefix = entry.entry_type === 'dir' ? entry.path : null;
 
 	// React to live index events: silently refresh children when this expanded
-	// directory is the immediate parent of a changed file.
+	// directory is an ancestor of a changed file. Checking ancestors (not just
+	// the immediate parent) ensures a new subdirectory becomes visible in its
+	// parent's listing even though the SSE path points deeper (e.g.
+	// "dir/newsubdir/file.txt" must trigger a refresh of "dir/").
 	$: if ($liveEvent && myPrefix && expanded && $liveEvent.source === source) {
 		const ev = $liveEvent;
-		const parentDir = dirOf(ev.path);
-		const newParentDir = ev.new_path ? dirOf(ev.new_path) : null;
-		if (parentDir === myPrefix || newParentDir === myPrefix) {
+		if (ev.path.startsWith(myPrefix) || (ev.new_path && ev.new_path.startsWith(myPrefix))) {
 			silentRefresh();
 		}
 	}

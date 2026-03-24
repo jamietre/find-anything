@@ -268,7 +268,7 @@
 	{/if}
 
 	<div class="context-lines">
-		{#if isMetadataMatch(result)}
+		{#if isMetadataMatch(result) && result.snippet}
 			<!-- Metadata match (EXIF, mime, etc.) — show the matched tag -->
 			<div class="line match">
 				<span class="arrow meta-arrow">▶</span>
