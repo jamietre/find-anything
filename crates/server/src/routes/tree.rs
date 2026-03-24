@@ -8,7 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use find_common::api::{SourceInfo, TreeResponse};
+use find_common::api::{SourceInfo, TreeExpandResponse, TreeResponse};
 
 use crate::AppState;
 
@@ -76,5 +76,40 @@ pub async fn list_dir(
     run_blocking("list_dir", move || {
         let conn = db::open(&db_path)?;
         db::list_dir(&conn, &prefix).map(|entries| Json(TreeResponse { entries }))
+    }).await
+}
+
+// ── GET /api/v1/tree/expand ───────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct TreeExpandParams {
+    pub source: String,
+    /// Full path of the file to reveal in the tree (e.g. `"src/lib/api.ts"`).
+    /// All ancestor directory listings are returned in one response.
+    pub path: String,
+}
+
+pub async fn expand_tree(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Query(params): Query<TreeExpandParams>,
+) -> impl IntoResponse {
+    if let Err(s) = check_auth(&state, &headers) {
+        return (s, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let db_path = match source_db_path(&state, &params.source) {
+        Ok(p) => p,
+        Err(s) => return (s, Json(serde_json::Value::Null)).into_response(),
+    };
+
+    if !db_path.exists() {
+        return (StatusCode::NOT_FOUND, Json(serde_json::Value::Null)).into_response();
+    }
+
+    let path = params.path.clone();
+    run_blocking("expand_tree", move || {
+        let conn = db::open(&db_path)?;
+        db::expand_tree(&conn, &path).map(|levels| Json(TreeExpandResponse { levels }))
     }).await
 }

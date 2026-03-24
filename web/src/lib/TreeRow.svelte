@@ -5,7 +5,7 @@
 	import { splitEntryPath, shouldExpandEntry } from '$lib/filePath';
 	import { liveEvent } from '$lib/liveUpdates';
 	import { keyboardCursorPath } from '$lib/treeStore';
-	import { getCachedDir, setCachedDir } from '$lib/treeCache';
+	import { getCachedDir, setCachedDir, prefetchTreePath } from '$lib/treeCache';
 
 	export let source: string;
 	export let entry: DirEntry;
@@ -77,7 +77,13 @@
 					const resp = await listArchiveMembers(source, entry.path);
 					children = resp.entries;
 				} else {
-					const cached = getCachedDir(source, entry.path);
+					let cached = getCachedDir(source, entry.path);
+					if (!cached && activePath) {
+						// Warm all ancestor levels in one request; concurrent
+						// TreeRows share the same in-flight promise via treeCache.
+						await prefetchTreePath(source, activePath);
+						cached = getCachedDir(source, entry.path);
+					}
 					if (cached) {
 						children = cached;
 					} else {

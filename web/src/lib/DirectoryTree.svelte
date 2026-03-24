@@ -4,6 +4,7 @@
 	import type { DirEntry } from '$lib/api';
 	import TreeRow from '$lib/TreeRow.svelte';
 	import { liveEvent } from '$lib/liveUpdates';
+	import { getCachedDir, prefetchTreePath } from '$lib/treeCache';
 
 	export let source: string;
 	/** Currently open file path — highlighted in the tree. */
@@ -15,8 +16,17 @@
 
 	onMount(async () => {
 		try {
-			const resp = await listDir(source, '');
-			roots = resp.entries;
+			// If an expand prefetch is already in-flight (fired before navigation),
+			// await it so we use the cached root instead of making a separate request.
+			const cached = getCachedDir(source, '');
+			if (cached) {
+				roots = cached;
+			} else if (activePath) {
+				await prefetchTreePath(source, activePath);
+				roots = getCachedDir(source, '') ?? (await listDir(source, '')).entries;
+			} else {
+				roots = (await listDir(source, '')).entries;
+			}
 		} catch (e) {
 			error = String(e);
 		} finally {

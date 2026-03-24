@@ -74,6 +74,10 @@ export interface TreeResponse {
 	entries: DirEntry[];
 }
 
+export interface TreeExpandResponse {
+	levels: Record<string, DirEntry[]>;
+}
+
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
 export class AuthError extends Error {
@@ -216,6 +220,17 @@ export async function listDir(source: string, prefix = ''): Promise<TreeResponse
 /** List the inner members of an archive file by using the "::" prefix convention. */
 export async function listArchiveMembers(source: string, archivePath: string): Promise<TreeResponse> {
 	return listDir(source, archivePath + '::');
+}
+
+/** Fetch all directory levels needed to reveal `path` in one request. */
+export async function expandTreePath(source: string, path: string): Promise<TreeExpandResponse> {
+	const url = new URL('/api/v1/tree/expand', location.origin);
+	url.searchParams.set('source', source);
+	url.searchParams.set('path', path);
+
+	const resp = await apiFetch(url.toString());
+	if (!resp.ok) throw new Error(`expandTreePath: ${resp.status} ${resp.statusText}`);
+	return resp.json();
 }
 
 export interface ContextBatchItem {

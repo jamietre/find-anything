@@ -368,6 +368,16 @@ pub struct TreeResponse {
     pub entries: Vec<DirEntry>,
 }
 
+/// GET /api/v1/tree/expand response.
+///
+/// Maps each directory prefix (e.g. `""`, `"src/"`, `"src/lib/"`) to its
+/// immediate children. All levels needed to reveal the requested path are
+/// included in one response so the client does not need N round-trips.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TreeExpandResponse {
+    pub levels: std::collections::HashMap<String, Vec<DirEntry>>,
+}
+
 /// One item in a POST /api/v1/context-batch request.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ContextBatchItem {

@@ -467,6 +467,7 @@
 			? [r.line_number, ...extraLines]
 			: extraLines.length ? extraLines : [];
 		savedScrollTop = mainContent?.scrollTop ?? 0;
+		prefetchTreePath(r.source, file.full);
 		openFileView({ source: r.source, file, selection, panelMode: 'file', dirPrefix: '' });
 	}
 

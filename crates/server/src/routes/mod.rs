@@ -25,7 +25,7 @@ pub use recent::{get_recent, stream_recent};
 pub use search::search;
 pub use session::{create_session, delete_session};
 pub use stats::{get_stats, stream_stats};
-pub use tree::{list_dir, list_sources};
+pub use tree::{expand_tree, list_dir, list_sources};
 pub use upload::{upload_init, upload_patch, upload_status};
 pub use self::settings::get_settings;
 pub use view::get_view;

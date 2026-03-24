@@ -29,7 +29,7 @@ pub use stats::{
     do_cleanup_writes, get_files_pending_content, get_fts_row_count, get_indexing_error,
     get_indexing_error_count, get_indexing_errors, get_scan_history, get_stats, get_stats_by_ext,
 };
-pub use tree::{list_dir, split_composite_path};
+pub use tree::{expand_tree, list_dir, split_composite_path};
 
 // ── Schema ────────────────────────────────────────────────────────────────────
 

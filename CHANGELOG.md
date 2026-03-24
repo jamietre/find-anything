@@ -9,6 +9,14 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **`GET /api/v1/tree/expand` endpoint** — returns all ancestor directory listings needed to reveal a given path in a single response, replacing N parallel round-trips with one request per navigation
+
+### Changed
+
+- **Tree sidebar expansion optimised to one request** — `prefetchTreePath` now calls `/api/v1/tree/expand` instead of N parallel `/api/v1/tree` calls; concurrent `TreeRow` auto-expansions share a single in-flight promise via `treeCache`; `DirectoryTree` root fetch is skipped when the expand response already populated the cache; prefetch is now also fired on search-result navigation (not just command-palette)
+
 ---
 
 ## [0.7.0] - 2026-03-24

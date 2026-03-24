@@ -157,6 +157,41 @@ pub fn list_dir(conn: &Connection, prefix: &str) -> Result<Vec<DirEntry>> {
     Ok(entries)
 }
 
+/// Return all directory listings needed to expand the tree to reveal `path`.
+///
+/// For a path like `src/lib/api.ts` this queries `""`, `"src/"`, and
+/// `"src/lib/"` and returns a map of prefix → children.  Only the outer
+/// filesystem portion of the path is considered (the `::` archive suffix, if
+/// any, is stripped — archive members cannot be pre-fetched this way).
+pub fn expand_tree(conn: &Connection, path: &str) -> Result<std::collections::HashMap<String, Vec<DirEntry>>> {
+    let outer = match path.find("::") {
+        Some(i) => &path[..i],
+        None => path,
+    };
+    let prefixes = dir_prefixes(outer);
+    let mut result = std::collections::HashMap::with_capacity(prefixes.len());
+    for prefix in prefixes {
+        let entries = list_dir(conn, &prefix)?;
+        result.insert(prefix, entries);
+    }
+    Ok(result)
+}
+
+/// Return all directory prefixes that must be open to reveal `path`.
+/// e.g. `"src/lib/api.ts"` → `["", "src/", "src/lib/"]`
+fn dir_prefixes(path: &str) -> Vec<String> {
+    let parts: Vec<&str> = path.split('/').collect();
+    let mut prefixes = Vec::with_capacity(parts.len());
+    prefixes.push(String::new());
+    let mut current = String::new();
+    for part in &parts[..parts.len().saturating_sub(1)] {
+        current.push_str(part);
+        current.push('/');
+        prefixes.push(current.clone());
+    }
+    prefixes
+}
+
 /// Produce the upper-bound key for a prefix range scan by incrementing the last byte.
 pub fn prefix_bump(prefix: &str) -> String {
     let mut bytes = prefix.as_bytes().to_vec();
