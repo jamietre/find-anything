@@ -76,7 +76,7 @@
 	$: if (preferOriginal !== _prevPreferOriginal) {
 		_prevPreferOriginal = preferOriginal;
 		if (fileKind !== null) {
-			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal) || isSvg;
+			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || fileKind === 'dicom' || (fileKind === 'pdf' && !isEncrypted && preferOriginal) || isSvg;
 		}
 	}
 	// Parsed image dimensions for the aspect-ratio loading placeholder.
@@ -108,7 +108,7 @@
 	// Images, PDFs, videos, and audio can be shown inline when the file is directly accessible
 	// or is a member of a ZIP archive.
 	$: isSvg = /\.svgz?$/i.test(archivePath ?? path);
-	$: canViewInline = canServeArchiveMember && (fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted) || fileKind === 'video' || fileKind === 'audio' || isSvg);
+	$: canViewInline = (fileKind === 'dicom' && !isArchiveMember) || (canServeArchiveMember && (fileKind === 'image' || (fileKind === 'pdf' && !isEncrypted) || fileKind === 'video' || fileKind === 'audio' || isSvg));
 	// For images the browser can't render natively, request server-side PNG conversion.
 	// Check the member's own extension for archive members.
 	const BROWSER_IMAGE_EXTS = new Set(['jpg','jpeg','png','gif','webp','svg','svgz','avif','bmp','ico']);
@@ -117,6 +117,7 @@
 	$: rawInlineUrl = needsConversion
 		? `/api/v1/raw?source=${encodeURIComponent(source)}&path=${encodeURIComponent(rawInlinePath)}&convert=png`
 		: `/api/v1/raw?source=${encodeURIComponent(source)}&path=${encodeURIComponent(rawInlinePath)}`;
+	$: dicomPreviewUrl = `/api/v1/dicom-preview?source=${encodeURIComponent(source)}&path=${encodeURIComponent(path)}`;
 	$: fileName = path.split('/').pop() ?? path;
 	// Member download: the server can extract members from ZIP archives up to a configured
 	// nesting depth (window.find_anything_config.download_zip_member_levels).
@@ -388,20 +389,20 @@
 		if (contentUnavailable) return;
 		error = null;
 
-		// Separate metadata into: current path (skip), metadata strings, duplicate paths.
-		// Metadata strings start with '['. Other strings are file paths (dedup aliases).
+		// Separate metadata entries from duplicate paths.
+		// Entries tagged [fa:duplicate] are duplicate paths; all others are metadata content.
+		// Actual duplicate paths also come from the dedicated duplicate_paths field (schema v3).
 		const compositePath = archivePath ? `${path}::${archivePath}` : path;
 		metaLines = [];
 		duplicatePaths = [];
 		for (const s of data.metadata) {
 			if (!s || s === compositePath) continue;
-			if (s.startsWith('[')) {
-				metaLines.push({ content: s });
+			if (s.startsWith('[fa:duplicate] ')) {
+				duplicatePaths.push(s.slice('[fa:duplicate] '.length));
 			} else {
-				duplicatePaths.push(s);
+				metaLines.push({ content: s });
 			}
 		}
-		// Also include duplicate_paths from the dedicated field (schema v3).
 		for (const dup of (data.duplicate_paths ?? [])) {
 			if (dup && !duplicatePaths.includes(dup)) duplicatePaths.push(dup);
 		}
@@ -416,8 +417,12 @@
 		fileKind = data.file_kind ?? null;
 		indexingError = data.indexing_error ?? null;
 		isEncrypted = fileKind === 'pdf' && data.lines.length === 1 && data.lines[0] === 'Content encrypted';
-		if (isInitial) {
-			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal) || isSvg;
+		// For kinds with no viewer toggle (image, audio, dicom), always sync showOriginal so
+		// live-update reloads (isInitial=false) work correctly after an upgrade scan changes the kind.
+		// For PDF/video/SVG, only set on initial load to preserve the user's toggle preference.
+		const noToggleKind = fileKind === 'image' || fileKind === 'audio' || fileKind === 'dicom';
+		if (isInitial || noToggleKind) {
+			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || fileKind === 'dicom' || (fileKind === 'pdf' && !isEncrypted && preferOriginal) || isSvg;
 		}
 	}
 
@@ -432,19 +437,21 @@
 		duplicatePaths = [];
 		for (const s of data.metadata) {
 			if (!s || s === compositePath) continue;
-			if (s.startsWith('[')) {
-				metaLines.push({ content: s });
+			if (s.startsWith('[fa:duplicate] ')) {
+				duplicatePaths.push(s.slice('[fa:duplicate] '.length));
 			} else {
-				duplicatePaths.push(s);
+				metaLines.push({ content: s });
 			}
 		}
-		// Also include duplicate_paths from the dedicated field (schema v3).
 		for (const dup of (data.duplicate_paths ?? [])) {
 			if (dup && !duplicatePaths.includes(dup)) duplicatePaths.push(dup);
 		}
 		if (isInitial) {
 			isEncrypted = fileKind === 'pdf' && data.lines.length === 1 && data.lines[0] === 'Content encrypted';
-			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || (fileKind === 'pdf' && !isEncrypted && preferOriginal) || isSvg;
+		}
+		const noToggleKind = fileKind === 'image' || fileKind === 'audio' || fileKind === 'dicom';
+		if (isInitial || noToggleKind) {
+			showOriginal = fileKind === 'image' || fileKind === 'video' || fileKind === 'audio' || fileKind === 'dicom' || (fileKind === 'pdf' && !isEncrypted && preferOriginal) || isSvg;
 		}
 	}
 
@@ -640,7 +647,7 @@
 					{showOriginal ? 'View Source' : 'View SVG'}
 				</button>
 			{/if}
-			{#if !(showOriginal && canViewInline) && fileKind !== 'image' && fileKind !== 'video' && fileKind !== 'audio' && (hasOverflow || wordWrap)}
+			{#if !(showOriginal && canViewInline) && fileKind !== 'image' && fileKind !== 'video' && fileKind !== 'audio' && fileKind !== 'dicom' && (hasOverflow || wordWrap)}
 				<button class="toolbar-btn toolbar-icon-btn" on:click={toggleWordWrap} title={wordWrap ? 'Disable word wrap' : 'Enable word wrap'}>
 					{#if wordWrap}
 						<IconWrapOn />
@@ -730,6 +737,24 @@
 			{:else if fileKind === 'image'}
 				<div class="image-viewer-panel">
 					<DirectImageViewer src={rawInlineUrl} />
+					<MetaDrawer initialOpen={false}>
+						{#if metaLines.length > 0}
+							{#each metaLines as meta}
+								{#each parseMetaTags(meta.content) as tag}
+									<div class="meta-row">
+										<span class="tag-label">[{tag.label}]</span>
+										<span class="tag-value">{tag.value}</span>
+									</div>
+								{/each}
+							{/each}
+						{:else}
+							<div class="no-meta">No metadata available.</div>
+						{/if}
+					</MetaDrawer>
+				</div>
+			{:else if fileKind === 'dicom'}
+				<div class="image-viewer-panel">
+					<DirectImageViewer src={dicomPreviewUrl} />
 					<MetaDrawer initialOpen={false}>
 						{#if metaLines.length > 0}
 							{#each metaLines as meta}

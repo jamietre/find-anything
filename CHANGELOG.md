@@ -11,6 +11,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- **`find-preview-dicom` pipe-buffer deadlock (422 Unprocessable Entity)** — binary writes ~145 KB PNG to stdout but the OS pipe buffer is only 64 KB; child blocked writing while the server polled for exit, never reading; stdout is now drained in a background thread concurrently with the wait loop so the child can flush and exit
+- **DICOM image viewer not shown after scanner upgrade** — `showOriginal` was only set on initial file load (`isInitial=true`); a live-update reload after `find-scan --upgrade` changed the kind to `dicom` left the viewer hidden; for media kinds with no toggle (image, audio, dicom) `showOriginal` is now always updated
 - **Backspace/delete no longer triggers new search or typeahead** — `SearchBox` cancels the debounce on deletion and `TopBar` freezes the typeahead `activeToken`; searches and typeahead only fire when typing forward or pressing Enter
 - **Image viewer controls overlaid on image** — zoom +/−/fit buttons moved inside the image container as a transparent hover overlay (top-left, semi-transparent dark background with blur); the separate toolbar row is removed so the image gets the full height; `pointerdown` and `dblclick` handlers guard against the toolbar to prevent drag hijack and accidental fit-reset on double-click; minimum zoom scale is now dynamic (`Math.min(0.01, fitScale * 0.5)`) so zoom-out no longer snaps up to a hard-coded minimum that exceeds fit scale
 - **Duplicate paths moved to modal** — the inline expandable dup-bar row is replaced by a `"N duplicates"` badge button in the toolbar metadata area (before the kind badge); clicking opens a fixed-height scrollable modal (640 px wide) with bulleted path links; clicking the backdrop or ✕ closes it
@@ -18,6 +20,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **`source:` prefix minimum query length now ignores modifiers** — `hasSearchableContent` strips all prefix tokens before checking for 3+ characters of free text; `source:nas-data/path` or `doc:type:pdf` alone no longer trigger a search until a real query term is also present
 
 ### Added
+
+- **DICOM support** — metadata extraction (`find-extract-dicom`) indexes DICOM tags (PatientName, Modality, StudyDescription, dimensions, etc.); inline PNG preview via `find-preview-dicom` subprocess (`GET /api/v1/dicom-preview`); `FileKind::Dicom` variant added; extensionless DICOM files detected via magic bytes (DICM at offset 128); JPEG2000 decoding available as optional `jpeg2000` Cargo feature
+- **DICOM metadata uses `[DICOM:Tag] value` format** — consistent with EXIF `[EXIF:Make] Apple` so `parseMetaTags` can parse and display each field in the metadata drawer; previously bare values like `study: 20260323` were not parsed; `SCANNER_VERSION` bumped to 6 to trigger re-extraction
+- **`[fa:duplicate]` prefix for duplicate path entries in metadata** — `FileViewer` no longer guesses by absence of `[`; only `[fa:duplicate] `-prefixed entries are treated as duplicate paths; untagged metadata (DICOM) goes to `metaLines` instead of `duplicatePaths`
 
 - **`source:` search prefix** — restricts results to a specific source and optional path prefix; format `source:<source-name>[/path/to/dir]`; server applies `WHERE (path = ? OR path LIKE ?/%)` in both FTS5 and document-search modes
 - **`source:` typeahead with auto-advance** — typing `source:` opens a keyboard-navigable dropdown showing available sources; selecting one immediately fetches and recursively auto-advances through single-option directory levels until multiple choices are found; the entire path is resolved silently before any UI update (`resolveAutoPath` is a pure async function with no intermediate state mutations); desktop-only (hidden on mobile)

@@ -25,6 +25,7 @@ pub enum FileKind {
     Document,
     Executable,
     Epub,
+    Dicom,
     #[serde(other)]
     Unknown,
 }
@@ -53,6 +54,7 @@ impl std::fmt::Display for FileKind {
             Self::Document   => "document",
             Self::Executable => "executable",
             Self::Epub       => "epub",
+            Self::Dicom      => "dicom",
             Self::Unknown    => "unknown",
         })
     }
@@ -70,6 +72,7 @@ impl From<&str> for FileKind {
             "document"   => Self::Document,
             "executable" => Self::Executable,
             "epub"       => Self::Epub,
+            "dicom"      => Self::Dicom,
             _            => Self::Unknown,
         }
     }
@@ -302,8 +305,10 @@ pub struct FileResponse {
     /// Clients should fall back to `index + 1` when this field is absent.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub line_offsets: Vec<usize>,
-    /// Line-number-0 entries: the file's own path, EXIF/audio metadata strings,
-    /// and dedup-alias paths. Clients filter these to determine what to display.
+    /// Reserved line entries (line 0 = path, line 1 = metadata string).
+    /// Metadata strings use `[PREFIX:Key] value` format (e.g. `[EXIF:Make] Apple`).
+    /// Duplicate-path entries are prefixed with `[fa:duplicate] `.
+    /// The file's own path entry is always filtered out client-side.
     pub metadata: Vec<String>,
     pub file_kind: FileKind,
     pub total_lines: usize,
@@ -860,6 +865,7 @@ mod file_kind_tests {
             (FileKind::Document,   "\"document\""),
             (FileKind::Executable, "\"executable\""),
             (FileKind::Epub,       "\"epub\""),
+            (FileKind::Dicom,      "\"dicom\""),
             (FileKind::Unknown,    "\"unknown\""),
         ] {
             let serialized = serde_json::to_string(&variant).unwrap();
@@ -886,6 +892,7 @@ mod file_kind_tests {
         assert_eq!(FileKind::from("audio"),    FileKind::Audio);
         assert_eq!(FileKind::from("video"),    FileKind::Video);
         assert_eq!(FileKind::from("document"), FileKind::Document);
+        assert_eq!(FileKind::from("dicom"),    FileKind::Dicom);
         assert_eq!(FileKind::from("unknown"),  FileKind::Unknown);
     }
 
@@ -918,6 +925,7 @@ mod file_kind_tests {
         assert_eq!(FileKind::Audio.to_string(),      "audio");
         assert_eq!(FileKind::Video.to_string(),      "video");
         assert_eq!(FileKind::Document.to_string(),   "document");
+        assert_eq!(FileKind::Dicom.to_string(),      "dicom");
         assert_eq!(FileKind::Unknown.to_string(),    "unknown");
     }
 

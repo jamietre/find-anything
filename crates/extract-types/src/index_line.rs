@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 /// that `find-scan --upgrade` can selectively re-index files that were indexed
 /// by an older version of the client. Increment this when extraction logic
 /// changes in a way that produces meaningfully different output.
-pub const SCANNER_VERSION: u32 = 3;
+pub const SCANNER_VERSION: u32 = 6;
 
 // ── Reserved line number slots ────────────────────────────────────────────────
 
@@ -46,6 +46,7 @@ pub fn detect_kind_from_ext(ext: &str) -> &'static str {
         "mp3" | "flac" | "ogg" | "m4a" | "aac" | "wav" | "wma" | "opus" => "audio",
         "mp4" | "mkv" | "avi" | "mov" | "wmv" | "webm" | "m4v" | "flv" => "video",
         "docx" | "xlsx" | "xls" | "xlsm" | "pptx" | "epub" => "document",
+        "dcm" | "dicom" => "dicom",
         // Known binary formats
         "exe" | "dll" | "so" | "dylib" | "sys" | "scr" | "efi"
         | "o" | "a" | "lib" | "obj" | "wasm"
