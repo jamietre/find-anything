@@ -5,8 +5,12 @@ set -euo pipefail
 CRATES=(
   crates/client/Cargo.toml
   crates/common/Cargo.toml
+  crates/content-store/Cargo.toml
+  crates/extract-types/Cargo.toml
+  crates/handler/Cargo.toml
   crates/server/Cargo.toml
   crates/extractors/archive/Cargo.toml
+  crates/extractors/dicom/Cargo.toml
   crates/extractors/dispatch/Cargo.toml
   crates/extractors/epub/Cargo.toml
   crates/extractors/html/Cargo.toml
@@ -15,6 +19,7 @@ CRATES=(
   crates/extractors/pdf/Cargo.toml
   crates/extractors/pe/Cargo.toml
   crates/extractors/text/Cargo.toml
+  crates/preview-dicom/Cargo.toml
 )
 
 # ── Current version ───────────────────────────────────────────────────────────
