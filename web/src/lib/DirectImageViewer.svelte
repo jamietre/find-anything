@@ -14,6 +14,17 @@
 	let offsetY = 0;
 	let fitScale = 1;
 
+	let loaded = false;
+	let loadError = false;
+
+	// Reset loading state whenever the source URL changes.
+	$: { src; loaded = false; loadError = false; }
+
+	function onError() {
+		loadError = true;
+		loaded = true; // stop showing spinner
+	}
+
 	let dragging = false;
 	let dragStartX = 0;
 	let dragStartY = 0;
@@ -63,6 +74,8 @@
 	}
 
 	function onImageLoad() {
+		loaded = true;
+		loadError = false;
 		if (svgMode) {
 			scale = 1;
 			fitScale = 1;
@@ -152,7 +165,8 @@
 
 	onMount(() => {
 		container.addEventListener('wheel', onWheel, { passive: false });
-		if (img.complete) onImageLoad();
+		if (img.complete && img.naturalWidth > 0) onImageLoad();
+		else if (img.complete && img.naturalWidth === 0) onError();
 	});
 
 	onDestroy(() => {
@@ -161,9 +175,14 @@
 </script>
 
 <div class="viewer-wrap">
+	{#if !loaded}<div class="img-loading"><div class="img-spinner"></div></div>{/if}
+	{#if loadError}
+		<div class="img-error">Image could not be displayed. The source file may not be accessible — check your source path configuration.</div>
+	{/if}
 	<div
 		class="container"
 		class:dragging
+		class:hidden={!loaded || loadError}
 		bind:this={container}
 		on:pointerdown={onPointerDown}
 		on:pointermove={onPointerMove}
@@ -179,6 +198,7 @@
 			alt=""
 			class:svg-fit={svgMode}
 			on:load={onImageLoad}
+			on:error={onError}
 			draggable="false"
 		/>
 		<div class="toolbar">
@@ -251,6 +271,41 @@
 		flex-direction: column;
 		min-height: 0;
 		overflow: hidden;
+	}
+
+	.img-loading {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+	}
+
+	.img-spinner {
+		width: 32px;
+		height: 32px;
+		border: 3px solid rgba(255, 255, 255, 0.08);
+		border-top-color: var(--accent, #58a6ff);
+		border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+	}
+
+	@keyframes spin {
+		to { transform: rotate(360deg); }
+	}
+
+	.img-error {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 24px;
+		color: var(--fg-muted, rgba(255, 255, 255, 0.5));
+		font-size: 13px;
+		text-align: center;
+	}
+
+	.container.hidden {
+		display: none;
 	}
 
 	.toolbar {
