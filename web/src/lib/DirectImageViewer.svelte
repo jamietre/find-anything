@@ -16,13 +16,29 @@
 
 	let loaded = false;
 	let loadError = false;
+	let showSpinner = false;
+	let spinnerTimer: ReturnType<typeof setTimeout> | null = null;
+
+	function clearSpinnerTimer() {
+		if (spinnerTimer !== null) { clearTimeout(spinnerTimer); spinnerTimer = null; }
+	}
 
 	// Reset loading state whenever the source URL changes.
-	$: { src; loaded = false; loadError = false; }
+	// Delay the spinner by 1 s so fast/cached images don't flash.
+	$: {
+		src;
+		loaded = false;
+		loadError = false;
+		showSpinner = false;
+		clearSpinnerTimer();
+		spinnerTimer = setTimeout(() => { if (!loaded) showSpinner = true; }, 1000);
+	}
 
 	function onError() {
+		clearSpinnerTimer();
+		showSpinner = false;
 		loadError = true;
-		loaded = true; // stop showing spinner
+		loaded = true;
 	}
 
 	let dragging = false;
@@ -74,6 +90,8 @@
 	}
 
 	function onImageLoad() {
+		clearSpinnerTimer();
+		showSpinner = false;
 		loaded = true;
 		loadError = false;
 		if (svgMode) {
@@ -171,11 +189,12 @@
 
 	onDestroy(() => {
 		if (container) container.removeEventListener('wheel', onWheel);
+		clearSpinnerTimer();
 	});
 </script>
 
 <div class="viewer-wrap">
-	{#if !loaded}<div class="img-loading"><div class="img-spinner"></div></div>{/if}
+	{#if showSpinner}<div class="img-loading"><div class="img-spinner"></div></div>{/if}
 	{#if loadError}
 		<div class="img-error">Image could not be displayed. The source file may not be accessible — check your source path configuration.</div>
 	{/if}
