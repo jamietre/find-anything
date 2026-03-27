@@ -14,6 +14,34 @@
 	let offsetY = 0;
 	let fitScale = 1;
 
+	let loaded = false;
+	let loadError = false;
+	let showSpinner = false;
+	let spinnerTimer: ReturnType<typeof setTimeout> | null = null;
+	let activeSrc: string | undefined;
+
+	function clearSpinnerTimer() {
+		if (spinnerTimer !== null) { clearTimeout(spinnerTimer); spinnerTimer = null; }
+	}
+
+	// Reset loading state only when src actually changes value.
+	// Delay the spinner by 1 s so fast/cached images don't flash.
+	$: if (src !== activeSrc) {
+		activeSrc = src;
+		loaded = false;
+		loadError = false;
+		showSpinner = false;
+		clearSpinnerTimer();
+		spinnerTimer = setTimeout(() => { if (!loaded) showSpinner = true; }, 1000);
+	}
+
+	function onError() {
+		clearSpinnerTimer();
+		showSpinner = false;
+		loadError = true;
+		loaded = true;
+	}
+
 	let dragging = false;
 	let dragStartX = 0;
 	let dragStartY = 0;
@@ -63,6 +91,10 @@
 	}
 
 	function onImageLoad() {
+		clearSpinnerTimer();
+		showSpinner = false;
+		loaded = true;
+		loadError = false;
 		if (svgMode) {
 			scale = 1;
 			fitScale = 1;
@@ -152,18 +184,24 @@
 
 	onMount(() => {
 		container.addEventListener('wheel', onWheel, { passive: false });
-		if (img.complete) onImageLoad();
+		if (img.complete && img.naturalWidth > 0) onImageLoad();
+		else if (img.complete && img.naturalWidth === 0) onError();
 	});
 
 	onDestroy(() => {
 		if (container) container.removeEventListener('wheel', onWheel);
+		clearSpinnerTimer();
 	});
 </script>
 
 <div class="viewer-wrap">
+	{#if loadError}
+		<div class="img-error">Image could not be displayed. The source file may not be accessible — check your source path configuration.</div>
+	{/if}
 	<div
 		class="container"
 		class:dragging
+		class:hidden={loadError}
 		bind:this={container}
 		on:pointerdown={onPointerDown}
 		on:pointermove={onPointerMove}
@@ -173,12 +211,14 @@
 		role="img"
 		aria-label="Image viewer"
 	>
+		{#if showSpinner}<div class="img-loading"><div class="img-spinner"></div></div>{/if}
 		<img
 			bind:this={img}
 			{src}
 			alt=""
 			class:svg-fit={svgMode}
 			on:load={onImageLoad}
+			on:error={onError}
 			draggable="false"
 		/>
 		<div class="toolbar">
@@ -251,6 +291,43 @@
 		flex-direction: column;
 		min-height: 0;
 		overflow: hidden;
+	}
+
+	.img-loading {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 5;
+	}
+
+	.img-spinner {
+		width: 32px;
+		height: 32px;
+		border: 3px solid rgba(255, 255, 255, 0.08);
+		border-top-color: var(--accent, #58a6ff);
+		border-radius: 50%;
+		animation: spin 0.8s linear infinite;
+	}
+
+	@keyframes spin {
+		to { transform: rotate(360deg); }
+	}
+
+	.img-error {
+		flex: 1;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 24px;
+		color: var(--fg-muted, rgba(255, 255, 255, 0.5));
+		font-size: 13px;
+		text-align: center;
+	}
+
+	.container.hidden {
+		display: none;
 	}
 
 	.toolbar {
