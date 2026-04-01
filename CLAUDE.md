@@ -174,19 +174,15 @@ subdirectories on expand.
 
 ### iWork extraction (.pages, .numbers, .key)
 
-iWork files are ZIP-based documents. Extraction is handled natively by the archive extractor — no Java, Tika, or external tools required.
+iWork files are ZIP-based documents. Extraction is handled natively by the archive extractor.
 
-**Preview:** The archive extractor recognises `.pages`/`.numbers`/`.key` extensions via `is_iwork_ext()` and extracts the embedded `preview.jpg` (or `preview-web.jpg`). This becomes a child entry in the index — e.g. `doc.pages::preview.jpg` with `kind=image` — which is fully searchable and viewable in the image viewer. The outer `.pages` file is indexed with `kind=archive`.
+**Kind:** iWork files get `kind=document` (not `kind=archive`) so they appear as leaf nodes in the tree and get server-side `max_line_length` normalisation applied.
 
-**Text:** Full text is extracted natively from `.iwa` (IWA snappy-compressed protobuf) files inside the ZIP. Old-format pre-2013 iWork files (XML-based) are also supported via XML tag stripping. No external dependencies needed.
+**Preview:** The archive extractor recognises `.pages`/`.numbers`/`.key` extensions via `is_iwork_ext()` and extracts the embedded `preview.jpg` (or `preview-web.jpg`). This is emitted as a child entry — e.g. `doc.pages::preview.jpg` with `kind=image` — which is served on demand by the view endpoint. The file viewer shows a "View Preview" / "View Extracted" toggle when both are available.
 
-**Key files:**
-- `crates/extractors/archive/src/iwork.rs` — all iWork-specific logic: `is_iwork_ext`, `iwork_streaming`, `iwork_extract_preview_into_lines`, IWA decompression and text extraction
-- `crates/extractors/archive/src/lib.rs` — calls into `iwork::` module; `server_only_exts` delegation logic still present for other extension types
-- `crates/extract-types/src/extractor_config.rs` — `ExtractorConfig::server_only_exts`
-- `crates/common/src/config.rs` — `extractor_config_from_scan` populates `server_only_exts`
-- `crates/client/src/subprocess.rs` — passes `server_only_exts` as arg[6] to the archive subprocess
-- `crates/client/src/scan.rs` — uploads delegated temp files after submitting the filename batch
+**Text:** Full text is extracted natively from `.iwa` (Snappy-compressed protobuf) files inside the ZIP. The IWA record stream is parsed to find only `TSWP.StorageArchive` records (type 2001, field 3 = `repeated string text`), which eliminates metadata/style noise. Old-format pre-2013 iWork files (XML-based) fall back to XML tag stripping. No external dependencies needed.
+
+**Key file:** `crates/extractors/archive/src/iwork.rs` — all iWork logic: `is_iwork_ext`, `iwork_streaming`, `iwork_extract_preview_into_lines`, IWA decompression, protobuf record parsing, and XML fallback.
 
 ### find-upload → find-scan delegation (plan 088)
 
