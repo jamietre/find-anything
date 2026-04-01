@@ -421,6 +421,143 @@ fn tgz_members_have_size() {
     }
 }
 
+// ============================================================================
+// iWork preview extraction (.pages inside .zip)
+// ============================================================================
+
+/// iwork_preview.zip contains test.pages (a ZIP with preview.jpg inside).
+/// The extractor should emit a [IWORK_PREVIEW] metadata line on the document
+/// entry. No separate child entry is created for the preview image — it is
+/// served on demand by the view endpoint directly from the ZIP.
+#[test]
+fn iwork_preview_extracted_from_nested_pages() {
+    use find_extract_types::LINE_METADATA;
+
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/iwork_preview.zip");
+    let lines = extract(&fixture, &default_cfg()).unwrap();
+
+    // No separate child entry for the preview image.
+    assert!(
+        !has_path(&lines, "test.pages::preview.jpg"),
+        "test.pages::preview.jpg should not be a separate indexed entry"
+    );
+
+    // [IWORK_PREVIEW] metadata line must exist on the parent entry.
+    let meta = lines.iter().find(|l| {
+        l.archive_path.as_deref() == Some("test.pages")
+            && l.line_number == LINE_METADATA
+            && l.content.starts_with("[IWORK_PREVIEW] ")
+    });
+    assert!(
+        meta.is_some(),
+        "[IWORK_PREVIEW] metadata line not found for test.pages; all lines for test.pages = {:?}",
+        lines.iter()
+            .filter(|l| l.archive_path.as_deref() == Some("test.pages"))
+            .collect::<Vec<_>>()
+    );
+}
+
+// ============================================================================
+// Real-world modern iWork files (IWA/protobuf format, iWork 2013+)
+// Source: https://github.com/orcastor/iwork-converter/tree/master/testdata (MIT)
+// ============================================================================
+
+fn modern_pages() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/modern.pages")
+}
+
+fn modern_numbers() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/modern.numbers")
+}
+
+fn modern_key() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/modern.key")
+}
+
+/// modern.pages is a Chinese-language purchase contract. Verify that IWA text
+/// extraction finds the document title and produces a preview metadata line.
+#[test]
+fn modern_pages_extracts_text_and_preview() {
+    use find_extract_types::LINE_METADATA;
+
+    let mut batches: Vec<MemberBatch> = Vec::new();
+    extract_streaming(&modern_pages(), &default_cfg(), &mut |b| batches.push(b)).unwrap();
+
+    // There should be exactly one batch (the preview image member).
+    let preview_batch = batches.iter().find(|b| {
+        b.lines.iter().any(|l| l.content == "preview.jpg")
+    });
+    assert!(preview_batch.is_some(), "no preview batch found");
+
+    // Outer lines should contain [IWORK_PREVIEW] and Chinese contract text.
+    let outer: Vec<&str> = batches.iter()
+        .flat_map(|b| b.outer_lines.iter().map(|l| l.content.as_str()))
+        .collect();
+
+    assert!(
+        outer.iter().any(|s| s.starts_with("[IWORK_PREVIEW]")),
+        "missing [IWORK_PREVIEW] in outer_lines; outer = {:?}", outer
+    );
+    // The document title "购 销 合 同" (purchase/sale contract) should be present.
+    assert!(
+        outer.iter().any(|s| s.contains("购") && s.contains("合") && s.contains("同")),
+        "Chinese contract title not found; outer = {:?}", outer
+    );
+    // Verify no outer_lines have line_number == LINE_METADATA except the preview line.
+    let meta_lines: Vec<_> = batches.iter()
+        .flat_map(|b| b.outer_lines.iter())
+        .filter(|l| l.line_number == LINE_METADATA)
+        .collect();
+    assert!(
+        meta_lines.iter().all(|l| l.content.starts_with("[IWORK_PREVIEW]")),
+        "unexpected metadata lines: {:?}", meta_lines
+    );
+}
+
+/// modern.numbers is a Chinese-language spreadsheet. Verify preview metadata present.
+/// Note: Numbers cell values are stored in TSNM table archives (not StorageArchive type 2001),
+/// so text content is not yet extracted from spreadsheets — only the preview is available.
+#[test]
+fn modern_numbers_has_preview_metadata() {
+    let mut batches: Vec<MemberBatch> = Vec::new();
+    extract_streaming(&modern_numbers(), &default_cfg(), &mut |b| batches.push(b)).unwrap();
+
+    let outer: Vec<&str> = batches.iter()
+        .flat_map(|b| b.outer_lines.iter().map(|l| l.content.as_str()))
+        .collect();
+
+    assert!(
+        outer.iter().any(|s| s.starts_with("[IWORK_PREVIEW]")),
+        "missing [IWORK_PREVIEW] in outer_lines; outer = {:?}", outer
+    );
+}
+
+/// modern.key is a Chinese Keynote presentation about a payment system.
+/// Verify text extraction and preview metadata.
+#[test]
+fn modern_key_extracts_text_and_preview() {
+    let mut batches: Vec<MemberBatch> = Vec::new();
+    extract_streaming(&modern_key(), &default_cfg(), &mut |b| batches.push(b)).unwrap();
+
+    let outer: Vec<&str> = batches.iter()
+        .flat_map(|b| b.outer_lines.iter().map(|l| l.content.as_str()))
+        .collect();
+
+    assert!(
+        outer.iter().any(|s| s.starts_with("[IWORK_PREVIEW]")),
+        "missing [IWORK_PREVIEW] in outer_lines; outer = {:?}", outer
+    );
+    // The presentation contains payment system terminology (Chinese text).
+    assert!(
+        outer.iter().any(|s| !s.starts_with('[') && !s.is_empty()),
+        "no non-metadata text found in modern.key; outer = {:?}", outer
+    );
+}
+
 /// The skip_reason field must be absent for successfully extracted members.
 #[test]
 fn solid_7z_block_no_skip_reason() {

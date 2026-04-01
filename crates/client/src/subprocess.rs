@@ -55,6 +55,8 @@ pub enum ExtractorRoute {
     Subprocess(String),
     /// Use a user-configured external tool.
     External(ExternalExtractorConfig),
+    /// Upload to server for server-side extraction (configured via `"server_only"` in scan.extractors).
+    ServerOnly,
 }
 
 /// Identifies which in-process extractor library to call.
@@ -282,6 +284,8 @@ pub async fn run_external_tempdir(
                 skip_reason: None,
                 mtime: None,
                 size: Some(bytes.len() as u64),
+                delegate_temp_path: None,
+                outer_lines: vec![],
             });
 
             let inner_cfg = ExtractorConfig {
@@ -306,6 +310,8 @@ pub async fn run_external_tempdir(
                     skip_reason: batch.skip_reason,
                     mtime: batch.mtime,
                     size: batch.size,
+                    delegate_temp_path: batch.delegate_temp_path,
+                    outer_lines: vec![],
                 });
             }).unwrap_or_else(|e| {
                 warn!("failed to recurse into nested archive {}: {e:#}", member_rel);
@@ -331,7 +337,7 @@ pub async fn run_external_tempdir(
             line_number: 0,
             content: format!("[PATH] {}", member_rel),
         });
-        members.push(MemberBatch { lines: content_lines, file_hash, skip_reason: None, mtime: None, size: Some(bytes.len() as u64) });
+        members.push(MemberBatch { lines: content_lines, file_hash, skip_reason: None, mtime: None, size: Some(bytes.len() as u64), delegate_temp_path: None, outer_lines: vec![] });
     }
 
     ExternalOutcome::OkMembers(members)
@@ -390,6 +396,7 @@ pub fn resolve_extractor(
     // 1. User-configured extractor override.
     if let Some(entry) = scan.extractors.get(&ext) {
         match entry {
+            ExtractorEntry::Builtin(s) if s == "server_only" => return ExtractorRoute::ServerOnly,
             ExtractorEntry::Builtin(_) => {} // fall through to built-in routing
             ExtractorEntry::External(cfg) => return ExtractorRoute::External(cfg.clone()),
         }
@@ -581,6 +588,23 @@ pub fn start_archive_subprocess(
         serde_json::to_string(&scan.exclude).unwrap_or_default()
     };
 
+    // Collect server_only extensions so the archive subprocess can write temp files
+    // for members that need server-side extraction.
+    let server_only_exts: Vec<String> = scan.extractors.iter()
+        .filter_map(|(ext, entry)| {
+            if matches!(entry, find_common::config::ExtractorEntry::Builtin(s) if s == "server_only") {
+                Some(ext.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+    let server_only_json = if server_only_exts.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(&server_only_exts).unwrap_or_default()
+    };
+
     let (tx, rx) = mpsc::channel(8);
 
     let handle = tokio::spawn(async move {
@@ -591,6 +615,9 @@ pub fn start_archive_subprocess(
             .arg(&max_line_length);
         if !exclude_patterns_json.is_empty() {
             cmd.arg(&exclude_patterns_json);
+        }
+        if !server_only_json.is_empty() {
+            cmd.arg(&server_only_json);
         }
         cmd.stdout(Stdio::piped())
             .stderr(Stdio::piped());

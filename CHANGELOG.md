@@ -9,6 +9,23 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **`source:` prefix in search help** — `source:` is now listed under "Scope prefixes" in the `?` help panel
+- **Native iWork extraction** — `.pages`, `.numbers`, and `.key` files are extracted natively without requiring Java or Apache Tika; the archive extractor reads `.iwa` (Snappy-compressed protobuf) files and extracts text directly; all iWork logic is organised in `crates/extractors/archive/src/iwork.rs`
+- **Old-format iWork support** — pre-2013 iWork files using XML (`index.apxl` / `index.xml`) instead of `.iwa` protobuf are detected and their text extracted via XML tag stripping
+- **iWork preview in file viewer** — the embedded `preview.jpg` inside iWork documents is shown in the file viewer with a "View Preview" / "View Extracted" toolbar toggle
+- **Image rotate buttons** — left/right 90° rotate buttons added to the image viewer toolbar; rotation resets on new image load
+
+### Fixed
+
+- **iWork content truncation** — text from `.iwa` files is split on embedded newlines before indexing, preventing multi-line strings from being stored as a single line and truncating subsequent content
+- **Document kind not normalized** — `FileKind::Document` is now included in `is_text_like()`, so iWork and other document-kind files have `max_line_length` normalization applied server-side
+
+### Changed
+
+- **Removed `find-extract-iwork` / Tika dependency** — the `find-extract-iwork` binary (Java/Tika wrapper), `server_only` extractor routing, and all associated configuration have been removed; iWork extraction is now fully native
+
 ---
 
 ## [0.7.1] - 2026-03-24

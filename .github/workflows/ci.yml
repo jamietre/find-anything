@@ -92,3 +92,15 @@ jobs:
       - name: Build
         run: pnpm run build
         working-directory: web
+
+  ci:
+    name: CI
+    needs: [test, build-windows, web]
+    runs-on: ubuntu-24.04
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [[ "${{ contains(needs.*.result, 'failure') }}" == "true" || "${{ contains(needs.*.result, 'cancelled') }}" == "true" ]]; then
+            exit 1
+          fi

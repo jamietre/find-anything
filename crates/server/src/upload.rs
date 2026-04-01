@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use find_common::api::UploadScanHints;
-use find_common::config::ServerScanConfig;
+use find_common::config::{ExternalExtractorConfig, ExternalExtractorMode, ServerScanConfig};
 
 /// Sidecar metadata file for an in-progress upload.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -147,11 +147,12 @@ async fn run_index_upload(
 
     let include_toml = toml_string_array(hints.map(|h| h.include.as_slice()).unwrap_or(&[]));
 
+    let extractors_toml = toml_extractors(&server_scan.extractors);
     let toml = format!(
         "[server]\nurl = \"{server_url}\"\ntoken = \"{token}\"\n\n\
          [[sources]]\nname = \"{}\"\npath = \"{}\"\ninclude = {include_toml}\n\n\
          [scan]\nsubprocess_timeout_secs = {}\nmax_content_size_mb = {}\n\
-         exclude = {exclude_toml}\nexclude_extra = {exclude_extra_toml}\n",
+         exclude = {exclude_toml}\nexclude_extra = {exclude_extra_toml}{extractors_toml}",
         meta.source,
         temp_root.display(),
         server_scan.subprocess_timeout_secs,
@@ -166,16 +167,36 @@ async fn run_index_upload(
 
     // ── 5. Spawn find-scan and await ──────────────────────────────────────────
     info!("upload {id}: running find-scan for {}", meta.rel_path);
-    let status = tokio::process::Command::new(&find_scan)
-        .arg("--config")
-        .arg(&temp_toml)
-        .arg(&dest)
-        .status()
+    let mut cmd = tokio::process::Command::new(&find_scan);
+    cmd.arg("--config").arg(&temp_toml);
+    // Pass the original file mtime so metadata is preserved correctly.
+    if meta.mtime > 0 {
+        cmd.arg("--mtime").arg(meta.mtime.to_string());
+    }
+    // --force=now tells find-scan to bypass the server-side stale mtime guard.
+    // An upload is an explicit reindex action and must always succeed — the
+    // stored mtime may be newer than the file's own mtime (e.g. from a prior
+    // run where extraction failed or config was missing).
+    // Use --force=now (= form) to prevent clap consuming the path positional
+    // argument as the optional --force timestamp value.
+    cmd.arg("--force=now");
+    cmd.arg(&dest);
+    let output = cmd
+        .output()
         .await
         .with_context(|| format!("spawning {find_scan}"))?;
 
-    if !status.success() {
-        warn!("upload {id}: find-scan exited {:?} for {}", status.code(), meta.rel_path);
+    // Log stderr regardless of exit code so extractor warnings (e.g. missing
+    // binary, wrong args) are visible in the server journal.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stderr.lines() {
+        if !line.trim().is_empty() {
+            warn!("upload {id} find-scan: {line}");
+        }
+    }
+
+    if !output.status.success() {
+        warn!("upload {id}: find-scan exited {:?} for {}", output.status.code(), meta.rel_path);
     } else {
         info!("upload {id}: find-scan completed for {}", meta.rel_path);
     }
@@ -213,6 +234,28 @@ fn resolve_find_scan() -> String {
 fn toml_string_array(items: &[String]) -> String {
     let inner: Vec<String> = items.iter().map(|s| format!("\"{s}\"")).collect();
     format!("[{}]", inner.join(", "))
+}
+
+/// Serialise `[scan.extractors]` entries for the temp client.toml forwarded to find-scan.
+/// Only external extractors are included; `"server_only"` entries are intentionally omitted
+/// (they are a client-side routing hint only and would cause infinite upload loops).
+fn toml_extractors(extractors: &std::collections::HashMap<String, ExternalExtractorConfig>) -> String {
+    if extractors.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from("\n[scan.extractors]\n");
+    let mut entries: Vec<_> = extractors.iter().collect();
+    entries.sort_by_key(|(k, _)| k.as_str()); // deterministic output
+    for (ext, cfg) in entries {
+        let mode = match cfg.mode {
+            ExternalExtractorMode::Stdout  => "stdout",
+            ExternalExtractorMode::TempDir => "tempdir",
+        };
+        let bin = cfg.bin.replace('\\', "\\\\").replace('"', "\\\"");
+        let args = toml_string_array(&cfg.args);
+        s.push_str(&format!("{ext} = {{ mode = \"{mode}\", bin = \"{bin}\", args = {args} }}\n"));
+    }
+    s
 }
 
 /// Background task: remove stale upload files (no activity for 2 hours).
