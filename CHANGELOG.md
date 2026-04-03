@@ -9,6 +9,10 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Potential write-lock contention on startup** — idempotent `CREATE INDEX IF NOT EXISTS` statements were run inside the per-request `open()` path; under concurrent startup they could contend on SQLite's WAL mutex. Moved to `check_all_sources()` which runs once at startup under no concurrency. `idx_duplicates_file_id` also added to the v4 schema so fresh installs get it without migration.
+
 ---
 
 ## [0.7.2] - 2026-04-01
