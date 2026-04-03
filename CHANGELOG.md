@@ -9,6 +9,12 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Fixed
+
+- **Search result line numbers off-by-one near chunk boundaries** — `chunk_blob` used `current.is_empty()` to decide whether to prepend a `\n` separator; an empty line at a chunk boundary left `current` empty after `push_str("")`, causing the next non-empty line to also skip its separator and shifting all subsequent blob positions by -1 relative to their FTS `line_number`s
+- **Context lines carried server-internal line numbers** — `ContextResponse.lines` was `Vec<String>` so the client had to reconstruct line numbers as `start + index`, which is incorrect for sparse files (e.g. PDFs with gaps). Each line now carries its own `line_number` in `Vec<ContextLine>`; `find-query` and the web UI both updated to use `line.line_number` directly
+- **`content_line_start` compat shim removed** — the `content_line_start` field in `/api/v1/settings` and the `contentLineStart` Svelte store were added to support old servers that used `line_number = 1` for the first content line; the current scheme (`LINE_CONTENT_START = 2`) is now assumed unconditionally
+
 ---
 
 ## [0.7.2] - 2026-04-01
