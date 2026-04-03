@@ -9,6 +9,11 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Added
+
+- **Windows service starts immediately after install** — `install_service` now calls `service.start()` after creating the service so no reboot or manual `sc start` is needed; output message updated accordingly
+- **Windows installer task checkboxes** — "Start file watcher service" and "Run full scan now" are now proper Inno Setup `[Tasks]` checkboxes rather than a fixed `[Run]` entry, so they run in the same elevated context as the rest of the install
+
 ---
 
 ## [0.7.2] - 2026-04-01
