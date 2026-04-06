@@ -11,6 +11,8 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Added
 
+- **Windows service starts immediately after install** — `install_service` now calls `service.start()` after creating the service so no reboot or manual `sc start` is needed; output message updated accordingly
+- **Windows installer task checkboxes** — "Start file watcher service" and "Run full scan now" are now proper Inno Setup `[Tasks]` checkboxes rather than a fixed `[Run]` entry, so they run in the same elevated context as the rest of the install
 - **Configurable formatter timeouts** — `batch_formatter_timeout_secs` (default 60) and `per_file_formatter_timeout_secs` (default 10) added to `[normalization]` in `server.toml`; previously hardcoded constants with `#[cfg(test)]` overrides
 
 ### Fixed
