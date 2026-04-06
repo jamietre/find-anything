@@ -21,6 +21,7 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - **Potential write-lock contention on startup** — idempotent `CREATE INDEX IF NOT EXISTS` statements were run inside the per-request `open()` path; under concurrent startup they could contend on SQLite's WAL mutex. Moved to `check_all_sources()` which runs once at startup under no concurrency. `idx_duplicates_file_id` also added to the v4 schema so fresh installs get it without migration.
 - **Context lines carried server-internal line numbers** — `ContextResponse.lines` was `Vec<String>` so the client had to reconstruct line numbers as `start + index`, which is incorrect for sparse files (e.g. PDFs with gaps). Each line now carries its own `line_number` in `Vec<ContextLine>`; `find-query` and the web UI both updated to use `line.line_number` directly
 - **`content_line_start` compat shim removed** — the `content_line_start` field in `/api/v1/settings` and the `contentLineStart` Svelte store were added to support old servers that used `line_number = 1` for the first content line; the current scheme (`LINE_CONTENT_START = 2`) is now assumed unconditionally
+- **Directory renames not watched after rename** — when `find-watch` detected a directory rename pair, the new directory path was removed from the batch (correct) but `register_dir` was never called for it, so the new location had no inotify watch. Changes inside the renamed directory were silently missed until the next full rescan.
 
 ---
 
