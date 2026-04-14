@@ -39,7 +39,7 @@ jobs:
         run: cargo test --workspace --lib -- --test-threads=1
 
       - name: Test (integration)
-        run: cargo test --workspace --tests
+        run: cargo test --workspace --tests -- --test-threads=1
 
       - name: Clippy
         run: cargo clippy --workspace -- -D warnings
