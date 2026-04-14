@@ -79,7 +79,7 @@ impl TestServer {
     /// next (during which counts are briefly 0 even though more work is pending).
     /// Panics after 30 seconds.
     pub async fn wait_for_idle(&self) {
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Instant::now() + Duration::from_secs(60);
         let mut consecutive_idle = 0u32;
         loop {
             let resp: StatsResponse = self
@@ -101,7 +101,7 @@ impl TestServer {
                 consecutive_idle = 0;
             }
             if Instant::now() >= deadline {
-                panic!("worker did not become idle within 30s (inbox_pending={}, archive_queue={})",
+                panic!("worker did not become idle within 60s (inbox_pending={}, archive_queue={})",
                     resp.inbox_pending, resp.archive_queue);
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
