@@ -39,6 +39,7 @@ toml            = "0.8"
 tokio           = { version = "1", features = ["rt-multi-thread", "macros", "fs", "net", "time", "io-util", "process", "sync", "signal"] }
 tracing         = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
+tracing-appender   = "0.2"
 regex           = "1"
 nucleo-matcher  = "0.3"
 walkdir         = "2"

@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use clap::{CommandFactory, FromArgMatches, Parser};
 #[cfg(windows)]
 use clap::Subcommand;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer as _};
 
 use find_common::config::{default_config_path, parse_client_config};
 use find_common::logging::LogIgnoreFilter;
@@ -216,20 +216,39 @@ async fn main() -> Result<()> {
 
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| "warn,find_watch=info".into());
-    if config.log.compact {
+
+    let stdout_layer: Box<dyn tracing_subscriber::Layer<_> + Send + Sync> = if config.log.compact {
+        Box::new(tracing_subscriber::fmt::layer()
+            .without_time()
+            .with_target(false)
+            .with_filter(LogIgnoreFilter))
+    } else {
+        Box::new(tracing_subscriber::fmt::layer().with_filter(LogIgnoreFilter))
+    };
+
+    // Optional file logging: enabled when [log] dir is set in config.
+    let _file_guard = if !config.log.dir.is_empty() {
+        let _ = std::fs::create_dir_all(&config.log.dir);
+        let appender = tracing_appender::rolling::daily(&config.log.dir, "find-watch.log");
+        let (non_blocking, guard) = tracing_appender::non_blocking(appender);
+        let file_layer: Box<dyn tracing_subscriber::Layer<_> + Send + Sync> =
+            Box::new(tracing_subscriber::fmt::layer()
+                .with_writer(non_blocking)
+                .with_ansi(false)
+                .with_filter(LogIgnoreFilter));
         tracing_subscriber::registry()
             .with(filter)
-            .with(tracing_subscriber::fmt::layer()
-                .without_time()
-                .with_target(false)
-                .with_filter(LogIgnoreFilter))
+            .with(stdout_layer)
+            .with(file_layer)
             .init();
+        Some(guard)
     } else {
         tracing_subscriber::registry()
             .with(filter)
-            .with(tracing_subscriber::fmt::layer().with_filter(LogIgnoreFilter))
+            .with(stdout_layer)
             .init();
-    }
+        None
+    };
 
     for w in &config_warnings { eprintln!("Warning: {w}"); }
 

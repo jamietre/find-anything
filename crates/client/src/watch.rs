@@ -80,8 +80,9 @@ pub async fn run_watch(config: &ClientConfig, opts: &WatchOptions) -> Result<()>
         let config_path = opts.config_path.clone();
         let scan_now = opts.scan_now;
         let interval_hours = config.watch.scan_interval_hours;
+        let log_dir = config.log.dir.clone();
         tokio::spawn(async move {
-            run_scan_scheduler(interval_hours, &config_path, scan_now).await;
+            run_scan_scheduler(interval_hours, &config_path, &log_dir, scan_now).await;
         });
     }
 
@@ -1069,7 +1070,7 @@ async fn handle_dir_rename(
 /// - `scan_now == true` → one scan is spawned immediately before the interval starts.
 /// - Overlap: if the previous scan is still running when the next tick fires,
 ///   that tick is skipped and a warning is logged.
-async fn run_scan_scheduler(interval_hours: f64, config_path: &str, scan_now: bool) {
+async fn run_scan_scheduler(interval_hours: f64, config_path: &str, log_dir: &str, scan_now: bool) {
     if interval_hours <= 0.0 {
         return;
     }
@@ -1077,7 +1078,7 @@ async fn run_scan_scheduler(interval_hours: f64, config_path: &str, scan_now: bo
     let mut child: Option<tokio::process::Child> = None;
 
     if scan_now {
-        child = spawn_scan(config_path);
+        child = spawn_scan(config_path, log_dir);
     }
 
     let dur = Duration::from_secs_f64(interval_hours * 3600.0);
@@ -1103,18 +1104,28 @@ async fn run_scan_scheduler(interval_hours: f64, config_path: &str, scan_now: bo
             continue;
         }
 
-        child = spawn_scan(config_path);
+        child = spawn_scan(config_path, log_dir);
     }
 }
 
 /// Spawn `find-scan --config <config_path>` and return the child handle.
-fn spawn_scan(config_path: &str) -> Option<tokio::process::Child> {
+fn spawn_scan(config_path: &str, log_dir: &str) -> Option<tokio::process::Child> {
     let binary = find_scan_binary();
-    match tokio::process::Command::new(&binary)
-        .arg("--config")
-        .arg(config_path)
-        .spawn()
-    {
+    let mut cmd = tokio::process::Command::new(&binary);
+    cmd.arg("--config").arg(config_path);
+
+    if !log_dir.is_empty() {
+        let today = chrono::Local::now().format("%Y-%m-%d");
+        let log_path = format!("{log_dir}/find-scan.log.{today}");
+        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            if let Ok(stderr_file) = file.try_clone() {
+                cmd.stdout(std::process::Stdio::from(file));
+                cmd.stderr(std::process::Stdio::from(stderr_file));
+            }
+        }
+    }
+
+    match cmd.spawn() {
         Ok(c) => {
             tracing::info!("scheduled scan: started {}", binary.display());
             Some(c)

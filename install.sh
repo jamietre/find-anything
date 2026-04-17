@@ -293,6 +293,10 @@ path = "$DIR_ESC"
 # Example: add LZW-compressed files via uncompress
 # lzw = { mode = "stdout", bin = "uncompress", args = ["-c", "{file}"] }
 
+[log]
+# dir = ""   # Write daily log files here (find-watch.log.YYYY-MM-DD, find-scan.log.YYYY-MM-DD)
+#             # Useful when stdout is not captured (e.g. Windows service).
+
 [watch]
 # batch_window_secs = 5.0  # Buffer filesystem events for this many seconds before indexing
 # extractor_dir     = ""   # Path to find-extract-* binaries (default: auto-detect)

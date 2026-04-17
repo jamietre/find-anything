@@ -294,6 +294,10 @@ begin
     '# Example: add LZW-compressed files via uncompress' + NL +
     '# lzw = { mode = "stdout", bin = "uncompress", args = ["-c", "{file}"] }' + NL +
     NL +
+    '[log]' + NL +
+    '# dir = ""   # Write daily log files here (find-watch.log.YYYY-MM-DD, find-scan.log.YYYY-MM-DD)' + NL +
+    '#             # Useful when stdout is not captured (e.g. Windows service).' + NL +
+    NL +
     '[watch]' + NL +
     '# batch_window_secs = 5.0  # Buffer filesystem events for this many seconds before indexing' + NL +
     '# extractor_dir     = ""   # Path to find-extract-* binaries (default: auto-detect)' + NL +

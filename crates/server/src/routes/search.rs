@@ -545,7 +545,7 @@ pub async fn search(
         }
     }
 
-    all_results.sort_by(|a, b| b.score.cmp(&a.score));
+    all_results.sort_by_key(|b| std::cmp::Reverse(b.score));
 
     // Deduplicate by (source, path, archive_path, line_number), keeping the
     // highest-scoring occurrence (first after sort). Duplicates arise when FTS5

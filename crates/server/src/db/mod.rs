@@ -53,7 +53,7 @@ pub fn open(db_path: &Path) -> Result<Connection> {
     // for the full duration of large write transactions.  synchronous=NORMAL is
     // safe with WAL (data is never lost on crash) and much faster than the
     // default FULL mode (syncs at WAL checkpoints rather than every commit).
-    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL;")?;
+    conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA cache_size = -16384;")?;
     // foreign_keys must be re-enabled on every connection; PRAGMA in schema SQL
     // only runs once at creation time and does not persist across connections.
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;

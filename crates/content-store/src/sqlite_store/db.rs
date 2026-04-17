@@ -11,6 +11,7 @@ use rusqlite::Connection;
 pub const SCHEMA_SQL: &str = "
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
+PRAGMA cache_size = -16384;
 
 -- One row per chunk per blob. Data is stored uncompressed.
 -- Chunk positions are 0-based line indices into the original blob
@@ -36,6 +37,7 @@ pub fn open_read_only(data_dir: &Path) -> Result<Connection> {
     )
     .with_context(|| format!("opening {} (read-only)", path.display()))?;
     conn.busy_timeout(std::time::Duration::from_secs(1))?;
+    conn.execute_batch("PRAGMA cache_size = -16384;")?;
     Ok(conn)
 }
 

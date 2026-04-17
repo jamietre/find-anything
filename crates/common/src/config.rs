@@ -1117,6 +1117,13 @@ pub struct LogConfig {
     /// Default: false.
     #[serde(default)]
     pub compact: bool,
+    /// Directory for log files. When set, find-watch and spawned find-scan
+    /// processes write daily rotating log files here in addition to stdout.
+    /// Files are named `find-watch.log.YYYY-MM-DD` and `find-scan.log.YYYY-MM-DD`.
+    /// The directory is created automatically if it does not exist.
+    /// Default: empty (disabled).
+    #[serde(default)]
+    pub dir: String,
 }
 
 fn default_log_ignore() -> Vec<String> { client_defaults().log.ignore.clone() }
