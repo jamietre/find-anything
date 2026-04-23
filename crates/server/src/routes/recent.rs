@@ -109,7 +109,7 @@ pub async fn get_recent(
         }
     }
 
-    all.sort_by(|a, b| b.indexed_at.cmp(&a.indexed_at));
+    all.sort_by_key(|b| std::cmp::Reverse(b.indexed_at));
     all.truncate(limit);
 
     Json(RecentResponse { files: all }).into_response()
@@ -170,7 +170,7 @@ async fn fetch_recent_from_dbs(state: &AppState, limit: usize, sort_by_mtime: bo
             Err(e) => tracing::warn!("recent files error: {e:#}"),
         }
     }
-    all.sort_by(|a, b| b.indexed_at.cmp(&a.indexed_at));
+    all.sort_by_key(|b| std::cmp::Reverse(b.indexed_at));
     all.truncate(limit);
     all
 }

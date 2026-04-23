@@ -19,7 +19,7 @@ use crate::store::{CompactResult, ContentStore};
 const MAX_IDLE_READ_CONNS: usize = 16;
 
 /// Default hard cap on total open read connections (idle + in-use).
-pub const DEFAULT_MAX_READ_CONNECTIONS: u32 = 100;
+pub const DEFAULT_MAX_READ_CONNECTIONS: u32 = 16;
 
 struct PoolState {
     idle: Vec<rusqlite::Connection>,

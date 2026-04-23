@@ -167,11 +167,9 @@ fn parse_docx_paragraphs(xml: &str) -> Vec<String> {
                 }
                 _ => {}
             },
-            Ok(Event::Text(e)) => {
-                if in_t {
-                    if let Ok(text) = e.unescape() {
-                        current_para.push_str(&text);
-                    }
+            Ok(Event::Text(e)) if in_t => {
+                if let Ok(text) = e.unescape() {
+                    current_para.push_str(&text);
                 }
             }
             Ok(Event::Eof) => break,
@@ -313,10 +311,8 @@ fn parse_pptx_paragraphs(xml: &str) -> Vec<String> {
 
     loop {
         match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(e)) => {
-                if e.name().as_ref() == b"a:t" {
-                    in_t = true;
-                }
+            Ok(Event::Start(e)) if e.name().as_ref() == b"a:t" => {
+                in_t = true;
             }
             Ok(Event::End(e)) => match e.name().as_ref() {
                 b"a:t" => in_t = false,
@@ -329,11 +325,9 @@ fn parse_pptx_paragraphs(xml: &str) -> Vec<String> {
                 }
                 _ => {}
             },
-            Ok(Event::Text(e)) => {
-                if in_t {
-                    if let Ok(text) = e.unescape() {
-                        current_para.push_str(&text);
-                    }
+            Ok(Event::Text(e)) if in_t => {
+                if let Ok(text) = e.unescape() {
+                    current_para.push_str(&text);
                 }
             }
             Ok(Event::Eof) => break,

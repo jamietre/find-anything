@@ -80,8 +80,9 @@ pub async fn run_watch(config: &ClientConfig, opts: &WatchOptions) -> Result<()>
         let config_path = opts.config_path.clone();
         let scan_now = opts.scan_now;
         let interval_hours = config.watch.scan_interval_hours;
+        let log_dir = config.log.dir.clone();
         tokio::spawn(async move {
-            run_scan_scheduler(interval_hours, &config_path, scan_now).await;
+            run_scan_scheduler(interval_hours, &config_path, &log_dir, scan_now).await;
         });
     }
 
@@ -276,11 +277,20 @@ where
 
             match kind {
                 AccumulatedKind::Create | AccumulatedKind::Update => {
-                    // When a new directory is created, register watches for it and
-                    // any subdirectories it already contains (e.g. a copied tree).
-                    // Pass None for terminals: the dir is already inside the included
-                    // area (we got an event for it), so no further path pruning is needed.
                     if abs_path.is_dir() {
+                        // Update events on an existing directory mean files inside
+                        // it changed — the watch is already registered, so re-calling
+                        // register_dir would re-walk the entire subtree and cause
+                        // Windows ReadDirectoryChangesW to fire spurious change events
+                        // for every file in those directories.  Skip directory Update
+                        // events entirely; the individual file events arrive separately.
+                        if matches!(kind, AccumulatedKind::Update) {
+                            continue;
+                        }
+                        // Create: new directory — register watches for it and any
+                        // subdirectories it already contains (e.g. a copied tree).
+                        // Pass None for terminals: the dir is already inside the included
+                        // area (we got an event for it), so no further path pruning needed.
                         register_dir(&abs_path);
                         // Walk the new directory and index any files that are
                         // already present. Because no inotify watch existed on
@@ -1069,7 +1079,7 @@ async fn handle_dir_rename(
 /// - `scan_now == true` → one scan is spawned immediately before the interval starts.
 /// - Overlap: if the previous scan is still running when the next tick fires,
 ///   that tick is skipped and a warning is logged.
-async fn run_scan_scheduler(interval_hours: f64, config_path: &str, scan_now: bool) {
+async fn run_scan_scheduler(interval_hours: f64, config_path: &str, log_dir: &str, scan_now: bool) {
     if interval_hours <= 0.0 {
         return;
     }
@@ -1077,7 +1087,7 @@ async fn run_scan_scheduler(interval_hours: f64, config_path: &str, scan_now: bo
     let mut child: Option<tokio::process::Child> = None;
 
     if scan_now {
-        child = spawn_scan(config_path);
+        child = spawn_scan(config_path, log_dir);
     }
 
     let dur = Duration::from_secs_f64(interval_hours * 3600.0);
@@ -1103,18 +1113,28 @@ async fn run_scan_scheduler(interval_hours: f64, config_path: &str, scan_now: bo
             continue;
         }
 
-        child = spawn_scan(config_path);
+        child = spawn_scan(config_path, log_dir);
     }
 }
 
 /// Spawn `find-scan --config <config_path>` and return the child handle.
-fn spawn_scan(config_path: &str) -> Option<tokio::process::Child> {
+fn spawn_scan(config_path: &str, log_dir: &str) -> Option<tokio::process::Child> {
     let binary = find_scan_binary();
-    match tokio::process::Command::new(&binary)
-        .arg("--config")
-        .arg(config_path)
-        .spawn()
-    {
+    let mut cmd = tokio::process::Command::new(&binary);
+    cmd.arg("--config").arg(config_path);
+
+    if !log_dir.is_empty() {
+        let today = chrono::Local::now().format("%Y-%m-%d");
+        let log_path = format!("{log_dir}/find-scan.log.{today}");
+        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+            if let Ok(stderr_file) = file.try_clone() {
+                cmd.stdout(std::process::Stdio::from(file));
+                cmd.stderr(std::process::Stdio::from(stderr_file));
+            }
+        }
+    }
+
+    match cmd.spawn() {
         Ok(c) => {
             tracing::info!("scheduled scan: started {}", binary.display());
             Some(c)
@@ -1349,5 +1369,100 @@ mod tests {
         let excludes = build_globset(&["*.log".to_string()]).unwrap();
         // Path outside any source root — not excluded (find_source would filter it separately).
         assert!(!is_excluded(&PathBuf::from("/other/debug.log"), &map, &excludes));
+    }
+
+    // ── run_event_loop: directory update regression ───────────────────────────
+
+    /// Helper: run the event loop against a synthetic event channel, return the
+    /// number of times `register_dir` was called before the channel closed.
+    async fn run_events_count_register_dir(
+        source_map: &SourceMap,
+        events: Vec<notify::Result<notify::Event>>,
+    ) -> usize {
+        use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
+
+        let api = crate::api::ApiClient::new("http://127.0.0.1:1", "fake-token");
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let cc = Arc::clone(&call_count);
+        let mut register_dir_fn = move |_: &Path| { cc.fetch_add(1, Ordering::Relaxed); };
+
+        // Use a minimal scan config with no excludes so temp paths aren't filtered.
+        let (config, _) = find_common::config::parse_client_config(
+            "[server]\nurl=\"http://x\"\ntoken=\"t\"\n\
+             [[sources]]\nname=\"s\"\npath=\"/t\"\n\
+             [scan]\nexclude=[]\n",
+        ).unwrap();
+
+        let (tx, rx) = mpsc::channel(64);
+        for ev in events {
+            tx.send(ev).await.unwrap();
+        }
+        // Drop tx after the batch window so run_event_loop exits cleanly.
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            drop(tx);
+        });
+
+        run_event_loop(
+            rx,
+            &api,
+            source_map,
+            std::time::Duration::from_millis(10),
+            1000,
+            &config.scan,
+            &None,
+            &mut register_dir_fn,
+        ).await.ok();
+
+        call_count.load(Ordering::Relaxed)
+    }
+
+    /// Regression: on Windows, creating a file inside a watched directory also
+    /// generates a Modify event for the parent directory itself.  Before the fix,
+    /// this caused `register_dir` to be called on the directory, which re-walked
+    /// the entire subtree and caused Windows ReadDirectoryChangesW to fire
+    /// spurious "update" events for every existing file in those directories.
+    #[tokio::test]
+    async fn dir_modify_event_does_not_call_register_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("existing.txt"), "should not be re-indexed").unwrap();
+
+        // Source root is the tmp dir itself.
+        let source_map = make_source_map_raw(&[("test", tmp.path().to_str().unwrap())]);
+
+        let calls = run_events_count_register_dir(
+            &source_map,
+            vec![Ok(notify::Event {
+                kind: notify::EventKind::Modify(notify::event::ModifyKind::Any),
+                paths: vec![tmp.path().to_path_buf()],
+                attrs: Default::default(),
+            })],
+        ).await;
+
+        assert_eq!(calls, 0,
+            "register_dir must not be called for a directory Modify event");
+    }
+
+    /// Verify that directory Create events still call register_dir (the fix must
+    /// not break the new-directory case).
+    #[tokio::test]
+    async fn dir_create_event_calls_register_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let new_dir = tmp.path().join("new_subdir");
+        std::fs::create_dir(&new_dir).unwrap();
+
+        let source_map = make_source_map_raw(&[("test", tmp.path().to_str().unwrap())]);
+
+        let calls = run_events_count_register_dir(
+            &source_map,
+            vec![Ok(notify::Event {
+                kind: notify::EventKind::Create(notify::event::CreateKind::Any),
+                paths: vec![new_dir.clone()],
+                attrs: Default::default(),
+            })],
+        ).await;
+
+        assert_eq!(calls, 1,
+            "register_dir must be called exactly once for a directory Create event");
     }
 }
